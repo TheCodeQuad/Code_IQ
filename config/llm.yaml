@@ -1,0 +1,166 @@
+# LLM Provider Configurations
+providers:
+  anthropic:
+    enabled: true
+    api_base_url: "https://api.anthropic.com"
+    api_version: "2023-06-01"
+    
+    # Model configurations
+    models:
+      default: "claude-sonnet-4-20250514"
+      
+      claude-opus-4:
+        name: "claude-opus-4-20250514"
+        context_window: 200000
+        max_output_tokens: 16384
+        cost_per_1k_input: 0.015
+        cost_per_1k_output: 0.075
+        capabilities:
+          - text_generation
+          - code_analysis
+          - function_calling
+      
+      claude-sonnet-4:
+        name: "claude-sonnet-4-20250514"
+        context_window: 200000
+        max_output_tokens: 16384
+        cost_per_1k_input: 0.003
+        cost_per_1k_output: 0.015
+        capabilities:
+          - text_generation
+          - code_analysis
+          - function_calling
+      
+      claude-haiku-4:
+        name: "claude-haiku-4-20250514"
+        context_window: 200000
+        max_output_tokens: 8192
+        cost_per_1k_input: 0.0008
+        cost_per_1k_output: 0.004
+        capabilities:
+          - text_generation
+          - fast_responses
+    
+    # Default parameters
+    default_params:
+      temperature: 0.7
+      max_tokens: 4000
+      top_p: 0.9
+      top_k: 40
+    
+    # Rate limits (per minute)
+    rate_limits:
+      tier_1:
+        requests: 50
+        tokens: 100000
+      tier_2:
+        requests: 1000
+        tokens: 2000000
+  
+  openai:
+    enabled: true
+    api_base_url: "https://api.openai.com/v1"
+    api_version: "v1"
+    
+    models:
+      default: "gpt-4-turbo-preview"
+      
+      gpt-4-turbo:
+        name: "gpt-4-turbo-preview"
+        context_window: 128000
+        max_output_tokens: 4096
+        cost_per_1k_input: 0.01
+        cost_per_1k_output: 0.03
+        capabilities:
+          - text_generation
+          - code_analysis
+          - function_calling
+      
+      gpt-4:
+        name: "gpt-4"
+        context_window: 8192
+        max_output_tokens: 4096
+        cost_per_1k_input: 0.03
+        cost_per_1k_output: 0.06
+        capabilities:
+          - text_generation
+          - code_analysis
+      
+      gpt-3.5-turbo:
+        name: "gpt-3.5-turbo"
+        context_window: 16385
+        max_output_tokens: 4096
+        cost_per_1k_input: 0.0005
+        cost_per_1k_output: 0.0015
+        capabilities:
+          - text_generation
+          - fast_responses
+    
+    default_params:
+      temperature: 0.7
+      max_tokens: 4000
+      top_p: 1.0
+      frequency_penalty: 0.0
+      presence_penalty: 0.0
+    
+    rate_limits:
+      tier_1:
+        requests: 500
+        tokens: 200000
+  
+  # Custom/Local providers
+  custom:
+    enabled: false
+    api_base_url: "http://localhost:8000"
+    api_version: "v1"
+    
+    models:
+      default: "local-model"
+      
+      local-model:
+        name: "local-llama"
+        context_window: 4096
+        max_output_tokens: 2048
+        cost_per_1k_input: 0.0
+        cost_per_1k_output: 0.0
+    
+    default_params:
+      temperature: 0.7
+      max_tokens: 2000
+
+# Agent-specific LLM assignments
+agent_models:
+  reader:
+    provider: "anthropic"
+    model: "claude-sonnet-4-20250514"
+    params:
+      temperature: 0.3  # Lower for code analysis
+      max_tokens: 8000
+  
+  searcher:
+    provider: "anthropic"
+    model: "claude-haiku-4-20250514"  # Faster for search
+    params:
+      temperature: 0.5
+      max_tokens: 2000
+  
+  writer:
+    provider: "anthropic"
+    model: "claude-sonnet-4-20250514"
+    params:
+      temperature: 0.7
+      max_tokens: 4000
+  
+  verifier:
+    provider: "anthropic"
+    model: "claude-sonnet-4-20250514"
+    params:
+      temperature: 0.2  # Very deterministic
+      max_tokens: 4000
+  
+  evaluator:
+    provider: "anthropic"
+    model: "claude-opus-4-20250514"  # Best quality
+    params:
+      temperature: 0.4
+      max_tokens: 8000

@@ -1,0 +1,45 @@
+# Main API Configuration
+api:
+  # Default provider
+  default_provider: "anthropic"
+  
+  # Retry configuration
+  retry:
+    max_attempts: 3
+    backoff_factor: 2
+    max_backoff: 60
+    retry_on_timeout: true
+    retry_on_rate_limit: true
+  
+  # Timeout settings
+  timeout:
+    connect: 10
+    read: 300
+    write: 10
+  
+  # Rate limiting
+  rate_limit:
+    enabled: true
+    max_requests_per_minute: 50
+    max_tokens_per_minute: 100000
+  
+  # Caching
+  cache:
+    enabled: true
+    ttl: 3600  # 1 hour
+    strategy: "lru"  # lru, fifo, lfu
+    max_size: 1000
+  
+  # Monitoring
+  monitoring:
+    enabled: true
+    log_requests: true
+    log_responses: false  # Too verbose
+    track_tokens: true
+    track_latency: true
+  
+  # Cost tracking
+  cost_tracking:
+    enabled: true
+    warn_threshold: 10.0  # USD
+    hard_limit: 100.0  # USD

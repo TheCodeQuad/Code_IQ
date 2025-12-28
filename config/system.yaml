@@ -1,0 +1,63 @@
+system:
+  name: "Complete Documentation Generation Pipeline"
+  version: "2.0.0"
+  max_retries: 3
+  timeout: 600
+  
+  pipeline:
+    stages:
+      - navigator
+      - multi_agent_system
+      - evaluator
+    
+    parallel_processing: false
+    checkpoint_enabled: true
+    resume_on_failure: true
+
+modules:
+  navigator:
+    enabled: true
+    config: "config/navigator_config.yaml"
+    cache_results: true
+  
+  multi_agent_system:
+    enabled: true
+    config: "config/agents_config.yaml"
+    cache_results: true
+  
+  evaluator:
+    enabled: true
+    config: "config/evaluator_config.yaml"
+    final_output: true
+
+llm:
+  provider: "anthropic"
+  model: "claude-sonnet-4-20250514"
+  temperature: 0.7
+  max_tokens: 4000
+  
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/system.log"
+  module_specific:
+    navigator: "logs/navigator.log"
+    agents: "logs/agents.log"
+    evaluator: "logs/evaluator.log"
+  
+paths:
+  input: "data/input/repositories/"
+  intermediate: "data/intermediate/"
+  knowledge_base: "data/knowledge_base/"
+  output: "data/output/"
+  templates: "src/agents/writer_agent/templates/"
+  
+cache:
+  enabled: true
+  directory: ".cache/"
+  ttl: 86400  # 24 hours
+  
+performance:
+  max_workers: 4
+  batch_size: 10
+  memory_limit: "4GB"
