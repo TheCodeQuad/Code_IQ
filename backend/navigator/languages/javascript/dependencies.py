@@ -1,7 +1,7 @@
-def resolve_dependencies(component, tree, source, all_components):
+﻿def resolve_dependencies(component, tree, source, all_components):
     deps = set()
 
-    # Map last-name → full-id (JS only)
+    # Map last-name â†’ full-id (JS only)
     name_map = {
         c.id.split(".")[-1]: c.id
         for c in all_components.values()
@@ -51,3 +51,4 @@ def resolve_dependencies(component, tree, source, all_components):
 
     walk(tree.root_node)
     return deps
+

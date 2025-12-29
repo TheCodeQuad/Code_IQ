@@ -1,4 +1,4 @@
-class BaseLanguageAdapter:
+﻿class BaseLanguageAdapter:
     language: str
     extensions: list[str]
 
@@ -16,3 +16,4 @@ class BaseLanguageAdapter:
         PASS 2: return Set[str]
         """
         raise NotImplementedError
+

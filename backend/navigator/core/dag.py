@@ -1,4 +1,4 @@
-from collections import defaultdict
+﻿from collections import defaultdict
 
 def build_dag(components):
     """
@@ -10,3 +10,4 @@ def build_dag(components):
         for dep in comp.depends_on:
             dag[dep].add(comp.id)
     return dag
+

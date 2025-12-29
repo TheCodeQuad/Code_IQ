@@ -1,6 +1,6 @@
-import os
-from languages.adapter_registry import AdapterRegistry
-from core.doc_dependency_parser import apply_doc_dependency_rules
+﻿import os
+from ..languages.adapter_registry import AdapterRegistry
+from .doc_dependency_parser import apply_doc_dependency_rules
 class RepositoryParser:
     def __init__(self, repo_path: str):
         self.repo_path = repo_path
@@ -34,7 +34,7 @@ class RepositoryParser:
                     tree, source, file_path, module_path
                 )
 
-                # 🔥 NORMALIZATION STEP
+                # ðŸ”¥ NORMALIZATION STEP
                 if isinstance(raw_components, dict):
                     components = raw_components
                 else:
@@ -53,7 +53,7 @@ class RepositoryParser:
                 )
                 component.depends_on.update(deps)
     
-        # ---------- PASS 3: class → method ----------
+        # ---------- PASS 3: class â†’ method ----------
         for cid, comp in all_components.items():
             if comp.type == "class":
                 for other_id, other in all_components.items():
@@ -75,4 +75,5 @@ class RepositoryParser:
         if rel.endswith(".py"):
             rel = rel[:-3]
         return rel
+
 

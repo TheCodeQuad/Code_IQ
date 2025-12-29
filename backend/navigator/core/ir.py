@@ -1,4 +1,4 @@
-"""
+﻿"""
 Intermediate Representation for code components.
 Matches the structure from the AST-based parser.
 """

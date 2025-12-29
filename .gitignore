@@ -21,6 +21,7 @@ data/intermediate/
 # Logs (runtime)
 logs/
 backend/logs/
+backend/repos/
 
 # Test cache
 .pytest_cache/

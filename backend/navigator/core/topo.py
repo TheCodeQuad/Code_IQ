@@ -1,4 +1,4 @@
-"""
+﻿"""
 Topological sorting utilities for dependency graphs with cycle handling.
 
 This module operates on the Intermediate Representation (IR) produced
@@ -11,7 +11,7 @@ by the repository analyzer and provides:
 5. Dependency-first DFS traversal
 
 The graph uses NATURAL dependency direction:
-- If A depends on B, the graph has an edge A → B
+- If A depends on B, the graph has an edge A â†’ B
 """
 
 import logging
@@ -31,7 +31,7 @@ def build_graph_from_components(
     Build a dependency graph from IR components.
 
     Graph direction:
-        A → B  means  A depends on B
+        A â†’ B  means  A depends on B
 
     Args:
         components: Dict of component_id -> CodeComponent
@@ -59,7 +59,7 @@ def detect_cycles(graph: Dict[str, Set[str]]) -> List[List[str]]:
     Detect cycles using Tarjan's Strongly Connected Components algorithm.
 
     Args:
-        graph: Dependency graph (A → B means A depends on B)
+        graph: Dependency graph (A â†’ B means A depends on B)
 
     Returns:
         List of cycles (each cycle is a list of node IDs)
@@ -192,7 +192,7 @@ def dependency_first_dfs(graph: Dict[str, Set[str]]) -> List[str]:
     - Code walkthroughs
 
     Args:
-        graph: Dependency graph (A → B means A depends on B)
+        graph: Dependency graph (A â†’ B means A depends on B)
 
     Returns:
         Dependency-first ordered list
@@ -214,3 +214,4 @@ def dependency_first_dfs(graph: Dict[str, Set[str]]) -> List[str]:
         dfs(node)
 
     return result
+

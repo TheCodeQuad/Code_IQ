@@ -9,9 +9,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel, HttpUrl, Field
 
-from core.repo_loader import clone_repo
-from core.repository_parser import RepositoryParser
-from core.topo import (
+from navigator.core.repo_loader import clone_repo
+from navigator.core.repository_parser import RepositoryParser
+from navigator.core.topo import (
     build_graph_from_components,
     topological_sort,
     dependency_first_dfs,

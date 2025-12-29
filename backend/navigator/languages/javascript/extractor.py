@@ -1,4 +1,4 @@
-from core.ir import CodeComponent
+﻿from ...core.ir import CodeComponent
 
 def extract_components(tree, source, file_path, module_path):
     components = []
@@ -68,3 +68,4 @@ def extract_components(tree, source, file_path, module_path):
 
     walk(root)
     return components
+

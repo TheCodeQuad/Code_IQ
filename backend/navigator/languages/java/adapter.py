@@ -1,4 +1,4 @@
-from treesitter.parser_factory import get_ts_parser
+﻿from ...treesitter.parser_factory import get_ts_parser
 from .extractor import extract_components
 
 class JavaAdapter:
@@ -16,3 +16,4 @@ class JavaAdapter:
 
     def resolve_dependencies(self, component, tree, source, all_components):
         return set()
+

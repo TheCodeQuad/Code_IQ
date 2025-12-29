@@ -1,4 +1,4 @@
-from core.ir import CodeComponent
+﻿from ...core.ir import CodeComponent
 
 
 def get_docstring(node, source):

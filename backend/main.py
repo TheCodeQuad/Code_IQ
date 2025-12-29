@@ -1,15 +1,15 @@
-from core.repository_parser import RepositoryParser
-from core.topo import (
+from navigator.core.repository_parser import RepositoryParser
+from navigator.core.topo import (
     build_graph_from_components,
     topological_sort,
     dependency_first_dfs,
     resolve_cycles
 )
-from core.ir_export import export_ir
-from core.dag_export import export_dag
+from navigator.core.ir_export import export_ir
+from navigator.core.dag_export import export_dag
 
 def main():
-    parser = RepositoryParser("./test_repo")  # 🔥 NO adapter
+    parser = RepositoryParser("navigator/scanner/test_repo")  # 🔥 NO adapter
 
     components = parser.parse()
 

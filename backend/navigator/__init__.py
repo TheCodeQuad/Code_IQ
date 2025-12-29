@@ -1,9 +1,9 @@
-from .core.repo_loader import RepositoryLoader
+﻿from .core.repo_loader import clone_repo
 from .core.repository_parser import RepositoryParser
-from .core.dag import DependencyDAG
+from .core.dag import build_dag
 
 __all__ = [
-    "RepositoryLoader",
+    "clone_repo",
     "RepositoryParser",
-    "DependencyDAG",
+    "build_dag",
 ]

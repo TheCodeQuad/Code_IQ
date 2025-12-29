@@ -1,4 +1,4 @@
-def apply_doc_dependency_rules(components):
+﻿def apply_doc_dependency_rules(components):
     """
     Apply documentation-oriented dependency abstraction rules.
     

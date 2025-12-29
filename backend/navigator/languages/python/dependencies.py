@@ -1,4 +1,4 @@
-import builtins
+﻿import builtins
 
 BUILTIN_TYPES = set(dir(builtins))
 EXCLUDED_NAMES = {"self", "cls"}

@@ -1,7 +1,7 @@
-from languages.python.adapter import PythonAdapter
-from languages.javascript.adapter import JavaScriptAdapter
-from languages.typescript.adapter import TypeScriptAdapter
-from languages.java.adapter import JavaAdapter
+﻿from .python.adapter import PythonAdapter
+from .javascript.adapter import JavaScriptAdapter
+from .typescript.adapter import TypeScriptAdapter
+from .java.adapter import JavaAdapter
 
 
 class AdapterRegistry:
@@ -19,3 +19,4 @@ class AdapterRegistry:
                 if file_path.endswith(ext):
                     return adapter
         return None  # unsupported file
+

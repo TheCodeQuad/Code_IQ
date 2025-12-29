@@ -1,4 +1,4 @@
-import json
+﻿import json
 import os
 
 def export_ir(components, out_dir="output"):
@@ -14,3 +14,4 @@ def export_ir(components, out_dir="output"):
         )
 
     print(f"[OK] IR written to {ir_path}")
+
