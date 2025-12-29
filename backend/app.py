@@ -45,8 +45,18 @@ app.add_middleware(
 # OUTPUT DIRECTORY
 # ============================================================================
 
-OUTPUT_DIR = Path("./output")
-OUTPUT_DIR.mkdir(exist_ok=True)
+def find_project_root(marker="requirements.txt"):
+    current = Path(__file__).resolve()
+    for parent in current.parents:
+        if (parent / marker).exists():
+            return parent
+    # fallback: go up 3 levels (backend/app.py -> backend -> Code_IQ)
+    return current.parents[2]
+
+PROJECT_ROOT = find_project_root()
+OUTPUT_DIR = PROJECT_ROOT / "data" / "intermediate" / "navigator_output"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
 
 # ============================================================================
 # REQUEST/RESPONSE MODELS

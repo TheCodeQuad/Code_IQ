@@ -119,3 +119,8 @@ output:
   include_metadata: true
   ordered_list: true
   dependency_graph: true
+
+# Example config/navigator.yaml
+paths:
+  input: "data/input/repositories/"
+  output: "data/intermediate/navigator_output/"

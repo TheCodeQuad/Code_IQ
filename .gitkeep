@@ -1,0 +1,11 @@
+data/
+  input/
+    repositories/
+      .gitkeep
+  intermediate/
+    navigator_output/
+      .gitkeep
+  knowledge_base/
+    .gitkeep
+  output/
+    .gitkeep

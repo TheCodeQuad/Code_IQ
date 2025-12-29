@@ -1,7 +1,11 @@
 ﻿import json
 import os
 
-def export_dag(dag, out_dir="output"):
+# Get the absolute path to the project root (one level up from backend/)
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+
+def export_dag(dag, out_dir=os.path.join(DATA_DIR, "intermediate", "navigator_output")):
     os.makedirs(out_dir, exist_ok=True)
 
     dag_path = os.path.join(out_dir, "dag.json")

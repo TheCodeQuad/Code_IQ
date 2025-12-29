@@ -49,7 +49,7 @@ paths:
   input: "data/input/repositories/"
   intermediate: "data/intermediate/"
   knowledge_base: "data/knowledge_base/"
-  output: "data/output/"
+  # output: "data/output/"
   templates: "src/agents/writer_agent/templates/"
   
 cache:
