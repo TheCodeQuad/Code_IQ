@@ -16,9 +16,7 @@ dist/
 
 # Navigator outputs (generated)
 backend/navigator/output/
-data/**
-!data/**/
-!data/**/.gitkeep
+data/
 
 # Logs (runtime)
 logs/
