@@ -1,10 +1,9 @@
 {
-  "app.block_websites": [],
   "helper.HelperClass": [
     "helper.DataProcessor",
+    "helper.HelperClass.get_result",
     "helper.HelperClass.process_data",
-    "helper.HelperClass._internal_process",
-    "helper.HelperClass.get_result"
+    "helper.HelperClass._internal_process"
   ],
   "helper.HelperClass.__init__": [],
   "helper.HelperClass.process_data": [
@@ -19,20 +18,20 @@
   "helper.DataProcessor.process": [],
   "helper.DataProcessor._internal_process": [],
   "main.main_function": [
-    "main.utility_function",
-    "helper.HelperClass"
+    "helper.HelperClass",
+    "main.utility_function"
   ],
   "main.utility_function": [],
   "processor.AdvancedProcessor": [
-    "helper.HelperClass",
-    "processor.AdvancedProcessor.run",
-    "processor.AdvancedProcessor.process_result",
     "helper.DataProcessor",
-    "main.utility_function"
+    "processor.AdvancedProcessor.process_result",
+    "processor.AdvancedProcessor.run",
+    "main.utility_function",
+    "helper.HelperClass"
   ],
   "processor.AdvancedProcessor.__init__": [
-    "helper.DataProcessor",
-    "helper.HelperClass"
+    "helper.HelperClass",
+    "helper.DataProcessor"
   ],
   "processor.AdvancedProcessor.run": [],
   "processor.AdvancedProcessor.process_result": [

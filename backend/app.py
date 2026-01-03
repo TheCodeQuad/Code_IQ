@@ -9,15 +9,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel, HttpUrl, Field
 
-from core.repo_loader import clone_repo
-from core.repository_parser import RepositoryParser
-from core.topo import (
+from navigator.core.repo_loader import clone_repo
+from navigator.core.repository_parser import RepositoryParser
+from navigator.core.topo import (
     build_graph_from_components,
     topological_sort,
     dependency_first_dfs,
     resolve_cycles
 )
-
+from agents.orchestrator.orchestrator import Orchestrator
+from backend.pipeline.pipeline import run_pipeline
+from backend.utils.file_handler import FileHandler
 # ============================================================================
 # FASTAPI APP SETUP
 # ============================================================================
@@ -45,8 +47,18 @@ app.add_middleware(
 # OUTPUT DIRECTORY
 # ============================================================================
 
-OUTPUT_DIR = Path("./output")
-OUTPUT_DIR.mkdir(exist_ok=True)
+def find_project_root(marker="requirements.txt"):
+    current = Path(__file__).resolve()
+    for parent in current.parents:
+        if (parent / marker).exists():
+            return parent
+    # fallback: go up 3 levels (backend/app.py -> backend -> Code_IQ)
+    return current.parents[2]
+
+PROJECT_ROOT = find_project_root()
+OUTPUT_DIR = PROJECT_ROOT / "data" / "intermediate" / "navigator_output"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
 
 # ============================================================================
 # REQUEST/RESPONSE MODELS
@@ -129,10 +141,10 @@ def calculate_stats(components: dict) -> AnalysisStats:
             stats["global_variables"] += 1
         
         # Count docstrings
-        if comp.has_docstring:
-            stats["components_with_docstrings"] += 1
-        else:
-            stats["components_without_docstrings"] += 1
+        # if comp.has_docstring:
+        #     stats["components_with_docstrings"] += 1
+        # else:
+        #     stats["components_without_docstrings"] += 1
         
         # Count dependencies
         dep_count = len(comp.depends_on)
@@ -263,11 +275,7 @@ def health_check():
 @app.post("/analyze", response_model=AnalyzeResponse)
 def analyze_repo(req: AnalyzeRequest):
     """
-    Analyze a Git repository and extract dependency graph
-    
-    - **repo_url**: GitHub repository URL
-    - **save_json**: Save results to JSON file (default: True)
-    - **include_source**: Include source code in response (default: True)
+    Analyze a Git repository and extract dependency graph and documentation
     """
     try:
         # Extract repo name for naming
@@ -277,88 +285,60 @@ def analyze_repo(req: AnalyzeRequest):
         print(f"📥 Cloning repository: {req.repo_url}")
         repo_path = clone_repo(str(req.repo_url))
         
-        # Step 2: Parse repository
-        print(f"🔍 Parsing repository at: {repo_path}")
-        parser = RepositoryParser(repo_path)
-        components = parser.parse()
+        # Use the pipeline function
+        print(f"🚀 Running documentation pipeline for: {repo_path}")
+        result = run_pipeline(repo_path)
+        components = result["components"]
+        # print(components)
+        # print("Reader output (components):", result["components"]) 
+        reader_output_path = PROJECT_ROOT / "data" / "intermediate" / "agent_output" / "reader" / f"{repo_name}_reader_output.json"
+        FileHandler.write_json(reader_output_path,{k: FileHandler.serialize_component(v) for k, v in components.items()})
+
         
-        if not components:
-            raise HTTPException(
-                status_code=400,
-                detail="No components found in repository. Make sure it contains Python files."
-            )
-        
-        # Step 3: Build dependency graph
-        print(f"📊 Building dependency graph...")
-        graph = build_graph_from_components(components)
-        graph = resolve_cycles(graph)
-        
-        # Step 4: Calculate ordering
-        print(f"🔄 Calculating topological order...")
-        topo_order = topological_sort(graph)
-        dfs_order = dependency_first_dfs(graph)
-        
-        # Step 5: Calculate statistics
-        stats = calculate_stats(components)
-        
-        # Step 6: Prepare component data in the required format
+        # Print reader output like in main.py
+        # for idx, component in enumerate(components.values()):
+        #     print(f"Component {idx}: type={type(component)}, value={component}")
+        graph = result["graph"]
+        topo_order = result["topological_order"]
+        dfs_order = result["dfs_order"]
+        docs = result["documentation"]
+
+        # Prepare component data for response
         components_dict = {}
         for comp_id, comp in components.items():
             comp_info = {
                 "id": comp.id,
                 "language": comp.language,
-                "type": comp.type,
-                "file_path": comp.file_path,
-                "module_path": comp.module_path,
-                "depends_on": list(comp.depends_on),
-                "start_line": comp.start_line,
-                "end_line": comp.end_line,
-                "has_docstring": comp.has_docstring,
-                "docstring": comp.docstring,
+                "type": comp.type.value if hasattr(comp.type, "value") else comp.type,
+                "file_path": getattr(comp, "file_path", ""),
+                "module_path": getattr(comp, "module_path", ""),
+                "depends_on": list(getattr(comp, "depends_on", [])),
+                "start_line": getattr(comp, "start_line", 0),
+                "end_line": getattr(comp, "end_line", 0),
+                "has_docstring": getattr(comp, "has_docstring", False),
+                "docstring": getattr(comp, "docstring", ""),
             }
-            
-            # Include source code (truncated for display)
-            if req.include_source and comp.source_code:
+            if req.include_source and getattr(comp, "source_code", None):
                 comp_info["source_code"] = truncate_source_code(comp.source_code)
-            
             components_dict[comp_id] = comp_info
-        
-        # Step 7: Format output for UI display
+
         formatted_output = format_analysis_output(components, graph, dfs_order, topo_order)
-        
-        # Step 8: Print summary to console
-        print_analysis_summary(components, graph, dfs_order, topo_order)
-        
-        # Step 9: Save components to JSON file (in the required format)
-        output_file = None
-        if req.save_json:
-            print(f"💾 Saving components to JSON...")
-            output_file = save_analysis_to_json(components_dict, repo_name)
-            print(f"✅ Results saved to: {output_file}")
-        
-        # Step 10: Prepare response data
-        response_data = {
-            "success": True,
-            "repo_url": str(req.repo_url),
-            "timestamp": datetime.now().isoformat(),
-            "stats": stats.dict(),
-            "components": components_dict,
-            "topological_order": topo_order,
-            "dfs_order": dfs_order,
-            "dag": {k: list(v) for k, v in graph.items()},
-            "formatted_output": formatted_output,
-            "output_file": output_file,
-            "message": f"Analysis complete. Results saved to {output_file}" if output_file else "Analysis complete."
-        }
-        
-        print(f"✅ Analysis complete!")
-        print(f"   Total components: {stats.total_components}")
-        print(f"   Functions: {stats.functions}")
-        print(f"   Classes: {stats.classes}")
-        print(f"   Methods: {stats.methods}")
-        print(f"   Global Variables: {stats.global_variables}")
-        
-        return JSONResponse(content=response_data)
+        stats = calculate_stats(components)
+
+        return AnalyzeResponse(
+            success=True,
+            repo_url=str(req.repo_url),
+            timestamp=datetime.now().isoformat(),
+            stats=stats,
+            components=components_dict,
+            topological_order=topo_order,
+            dfs_order=dfs_order,
+            dag={k: list(v) for k, v in graph.items()},
+            formatted_output=formatted_output,
+            output_file=None,
+            message="Analysis and documentation complete.",
+            documentation=[doc.dict() if hasattr(doc, "dict") else str(doc) for doc in docs]
+        )
         
     except Exception as e:
         print(f"❌ Error during analysis: {str(e)}")

@@ -1,0 +1,12 @@
+POST http://127.0.0.1:8000/keys
+
+
+GET  http://127.0.0.1:8000/keys
+
+GET http://127.0.0.1:8000/keys/
+
+PUT http://127.0.0.1:8000/keepalive/
+
+PUT http://127.0.0.1:8000/keys/
+
+DELETE http://127.0.0.1:8000/key/

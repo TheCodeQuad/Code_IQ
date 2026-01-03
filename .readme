@@ -1,0 +1,8 @@
+to run the project 
+backend:
+set PYTHONPATH=%CD%\backend
+python -m uvicorn backend.app:app --reload
+ 
+frontend:
+cd frontend
+npm run dev
