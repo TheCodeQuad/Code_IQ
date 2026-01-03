@@ -1,14 +1,21 @@
 # LLM Provider Configurations
 providers:
   openrouter:
-    enabled: true
-    api_base_url: "https://api.openrouter.ai/v1"
+    enabled: false
+    api_base_url: "https://openrouter.ai/api/v1/chat/completions"
     api_key_env: "OPENROUTER_API_KEY"
     timeout: 60
 
+  local:
+    enabled: true
+    api_base_url: "http://localhost:11434/v1/chat/completions"
+    api_key_env: "DUMMY"
+    models:
+      default: "qwen2.5:7b"
+
     # Model configurations (model_id should match OpenRouter's model identifiers)
     models:
-      default: "gpt-4o-mini"
+      default: "mistralai/mistral-7b-instruct:free"
 
       gpt-4o-mini:
         name: "gpt-4o-mini"
@@ -44,6 +51,31 @@ providers:
         capabilities:
           - text_generation
           - code_analysis
+
+      alibaba-deepresearch:       #wrong abstraction for agent-orchestrated loops
+        name: "Alibaba Tongyi DeepResearch 30B"
+        model_id: "alibaba/tongyi-deepresearch-30b-a3b:free"
+        context_window: 32768
+        max_output_tokens: 8192
+        cost_per_1k_input: 0.0  # Free model
+        cost_per_1k_output: 0.0  # Free model
+        capabilities:
+          - text_generation
+          - code_analysis
+          - research
+
+      mistral-7b-instruct:
+        name: "Mistral 7B Instruct"
+        model_id: "mistralai/mistral-7b-instruct:free"
+        context_window: 8192
+        max_output_tokens: 2048
+        cost_per_1k_input: 0.0  # Free model
+        cost_per_1k_output: 0.0  # Free model
+        capabilities:
+          - text_generation
+          - code_analysis
+      
+      
 
     default_params:
       temperature: 0.7
@@ -90,36 +122,36 @@ providers:
 # Agent-specific LLM assignments — use OpenRouter provider
 agent_models:
   reader:
-    provider: "openrouter"
-    model: "gpt-4o-mini"
+    provider: "local"
+    model: "qwen2.5:7b"
     params:
       temperature: 0.3
       max_tokens: 8000
 
   searcher:
-    provider: "openrouter"
-    model: "gpt-4o-mini"
+    provider: "local"
+    model: "qwen2.5:7b"
     params:
       temperature: 0.5
       max_tokens: 2000
 
   writer:
-    provider: "openrouter"
-    model: "gpt-4o"
+    provider: "local"
+    model: "qwen2.5:7b"
     params:
       temperature: 0.7
       max_tokens: 4000
 
   verifier:
-    provider: "openrouter"
-    model: "gpt-4o-mini"
+    provider: "local"
+    model: "qwen2.5:7b"
     params:
       temperature: 0.2
       max_tokens: 4000
 
   evaluator:
-    provider: "openrouter"
-    model: "gpt-4o"
+    provider: "local"
+    model: "qwen2.5:7b"
     params:
       temperature: 0.4
       max_tokens: 8000

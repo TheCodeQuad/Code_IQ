@@ -6,6 +6,9 @@ orchestrator:
 reader_agent:
   enabled: true
   priority: 1
+  max_retries: 3
+  retry_delay: 1
+  timeout: 120
   capabilities:
     - type_extraction
     - semantic_analysis
@@ -20,6 +23,10 @@ reader_agent:
 searcher_agent:
   enabled: true
   priority: 2
+  max_retries: 2
+  retry_delay: 1
+  timeout: 60
+  max_results: 10
   knowledge_base:
     enabled: true
     path: "data/knowledge_base/"
@@ -28,11 +35,14 @@ searcher_agent:
     - semantic_search
     - keyword_search
     - pattern_matching
-  max_results: 10
+
 
 writer_agent:
   enabled: true
   priority: 3
+  max_retries: 3
+  retry_delay: 2
+  timeout: 180
   output_formats:
     - markdown
     - restructuredtext
@@ -42,10 +52,14 @@ writer_agent:
   include_examples: true
   include_type_hints: true
   versioning: true
+  min_description_length: 50
 
 verifier_agent:
   enabled: true
   priority: 4
+  max_retries: 2
+  retry_delay: 1
+  timeout: 120
   validation_rules:
     - completeness
     - accuracy

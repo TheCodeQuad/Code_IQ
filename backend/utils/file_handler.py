@@ -155,4 +155,59 @@ class FileHandler:
     def ensure_dir(directory: Union[str, Path]):
         """Ensure directory exists"""
         Path(directory).mkdir(parents=True, exist_ok=True)
-    
+
+    @staticmethod
+    def serialize_component(comp):
+        """Serialize a component (or any object) to JSON-serializable format"""
+        from dataclasses import is_dataclass, asdict
+        from enum import Enum
+        
+        def serialize_value(val):
+            """Recursively serialize a value"""
+            # Handle None
+            if val is None:
+                return None
+            
+            # Handle enums
+            if isinstance(val, Enum):
+                return val.value
+            
+            # Handle dataclasses (like Location, Parameter)
+            if is_dataclass(val) and not isinstance(val, type):
+                try:
+                    return {k: serialize_value(v) for k, v in asdict(val).items()}
+                except TypeError:
+                    return str(val)
+            
+            # Handle dictionaries
+            if isinstance(val, dict):
+                return {k: serialize_value(v) for k, v in val.items()}
+            
+            # Handle lists and tuples
+            if isinstance(val, (list, tuple)):
+                return [serialize_value(item) for item in val]
+            
+            # Handle sets
+            if isinstance(val, set):
+                return list(val)
+            
+            # Handle primitive types
+            if isinstance(val, (str, int, float, bool)):
+                return val
+            
+            # Fallback: try __dict__
+            if hasattr(val, '__dict__'):
+                try:
+                    return {k: serialize_value(v) for k, v in val.__dict__.items()}
+                except (TypeError, AttributeError):
+                    return str(val)
+            
+            # Last resort: convert to string
+            return str(val)
+        
+        # Start serialization
+        if is_dataclass(comp) and not isinstance(comp, type):
+            return {k: serialize_value(v) for k, v in asdict(comp).items()}
+        else:
+            d = comp.__dict__.copy()
+            return {k: serialize_value(v) for k, v in d.items()}

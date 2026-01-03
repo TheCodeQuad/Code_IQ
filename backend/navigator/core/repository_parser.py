@@ -1,6 +1,7 @@
 ﻿import os
 from ..languages.adapter_registry import AdapterRegistry
 from .doc_dependency_parser import apply_doc_dependency_rules
+
 class RepositoryParser:
     def __init__(self, repo_path: str):
         self.repo_path = repo_path
@@ -34,7 +35,7 @@ class RepositoryParser:
                     tree, source, file_path, module_path
                 )
 
-                # ðŸ”¥ NORMALIZATION STEP
+                # 🔥 NORMALIZATION STEP
                 if isinstance(raw_components, dict):
                     components = raw_components
                 else:
@@ -51,16 +52,24 @@ class RepositoryParser:
                 deps = adapter.resolve_dependencies(
                     component, tree, source, all_components
                 )
-                component.depends_on.update(deps)
+                # Convert deps to list if it's a set, then extend
+                if isinstance(deps, set):
+                    component.depends_on.extend(list(deps))
+                else:
+                    component.depends_on.extend(list(deps) if deps else [])
     
-        # ---------- PASS 3: class â†’ method ----------
+        # ---------- PASS 3: class → method ----------
         for cid, comp in all_components.items():
-            if comp.type == "class":
+            # Handle both enum and string types
+            comp_type = comp.type.value if hasattr(comp.type, 'value') else str(comp.type)
+            
+            if comp_type == "class":
                 for other_id, other in all_components.items():
-                    if other.type == "method" and other_id.startswith(cid + "."):
+                    other_type = other.type.value if hasattr(other.type, 'value') else str(other.type)
+                    if other_type == "method" and other_id.startswith(cid + "."):
                         if not other_id.endswith(".__init__"):
-                            comp.depends_on.add(other_id)
-
+                            if other_id not in comp.depends_on:
+                                comp.depends_on.append(other_id)
 
 
         apply_doc_dependency_rules(all_components)

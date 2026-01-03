@@ -1,4 +1,4 @@
-from .pipeline import CodeIQPipeline
-from .checkpoint import PipelineCheckpoint
+from .pipeline import run_pipeline
+# from .checkpoint import PipelineCheckpoint
 
-__all__ = ["CodeIQPipeline", "PipelineCheckpoint"]
+__all__ = ["run_pipeline"]

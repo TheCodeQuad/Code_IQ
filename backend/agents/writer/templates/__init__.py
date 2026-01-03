@@ -1,11 +1,8 @@
-from .class_template import CLASS_TEMPLATE
-from .function import FUNCTION_TEMPLATE
-from .module import MODULE_TEMPLATE
+"""
+Documentation templates
+"""
+from .function import FunctionTemplate
+from .class_template import ClassTemplate
+from .module import ModuleTemplate
 
-TEMPLATES = {
-    "class": CLASS_TEMPLATE,
-    "function": FUNCTION_TEMPLATE,
-    "module": MODULE_TEMPLATE,
-}
-
-__all__ = ["TEMPLATES"]
+__all__ = ['FunctionTemplate', 'ClassTemplate', 'ModuleTemplate']

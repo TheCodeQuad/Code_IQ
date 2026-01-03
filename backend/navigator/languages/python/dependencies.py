@@ -121,7 +121,11 @@ def resolve_dependencies(component, tree, source, all_components):
     name_index = {cid.split(".")[-1]: cid for cid in all_components}
     local_vars = set()
     var_types = {}  # Maps variable names to their component IDs
-    class_name = component.id.split(".")[-2] if component.type == "method" else None
+    
+    # Extract type as string (handle both enum and string)
+    comp_type = component.type.value if hasattr(component.type, 'value') else str(component.type)
+    
+    class_name = component.id.split(".")[-2] if comp_type == "method" else None
     
     # Collect imports from the file
     import_tracker = ImportTracker()
@@ -131,8 +135,17 @@ def resolve_dependencies(component, tree, source, all_components):
     global_tracker = GlobalVariableTracker()
     global_tracker.collect(tree, source)
     
-    # Get module path for this component
-    module_path = component.module_path
+    # Extract module_path from component ID
+    # ID format: module.path.ClassName.method_name or module.path.function_name
+    parts = component.id.split(".")
+    if comp_type == "method":
+        # For methods: module_path is everything except class name and method name
+        # Example: "app.models.User.save" -> "app.models"
+        module_path = ".".join(parts[:-2]) if len(parts) > 2 else parts[0]
+    else:
+        # For functions, classes, globals: module_path is everything except the component name
+        # Example: "app.models.User" -> "app.models" or "app.utils.helper" -> "app.utils"
+        module_path = ".".join(parts[:-1]) if len(parts) > 1 else parts[0]
     
     # Get all modules in the repository
     repo_modules = set()
@@ -263,7 +276,7 @@ def resolve_dependencies(component, tree, source, all_components):
         """Recursively walk the AST to find dependencies"""
 
         # ---- Handle base classes (inheritance) ----
-        if component.type == "class" and node.type == "argument_list":
+        if comp_type == "class" and node.type == "argument_list":
             parent = node.parent
             if parent and parent.type == "class_definition":
                 # This is the base class list
@@ -426,12 +439,12 @@ def resolve_dependencies(component, tree, source, all_components):
 
     # ---------------- FIND AND WALK COMPONENT NODE ----------------
 
-    component_node = find_component_node(tree, component)
+    component_node = find_component_node(tree, component, comp_type)
     if not component_node:
         return deps
 
     # Track function/method parameters as local variables
-    if component.type in ("function", "method"):
+    if comp_type in ("function", "method"):
         params = component_node.child_by_field_name("parameters")
         if params:
             for child in params.children:
@@ -460,7 +473,7 @@ def resolve_dependencies(component, tree, source, all_components):
 
     return valid_deps
 
-def find_component_node(tree, component):
+def find_component_node(tree, component, comp_type):
     """
     Locate the tree-sitter node corresponding to a component.
     """
@@ -472,12 +485,12 @@ def find_component_node(tree, component):
             name_node = node.child_by_field_name("name")
             if name_node:
                 cname = name_node.text.decode()
-                if component.type == "class" and component.id.endswith(f".{cname}"):
+                if comp_type == "class" and component.id.endswith(f".{cname}"):
                     return node
                 parent_class = cname
 
         # Handle function definitions (top-level functions)
-        if component.type == "function" and node.type in ("function_definition", "async_function_definition"):
+        if comp_type == "function" and node.type in ("function_definition", "async_function_definition"):
             name_node = node.child_by_field_name("name")
             if name_node:
                 name = name_node.text.decode()
@@ -485,7 +498,7 @@ def find_component_node(tree, component):
                     return node
 
         # Handle method definitions (inside classes)
-        if component.type == "method":
+        if comp_type == "method":
             # Handle decorated methods
             if node.type == "decorated_definition":
                 for child in node.children:

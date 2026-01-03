@@ -14,6 +14,10 @@ class ComponentType(Enum):
     VARIABLE = "variable"
     MODULE = "module"
     IMPORT = "import"
+    GLOBAL_VARIABLE = "global_variable"
+    STATIC_FIELD = "static_field" 
+    CONSTRUCTOR = "constructor"
+    FIELD = "field" 
 
 @dataclass
 class Location:
@@ -67,6 +71,7 @@ class CodeComponent:
     calls: List[str] = field(default_factory=list)  # Component IDs called
     imports: List[str] = field(default_factory=list)
     depends_on: List[str] = field(default_factory=list)  # Dependency IDs
+    parameters: List[Any] = field(default_factory=list)
     
     # Metadata
     complexity: Optional[int] = None  # Cyclomatic complexity
@@ -78,6 +83,10 @@ class CodeComponent:
     is_static: bool = False
     is_class_method: bool = False
     
+    is_public: bool = True
+    is_private: bool = False
+    is_protected: bool = False
+
     # Topological ordering (from Navigator)
     priority: int = 0  # 0 = no dependencies, higher = more dependencies
     dependency_level: int = 0

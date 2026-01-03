@@ -4,7 +4,7 @@ Matches the structure from the AST-based parser.
 """
 
 from dataclasses import dataclass, field
-from typing import Set, Optional, Any, Dict
+from typing import List, Set, Optional, Any, Dict
 
 
 @dataclass
@@ -45,11 +45,19 @@ class CodeComponent:
     start_line: int = 0
     end_line: int = 0
     
+    
     # Whether the component already has a docstring
     has_docstring: bool = False
     
     # Content of the docstring if it exists, empty string otherwise
     docstring: str = ""
+
+    parameters: List[Any] = field(default_factory=list)
+    lines_of_code: int = 0
+
+    is_public: bool = True
+    is_private: bool = False
+    is_protected: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         """
@@ -70,6 +78,8 @@ class CodeComponent:
             'has_docstring': self.has_docstring,
             'docstring': self.docstring,
             'source_code': self.source_code[:500] + "..." if self.source_code and len(self.source_code) > 500 else self.source_code,
+            'parameters': self.parameters,
+            'lines_of_code': self.end_line - self.start_line + 1,
         }
 
     @staticmethod
