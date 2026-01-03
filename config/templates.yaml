@@ -1,0 +1,39 @@
+templates:
+  function:
+    format: |
+      {description}
+      
+      Args:
+          {args}
+      
+      Returns:
+          {returns}
+      
+      Raises:
+          {raises}
+      
+      Examples:
+          {examples}
+    
+  class:
+    format: |
+      {description}
+      
+      Attributes:
+          {attributes}
+      
+      Methods:
+          {methods}
+      
+      Examples:
+          {examples}
+    
+  module:
+    format: |
+      {description}
+      
+      This module contains:
+          {contents}
+      
+      Usage:
+          {usage}

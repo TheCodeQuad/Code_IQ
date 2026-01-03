@@ -1,0 +1,33 @@
+# Virtual envs
+venv/
+env/
+.Python
+
+# Cache / bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Navigator outputs (generated)
+backend/navigator/output/
+data/
+
+# Logs (runtime)
+logs/
+backend/logs/
+backend/repos/
+
+# Test cache
+.pytest_cache/
+
+# Editor / OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
