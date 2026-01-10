@@ -77,6 +77,8 @@ class ReaderAgent(BaseAgent):
             # Step 1: Analyze complexity
             complexity = self._analyze_complexity(component)
             
+            component.creates_threads = self._detect_threading(component)
+
             # Step 2: Assess if additional context is needed
             needs_context = self._needs_additional_context(component, complexity)
             
@@ -150,7 +152,7 @@ class ReaderAgent(BaseAgent):
             'is_async': component.is_async,
             'is_generator': component.is_generator,
             'has_decorators': len(component.decorators) > 0,
-            'complexity_level': 'simple'
+            'complexity_level': 'moderate'
         }
         
         # Calculate overall complexity score
@@ -180,29 +182,32 @@ class ReaderAgent(BaseAgent):
         component: CodeComponent,
         complexity: Dict[str, Any]
     ) -> bool:
-        """
-        Determine if component needs additional context
+        """Determine if component needs additional context"""
         
-        Args:
-            component: Code component
-            complexity: Complexity assessment
-            
-        Returns:
-            True if additional context is needed
-        """
+        # Skip global variables entirely - they don't need context
+        if component.type == ComponentType.GLOBAL_VARIABLE:
+            return False
+        
+        # NEW RULE: Always need context for async, threading, error handling
+        # BUT NOT just for accessing shared state
+        if (
+            component.is_async
+            or self._detect_threading(component)
+            or self._detect_error_handling(component)
+        ):
+            return True
+        
         # Simple self-contained components don't need context
         if complexity['complexity_level'] == 'simple':
-            # Only public functions need usage examples
+            # Only return True if the component is public AND has dependencies or calls
             if self._is_public(component) and component.type.value in ['function', 'method']:
-                return True
-            
-            # Check if it has dependencies or calls
-            if len(component.depends_on) == 0 and len(component.calls) == 0:
-                return False
-            
-            # Simple components with few dependencies don't need context
-            if len(component.depends_on) <= 1:
-                return False
+                if len(component.depends_on) > 0 or len(component.calls) > 0:
+                    return True
+                else:
+                    return False
+
+            # Otherwise, simple components don't need context
+            return False
         
         # Only complex components truly need context
         if complexity['complexity_level'] != 'complex':
@@ -283,22 +288,27 @@ class ReaderAgent(BaseAgent):
         self,
         component: CodeComponent
     ) -> List[InternalRequest]:
-        """
-        Generate requests for reference/usage information
-        
-        Args:
-            component: Code component
-            
-        Returns:
-            List of reference requests
-        """
+        """Generate requests for reference/usage information"""
         requests = []
         
-        # Public functions/classes need usage examples
-        if self._is_public(component):
+        # Only request usage examples for PUBLIC + COMPLEX or PUBLIC + AMBIGUOUS components
+        if self._is_public(component) and component.type in [ComponentType.FUNCTION, ComponentType.METHOD, ComponentType.CLASS]:
+            # Skip if already has good docstring
+            if component.existing_docstring and len(component.existing_docstring) > 50:
+                self.logger.debug(f"Skipping reference request for {component.name} - has good docstring")
+                return requests
+            
+            # Skip if it's simple and self-contained
+            if (len(component.parameters) <= 2 and 
+                len(component.calls) <= 1 and 
+                component.lines_of_code <= 10):
+                self.logger.debug(f"Skipping reference request for {component.name} - simple and self-contained")
+                return requests
+            
+            # Only request for actually complex or ambiguous functions
             reason = (
-                f"This is a public {component.type.value if hasattr(component.type, 'value') else component.type}. "
-                f"Usage examples will help users understand how to use it correctly."
+                f"This is a public {component.type.value}. "
+                f"Usage examples will help clarify its behavior."
             )
             
             priority = 8 if component.type == ComponentType.FUNCTION else 7
@@ -309,21 +319,6 @@ class ReaderAgent(BaseAgent):
                 component_name=component.name,
                 reason=reason,
                 priority=priority
-            ))
-        
-        # Complex components benefit from usage context
-        elif component.complexity and component.complexity > self.complex_complexity_threshold:
-            reason = (
-                f"This is a public {component.type.value if hasattr(component.type, 'value') else component.type}. "
-                f"Real-world usage examples will clarify its purpose and behavior."
-            )
-            
-            requests.append(InternalRequest(
-                request_type="reference",
-                component_id=component.id,
-                component_name=component.name,
-                reason=reason,
-                priority=6
             ))
         
         return requests
@@ -595,3 +590,35 @@ Provide a 2-3 sentence analysis summary explaining:
                 concepts.add(match.replace("@", ""))
         
         return list(concepts)
+    
+    def _detect_threading(self, component: CodeComponent) -> bool:
+        """Detect if component creates threads or uses concurrency"""
+        threading_patterns = [
+            'new Thread(',
+            'threading.Thread(',
+            '.start()',
+            'executor',
+            'ExecutorService',
+            'async def',
+            'await ',
+            '.wait()',
+            '.notify(',
+            'Lock(',
+            'Semaphore(',
+            'synchronized',
+        ]
+        
+        source = component.source_code.lower()
+        return any(pattern.lower() in source for pattern in threading_patterns)
+
+    def _detect_error_handling(self, component: CodeComponent) -> bool:
+        """Detect if component has error handling logic"""
+        error_patterns = ['try', 'except', 'finally', 'throw', 'catch']
+        source = component.source_code.lower()
+        return any(pattern in source for pattern in error_patterns)
+
+    # def _detect_shared_state(self, component: CodeComponent) -> bool:
+    #     """Detect if component manages shared state"""
+    #     state_patterns = ['global', 'static', 'class variable', '__shared']
+    #     source = component.source_code.lower()
+    #     return any(pattern in source for pattern in state_patterns)

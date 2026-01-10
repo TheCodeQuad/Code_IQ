@@ -1,4 +1,5 @@
-﻿from backend.models.code_component import CodeComponent, Location, Parameter, ComponentType
+﻿from typing import List
+from backend.models.code_component import CodeComponent, Location, Parameter, ComponentType
 
 
 def get_javadoc(node, source):
@@ -123,6 +124,19 @@ def extract_function_calls(func_node, source):
     walk(func_node)
     return calls
 
+def _extract_class_level_vars(class_node) -> List[str]:
+    """Extract class-level (shared) variable names"""
+    vars = []
+    body = class_node.child_by_field_name("body")
+    if body:
+        for child in body.children:
+            if child.type == "field_declaration":
+                for var_child in child.children:
+                    if var_child.type == "variable_declarator":
+                        name_node = var_child.child_by_field_name("name")
+                        if name_node:
+                            vars.append(name_node.text.decode())
+    return vars
 
 def extract_components(tree, source, file_path, module_path):
     """
@@ -177,6 +191,14 @@ def extract_components(tree, source, file_path, module_path):
                 is_protected=is_protected,
             )
 
+            # FIX: Extract class-level shared state
+            class_vars = _extract_class_level_vars(node)
+            for method_id in components:
+                if method_id.startswith(class_id):
+                    components[method_id].metadata['shared_state_dependencies'] = [
+                        var for var in class_vars if var in components[method_id].source_code
+                    ]
+                    
             # Extract methods and nested classes within the class body
             body = node.child_by_field_name("body")
             if body:

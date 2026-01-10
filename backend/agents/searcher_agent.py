@@ -64,19 +64,22 @@ class SearcherAgent(BaseAgent):
     
     def __init__(self):
         super().__init__("searcher")
-        
+    
         self.knowledge_base_path = Path(
             self.config.get('system.paths.knowledge_base', 'data/knowledge_base')
         )
         self.file_handler = FileHandler()
-        
+    
         # Load knowledge base
         self.functions_kb = self._load_knowledge_base('functions.json')
         self.classes_kb = self._load_knowledge_base('classes.json')
         self.modules_kb = self._load_knowledge_base('modules.json')
-        
+    
         # Cache for component lookup
         self.component_cache = {}
+    
+        # FIX 3: Add summary cache
+        self.summary_cache = {}
 
     def set_repository_data(
         self,
@@ -216,26 +219,21 @@ class SearcherAgent(BaseAgent):
         request: InternalRequest,
         context: AgentContext
     ) -> Optional[DependencyContext]:
-        """
-        Search for dependency information
-        
-        Args:
-            request: Internal dependency request
-            context: Agent context
-            
-        Returns:
-            DependencyContext or None
-        """
+        """Search for dependency information"""
         try:
-            # Try to find in previous results (if available)
             component = self._find_component(request.component_id, context)
             
             if not component:
                 self.logger.warning(f"Dependency not found: {request.component_id}")
                 return None
             
-            # Generate summary using LLM
-            summary = self._generate_dependency_summary(component)
+            # FIX: Use existing docstring or signature instead of LLM call
+            # Local dependencies don't need LLM processing
+            if component.existing_docstring:
+                summary = component.existing_docstring[:200]
+            else:
+                # Fallback to signature only, no LLM
+                summary = f"{component.name}: {component.signature}"
             
             return DependencyContext(
                 component_id=component.id,
@@ -335,7 +333,21 @@ class SearcherAgent(BaseAgent):
             return None
     
     def _generate_dependency_summary(self, component: CodeComponent) -> str:
-        """Generate summary of a dependency"""
+        """Generate summary of a dependency (with caching)"""
+        cache_key = f"dep_summary:{component.id}"
+        
+        # Check cache first
+        if cache_key in self.summary_cache:
+            self.logger.debug(f"Using cached summary for {component.name}")
+            return self.summary_cache[cache_key]
+        
+        # Use existing docstring if available
+        if component.existing_docstring:
+            summary = component.existing_docstring[:200]
+            self.summary_cache[cache_key] = summary
+            return summary
+        
+        # Only call LLM if no docstring and not cached
         prompt = f"""Provide a brief summary of what this code component does:
 
 Component: {component.name}
@@ -355,10 +367,14 @@ Provide a 1-2 sentence summary focusing on its purpose and main functionality.""
                 temperature=0.3,
                 max_tokens=200
             )
-            return summary.strip()
+            summary = summary.strip()
+            self.summary_cache[cache_key] = summary
+            return summary
         except Exception as e:
             self.logger.warning(f"Failed to generate dependency summary: {e}")
-            return f"{component.name}: {component.signature}"
+            fallback = f"{component.name}: {component.signature}"
+            self.summary_cache[cache_key] = fallback
+            return fallback
     
     def _generate_usage_summary(
         self,
@@ -504,12 +520,11 @@ Provide:
         if component_id in self.component_cache:
             return self.component_cache[component_id]
         
-        # Try to find in metadata
-        previous_docs = context.metadata.get('previous_docs', [])
-        
-        # This would need access to the full component list
-        # For now, return None - in real implementation, this would
-        # access the navigator results
+        # Try to find in component map (from repository data)
+        if hasattr(self, 'component_map') and component_id in self.component_map:
+            component = self.component_map[component_id]
+            self.component_cache[component_id] = component
+            return component
         
         return None
     

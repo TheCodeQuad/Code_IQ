@@ -1,4 +1,5 @@
-﻿from backend.models.code_component import CodeComponent, Location, Parameter, ComponentType
+﻿from typing import List
+from backend.models.code_component import CodeComponent, Location, Parameter, ComponentType
 
 
 def get_docstring(node, source):
@@ -138,6 +139,21 @@ def extract_function_calls(func_node, source):
     walk(func_node)
     return calls
 
+def _extract_module_level_vars(root) -> List[str]:
+    """Extract module-level variable names"""
+    vars = []
+    for child in root.children:
+        if child.type == "assignment":
+            lhs = child.child_by_field_name("left")
+            if lhs and lhs.type == "identifier":
+                vars.append(lhs.text.decode())
+        elif child.type == "expression_statement":
+            for expr_child in child.children:
+                if expr_child.type == "assignment":
+                    lhs = expr_child.child_by_field_name("left")
+                    if lhs and lhs.type == "identifier":
+                        vars.append(lhs.text.decode())
+    return vars
 
 def extract_components(tree, source, file_path, module_path):
     """
@@ -161,7 +177,9 @@ def extract_components(tree, source, file_path, module_path):
     components = {}
     root = tree.root_node
     
-    # Extract file-level imports and decorators once
+    # FIX: Extract module-level variables for shared state detection
+    module_vars = _extract_module_level_vars(root)
+    
     file_imports, file_decorators = extract_imports_and_decorators(tree, source, module_path)
 
     def walk(node, parent_type=None):
@@ -212,6 +230,12 @@ def extract_components(tree, source, file_path, module_path):
                 is_async=is_async,
             )
 
+            # NEW: Detect shared state dependencies
+            component_obj = components[cid]
+            component_obj.metadata['shared_state_dependencies'] = [
+                var for var in module_vars if var in component_obj.source_code
+            ]
+
         # -------- CLASSES --------
         elif node.type == "class_definition":
             cname = node.child_by_field_name("name").text.decode()
@@ -246,6 +270,12 @@ def extract_components(tree, source, file_path, module_path):
                 language="python",
                 lines_of_code=lines_of_code,
             )
+
+            # # NEW: Detect shared state dependencies
+            # component_obj = components[class_id]
+            # component_obj.metadata['shared_state_dependencies'] = [
+            #     var for var in module_vars if var in component_obj.source_code
+            # ]
 
             # Extract methods within the class
             body = node.child_by_field_name("body")
@@ -329,7 +359,13 @@ def extract_components(tree, source, file_path, module_path):
                         is_static=is_static,
                         is_class_method=is_class_method,
                     )
-
+                    
+                    # NEW: Detect shared state dependencies
+                    # component_obj = components[method_id]
+                    # component_obj.metadata['shared_state_dependencies'] = [
+                    #     var for var in module_vars if var in component_obj.source_code
+                    # ]
+                    
         for c in node.children:
             walk(c, node.type)
 
@@ -372,6 +408,12 @@ def extract_components(tree, source, file_path, module_path):
                                     language="python",
                                     lines_of_code=1,
                                 )
+
+                                # NEW: Detect shared state dependencies
+                                # component_obj = components[var_id]
+                                # component_obj.metadata['shared_state_dependencies'] = [
+                                #     var for var in module_vars if var in component_obj.source_code
+                                # ]
             
             # Top-level assignments (direct children of module)
             elif child.type == "assignment":
@@ -403,6 +445,12 @@ def extract_components(tree, source, file_path, module_path):
                             language="python",
                             lines_of_code=1,
                         )
+
+                         # NEW: Detect shared state dependencies
+                        # component_obj = components[var_id]
+                        # component_obj.metadata['shared_state_dependencies'] = [
+                        #     var for var in module_vars if var in component_obj.source_code
+                        # ]
 
     # First extract classes, functions, and methods
     walk(root, "module")

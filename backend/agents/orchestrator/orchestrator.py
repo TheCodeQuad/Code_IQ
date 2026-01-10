@@ -56,6 +56,13 @@ class Orchestrator:
 
         documented_components = []
         component_map = {c.id: c for c in components}  # For dependency lookup
+        
+        # FIX 1: Initialize searcher with repository data
+        try:
+            self.searcher.set_repository_data(components)
+            self.logger.info("Searcher initialized with repository data")
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize searcher with repository data: {e}")
 
         for idx, component in enumerate(components):
             self.logger.info(
@@ -120,9 +127,10 @@ class Orchestrator:
             }
         )
         
-        max_iterations = 10
+        max_iterations = 3  # Reduced from 10
         last_internal_requests = None
         last_external_requests = None
+        empty_results_count = 0
 
         for iteration in range(max_iterations):
             # 1. Reader agent - pass accumulated context
@@ -160,6 +168,17 @@ class Orchestrator:
             searcher_output = searcher_result.output
             context.add_result('searcher', searcher_output)
             
+            # FIX 2: Check if Searcher returned nothing
+            if (len(searcher_output.dependency_contexts) == 0 and
+                len(searcher_output.reference_contexts) == 0 and
+                len(searcher_output.external_contexts) == 0):
+                empty_results_count += 1
+                if empty_results_count >= 2:
+                    self.logger.info("Searcher returned empty results twice; stopping.")
+                    break
+            else:
+                empty_results_count = 0
+    
             # 3. Add Searcher's findings to accumulated context for Reader's next iteration
             context.metadata['accumulated_context']['internal'].extend([
                 {
