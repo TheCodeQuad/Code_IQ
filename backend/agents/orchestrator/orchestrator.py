@@ -8,9 +8,9 @@ from datetime import datetime
 from backend.agents.base_agent import AgentContext, AgentResult, AgentStatus
 from backend.agents.reader_agent import ReaderAgent
 from backend.agents.searcher_agent import SearcherAgent
-# from backend.agents.writer.writer_agent import WriterAgent
-# from backend.agents.verifier_agent import VerifierAgent
-from backend.agents.orchestrator.workflow import WorkflowManager
+from backend.agents.writer.writer_agent import WriterAgent
+from backend.agents.verifier_agent import VerifierAgent
+from backend.agents.orchestrator.workflow import WorkflowManager, WorkflowStage
 from backend.models.code_component import CodeComponent
 from backend.models.documentation import Documentation
 from backend.utils.logger import get_logger
@@ -30,6 +30,8 @@ class Orchestrator:
         # Initialize agents
         self.reader = ReaderAgent()
         self.searcher = SearcherAgent()
+        self.writer = WriterAgent()
+        self.verifier = VerifierAgent()
         
         # Workflow manager
         self.workflow = WorkflowManager()
@@ -110,6 +112,7 @@ class Orchestrator:
         """
         Process a single component through iterative Reader-Searcher loop,
         where Reader re-evaluates after Searcher provides context.
+        Then generates documentation with Writer and optionally verifies with Verifier.
         """
         # Use passed project_dag, with fallback to instance variable
         dag = project_dag or self.project_dag
@@ -216,11 +219,36 @@ class Orchestrator:
                 f"{len(searcher_output.external_contexts)} external contexts"
             )
 
-        print(f"ReaderOutput for {component.id}: {reader_output}")
         self.logger.info(f"Reader-Searcher loop completed for {component.name} after {iteration + 1} iterations")
         
-        # Return reader output as documentation placeholder
-        return reader_output
+        # 4. Writer agent - generates comprehensive documentation
+        self.logger.info(f"Writer generating documentation for {component.name}")
+        writer_result = self.writer.execute(context)
+        if not writer_result.is_success():
+            self.logger.warning(f"Writer failed: {writer_result.error}")
+            # Return reader output as fallback
+            return reader_output
+        
+        writer_output = writer_result.output
+        context.add_result('writer', writer_output)
+        
+        self.logger.info(f"Documentation generated: {len(writer_output.docstring)} chars")
+        
+        # 5. Verifier agent (optional) - validates and improves documentation
+        if self.workflow.is_stage_required(WorkflowStage.VERIFY):
+            self.logger.info(f"Verifier validating documentation for {component.name}")
+            verifier_result = self.verifier.execute(context)
+            if verifier_result.is_success():
+                verifier_output = verifier_result.output
+                context.add_result('verifier', verifier_output)
+                # Use improved documentation if available
+                if hasattr(verifier_output, 'improved_documentation') and verifier_output.improved_documentation:
+                    writer_output = verifier_output.improved_documentation
+                    self.logger.info(f"Using improved documentation from Verifier")
+            else:
+                self.logger.warning(f"Verifier failed: {verifier_result.error}")
+        
+        return writer_output
 
     
     def get_statistics(self) -> Dict[str, Any]:

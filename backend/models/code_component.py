@@ -17,7 +17,8 @@ class ComponentType(Enum):
     GLOBAL_VARIABLE = "global_variable"
     STATIC_FIELD = "static_field" 
     CONSTRUCTOR = "constructor"
-    FIELD = "field" 
+    FIELD = "field"
+    API_ENDPOINT = "api_endpoint"  # NEW: FastAPI/Flask/Django routes
 
 @dataclass
 class Location:
@@ -94,6 +95,17 @@ class CodeComponent:
     # Additional metadata
     metadata: Dict[str, Any] = field(default_factory=dict)
     
+    # API endpoint metadata
+    http_method: Optional[str] = None  # GET, POST, PUT, DELETE, PATCH
+    http_path: Optional[str] = None    # /keys, /keys/{id}, etc.
+    framework: Optional[str] = None    # fastapi, flask, django
+    path_parameters: List[str] = field(default_factory=list)  # [id] from /keys/{id}
+    query_parameters: List[str] = field(default_factory=list)  # from function signature
+    request_body: Optional[str] = None  # Pydantic model name
+    response_model: Optional[str] = None  # Pydantic model name
+    status_codes: List[int] = field(default_factory=list)  # 200, 201, 404, etc.
+    tags: List[str] = field(default_factory=list)  # For OpenAPI docs
+    
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary"""
         return {
@@ -132,6 +144,15 @@ class CodeComponent:
             'is_generator': self.is_generator,
             'priority': self.priority,
             'metadata': self.metadata,
+            'http_method': self.http_method,
+            'http_path': self.http_path,
+            'framework': self.framework,
+            'path_parameters': self.path_parameters,
+            'query_parameters': self.query_parameters,
+            'request_body': self.request_body,
+            'response_model': self.response_model,
+            'status_codes': self.status_codes,
+            'tags': self.tags,
         }
     
     @classmethod
@@ -177,4 +198,13 @@ class CodeComponent:
             is_generator=data.get('is_generator', False),
             priority=data.get('priority', 0),
             metadata=data.get('metadata', {}),
+            http_method=data.get('http_method'),
+            http_path=data.get('http_path'),
+            framework=data.get('framework'),
+            path_parameters=data.get('path_parameters', []),
+            query_parameters=data.get('query_parameters', []),
+            request_body=data.get('request_body'),
+            response_model=data.get('response_model'),
+            status_codes=data.get('status_codes', []),
+            tags=data.get('tags', []),
         )

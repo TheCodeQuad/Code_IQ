@@ -4,7 +4,48 @@ providers:
     enabled: false
     api_base_url: "https://openrouter.ai/api/v1/chat/completions"
     api_key_env: "OPENROUTER_API_KEY"
-    timeout: 60
+    timeout: 120
+    models:
+      default: "openai/gpt-4-turbo"
+      gpt-4-turbo:
+        name: "GPT-4 Turbo"
+        model_id: "openai/gpt-4-turbo"
+        context_window: 128000
+        max_output_tokens: 4096
+        cost_per_1k_input: 0.01
+        cost_per_1k_output: 0.03
+        capabilities:
+          - text_generation
+          - code_analysis
+          - long_context
+      gpt-4o:
+        name: "GPT-4O"
+        model_id: "openai/gpt-4o"
+        context_window: 128000
+        max_output_tokens: 4096
+        cost_per_1k_input: 0.005
+        cost_per_1k_output: 0.015
+        capabilities:
+          - text_generation
+          - code_analysis
+          - multimodal
+      gpt-4o-mini:
+        name: "GPT-4O Mini"
+        model_id: "openai/gpt-4o-mini"
+        context_window: 128000
+        max_output_tokens: 4096
+        cost_per_1k_input: 0.00015
+        cost_per_1k_output: 0.0006
+        capabilities:
+          - text_generation
+          - code_analysis
+    default_params:
+      temperature: 0.7
+      max_tokens: 4000
+    rate_limits:
+      tier_1:
+        requests: 100
+        tokens: 1000000
 
   local:
     enabled: true
@@ -12,85 +53,31 @@ providers:
     api_key_env: "DUMMY"
     models:
       default: "qwen2.5:7b"
-
-    # Model configurations (model_id should match OpenRouter's model identifiers)
-    models:
-      default: "mistralai/mistral-7b-instruct:free"
-
-      gpt-4o-mini:
-        name: "gpt-4o-mini"
-        model_id: "gpt-4o-mini"
-        context_window: 32768
-        max_output_tokens: 8192
-        cost_per_1k_input: 0.02
-        cost_per_1k_output: 0.05
-        capabilities:
-          - text_generation
-          - code_analysis
-          - function_calling
-
-      gpt-4o:
-        name: "gpt-4o"
-        model_id: "gpt-4o"
-        context_window: 65536
-        max_output_tokens: 16384
-        cost_per_1k_input: 0.04
-        cost_per_1k_output: 0.10
-        capabilities:
-          - text_generation
-          - code_analysis
-          - long_context
-
-      claude-2-proxy:
-        name: "claude-2 (via OpenRouter)"
-        model_id: "replace-with-openrouter-claude-model-id"
-        context_window: 200000
-        max_output_tokens: 16384
-        cost_per_1k_input: 0.03
-        cost_per_1k_output: 0.08
-        capabilities:
-          - text_generation
-          - code_analysis
-
-      alibaba-deepresearch:       #wrong abstraction for agent-orchestrated loops
-        name: "Alibaba Tongyi DeepResearch 30B"
-        model_id: "alibaba/tongyi-deepresearch-30b-a3b:free"
-        context_window: 32768
-        max_output_tokens: 8192
-        cost_per_1k_input: 0.0  # Free model
-        cost_per_1k_output: 0.0  # Free model
-        capabilities:
-          - text_generation
-          - code_analysis
-          - research
-
-      mistral-7b-instruct:
-        name: "Mistral 7B Instruct"
-        model_id: "mistralai/mistral-7b-instruct:free"
-        context_window: 8192
-        max_output_tokens: 2048
-        cost_per_1k_input: 0.0  # Free model
-        cost_per_1k_output: 0.0  # Free model
-        capabilities:
-          - text_generation
-          - code_analysis
-      
-      
-
     default_params:
       temperature: 0.7
       max_tokens: 4000
-      top_p: 0.9
-      top_k: 40
-
     rate_limits:
       tier_1:
         requests: 500
         tokens: 200000
 
-  # Existing providers left here as fallbacks (optional)
+  gemini:
+    enabled: false
+    api_base_url: "https://generativelanguage.googleapis.com/v1beta/models"
+    api_key_env: "GEMINI_API_KEY"
+    timeout: 120
+    models:
+      default: "gemini-1.5-flash"
+    default_params:
+      temperature: 0.7
+      max_tokens: 4000
+    rate_limits:
+      tier_1:
+        requests: 60
+        tokens: 1000000
+
   anthropic:
-    enabled: true
+    enabled: false
     api_base_url: "https://api.anthropic.com"
     api_version: "2023-06-01"
     models:
@@ -100,7 +87,7 @@ providers:
       max_tokens: 4000
 
   openai:
-    enabled: true
+    enabled: false
     api_base_url: "https://api.openai.com/v1"
     api_version: "v1"
     models:

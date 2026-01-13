@@ -40,7 +40,7 @@ def get_docstring(node, source):
 
 def extract_parameters(func_node):
     """
-    Extract parameters from a function definition node.
+    Extract parameters with FULL metadata including defaults and annotations
     
     Args:
         func_node: tree-sitter function definition node
@@ -48,22 +48,73 @@ def extract_parameters(func_node):
     Returns:
         list: List of Parameter objects
     """
+    from backend.models.code_component import Parameter
     parameters = []
-    params = func_node.child_by_field_name("parameters")
+    params_node = func_node.child_by_field_name("parameters")
     
-    if params:
-        for child in params.children:
-            if child.type == "identifier":
-                param_name = child.text.decode()
-                parameters.append(Parameter(name=param_name))
-            elif child.type == "typed_parameter":
-                # Handle typed parameters like (x: int, y: str)
-                name_node = child.child_by_field_name("name")
-                type_node = child.child_by_field_name("type")
-                if name_node:
-                    param_name = name_node.text.decode()
-                    param_type = type_node.text.decode() if type_node else None
-                    parameters.append(Parameter(name=param_name, type_hint=param_type))
+    if not params_node:
+        return parameters
+    
+    for child in params_node.children:
+        if child.type == "identifier":
+            param_name = child.text.decode()
+            parameters.append(Parameter(
+                name=param_name,
+                type_hint=None,
+                default_value=None,
+                is_required=True
+            ))
+            
+        elif child.type == "typed_parameter":
+            name_node = child.child_by_field_name("name")
+            type_node = child.child_by_field_name("type")
+            default_node = child.child_by_field_name("default_value")
+            
+            param_name = name_node.text.decode() if name_node else None
+            param_type = type_node.text.decode() if type_node else None
+            param_default = default_node.text.decode() if default_node else None
+            
+            if param_name:
+                parameters.append(Parameter(
+                    name=param_name,
+                    type_hint=param_type,
+                    default_value=param_default,
+                    is_required=param_default is None
+                ))
+        
+        elif child.type == "default_parameter":
+            # Handles: param=value syntax
+            name_node = child.child_by_field_name("name")
+            value_node = child.child_by_field_name("value")
+            
+            param_name = name_node.text.decode() if name_node else None
+            param_default = value_node.text.decode() if value_node else None
+            
+            if param_name:
+                parameters.append(Parameter(
+                    name=param_name,
+                    type_hint=None,
+                    default_value=param_default,
+                    is_required=False
+                ))
+        
+        elif child.type == "typed_default_parameter":
+            # Handles: param: Type = value
+            name_node = child.child_by_field_name("name")
+            type_node = child.child_by_field_name("type")
+            value_node = child.child_by_field_name("value")
+            
+            param_name = name_node.text.decode() if name_node else None
+            param_type = type_node.text.decode() if type_node else None
+            param_default = value_node.text.decode() if value_node else None
+            
+            if param_name:
+                parameters.append(Parameter(
+                    name=param_name,
+                    type_hint=param_type,
+                    default_value=param_default,
+                    is_required=False
+                ))
     
     return parameters
 
@@ -120,6 +171,60 @@ def extract_imports_and_decorators(tree, source, module_path):
     walk(root)
     return imports, decorators
 
+
+def extract_component_decorators(node, parent=None, module_source=None):
+    """
+    Extract ALL decorators including:
+    - Direct decorators on function/class
+    - Inherited decorators from parent
+    - Property decorators
+    - Nested decorator chains
+    
+    Returns list of decorator strings
+    """
+    decorators = []
+    
+    if not node or not parent:
+        return decorators
+    
+    # Find node in parent's children
+    node_index = None
+    for i, child in enumerate(parent.children):
+        if child == node:
+            node_index = i
+            break
+    
+    if node_index is None:
+        return decorators
+    
+    # Look backwards for decorator nodes
+    i = node_index - 1
+    while i >= 0:
+        child = parent.children[i]
+        
+        if child.type == "decorator":
+            # Extract full decorator expression
+            dec_text = child.text.decode().strip()
+            # Remove leading @ if present
+            if dec_text.startswith('@'):
+                dec_text = dec_text[1:]
+            decorators.insert(0, dec_text)
+            i -= 1
+        
+        elif child.type in ("comment", "newline"):
+            # Skip whitespace/comments between decorators
+            i -= 1
+        
+        else:
+            # Hit non-decorator, stop
+            break
+    
+    # Handle @property, @classmethod, @staticmethod
+    for dec in decorators:
+        if any(kw in dec for kw in ['property', 'classmethod', 'staticmethod']):
+            return decorators
+    
+    return decorators
 
 def extract_function_calls(func_node, source):
     """Extract all function/method calls within a function"""
@@ -180,9 +285,9 @@ def extract_components(tree, source, file_path, module_path):
     # FIX: Extract module-level variables for shared state detection
     module_vars = _extract_module_level_vars(root)
     
-    file_imports, file_decorators = extract_imports_and_decorators(tree, source, module_path)
+    file_imports, _ = extract_imports_and_decorators(tree, source, module_path)
 
-    def walk(node, parent_type=None):
+    def walk(node, parent_type=None, parent_node=None):
 
         # -------- TOP-LEVEL FUNCTIONS --------
         if node.type in ("function_definition", "async_function_definition") and parent_type == "module":
@@ -208,6 +313,9 @@ def extract_components(tree, source, file_path, module_path):
             
             # Detect if async
             is_async = node.type == "async_function_definition"
+            
+            # FIXED: Extract component-specific decorators
+            component_decorators = extract_component_decorators(node, parent_node)
 
             components[cid] = CodeComponent(
                 id=cid,
@@ -222,7 +330,7 @@ def extract_components(tree, source, file_path, module_path):
                 signature=signature,
                 existing_docstring=docstring if has_docstring else None,
                 parameters=parameters,
-                decorators=file_decorators,
+                decorators=component_decorators,
                 calls=func_calls,
                 imports=file_imports,
                 language="python",
@@ -251,6 +359,9 @@ def extract_components(tree, source, file_path, module_path):
             
             # Extract signature
             signature = extract_signature(node, source)
+            
+            # FIXED: Extract component-specific decorators
+            component_decorators = extract_component_decorators(node, parent_node)
 
             components[class_id] = CodeComponent(
                 id=class_id,
@@ -265,17 +376,11 @@ def extract_components(tree, source, file_path, module_path):
                 signature=signature,
                 existing_docstring=docstring if has_docstring else None,
                 parameters=[],
-                decorators=file_decorators,
+                decorators=component_decorators,
                 imports=file_imports,
                 language="python",
                 lines_of_code=lines_of_code,
             )
-
-            # # NEW: Detect shared state dependencies
-            # component_obj = components[class_id]
-            # component_obj.metadata['shared_state_dependencies'] = [
-            #     var for var in module_vars if var in component_obj.source_code
-            # ]
 
             # Extract methods within the class
             body = node.child_by_field_name("body")
@@ -285,6 +390,7 @@ def extract_components(tree, source, file_path, module_path):
                     # ---------------- NORMAL METHOD ----------------
                     if stmt.type in ("function_definition", "async_function_definition"):
                         func_node = stmt
+                        stmt_parent = body
 
                     # ---------------- DECORATED METHOD ----------------
                     elif stmt.type == "decorated_definition":
@@ -295,6 +401,7 @@ def extract_components(tree, source, file_path, module_path):
                                 break
                         if not func_node:
                             continue
+                        stmt_parent = stmt
 
                     else:
                         continue
@@ -327,15 +434,16 @@ def extract_components(tree, source, file_path, module_path):
                     is_static = method_name in ("__new__", "__init_subclass__")
                     is_class_method = False
                     
-                    # Check for @classmethod or @staticmethod decorators
-                    if stmt.type == "decorated_definition":
-                        for decorator in stmt.children:
-                            if decorator.type == "decorator":
-                                deco_text = decorator.text.decode().lower()
-                                if "@staticmethod" in deco_text:
-                                    is_static = True
-                                elif "@classmethod" in deco_text:
-                                    is_class_method = True
+                    # FIXED: Extract component-specific decorators
+                    method_decorators = extract_component_decorators(func_node, stmt_parent)
+                    
+                    # Check for @classmethod or @staticmethod in the extracted decorators
+                    for deco in method_decorators:
+                        deco_lower = deco.lower()
+                        if "@staticmethod" in deco_lower:
+                            is_static = True
+                        elif "@classmethod" in deco_lower:
+                            is_class_method = True
 
                     components[method_id] = CodeComponent(
                         id=method_id,
@@ -350,7 +458,7 @@ def extract_components(tree, source, file_path, module_path):
                         signature=method_signature,
                         existing_docstring=method_docstring if method_has_docstring else None,
                         parameters=method_parameters,
-                        decorators=file_decorators,
+                        decorators=method_decorators,
                         calls=method_calls,
                         imports=file_imports,
                         language="python",
@@ -360,14 +468,8 @@ def extract_components(tree, source, file_path, module_path):
                         is_class_method=is_class_method,
                     )
                     
-                    # NEW: Detect shared state dependencies
-                    # component_obj = components[method_id]
-                    # component_obj.metadata['shared_state_dependencies'] = [
-                    #     var for var in module_vars if var in component_obj.source_code
-                    # ]
-                    
         for c in node.children:
-            walk(c, node.type)
+            walk(c, node.type, node)
 
     # -------- EXTRACT MODULE-LEVEL VARIABLES (GLOBALS) --------
     def extract_globals():
@@ -408,12 +510,6 @@ def extract_components(tree, source, file_path, module_path):
                                     language="python",
                                     lines_of_code=1,
                                 )
-
-                                # NEW: Detect shared state dependencies
-                                # component_obj = components[var_id]
-                                # component_obj.metadata['shared_state_dependencies'] = [
-                                #     var for var in module_vars if var in component_obj.source_code
-                                # ]
             
             # Top-level assignments (direct children of module)
             elif child.type == "assignment":
@@ -446,14 +542,8 @@ def extract_components(tree, source, file_path, module_path):
                             lines_of_code=1,
                         )
 
-                         # NEW: Detect shared state dependencies
-                        # component_obj = components[var_id]
-                        # component_obj.metadata['shared_state_dependencies'] = [
-                        #     var for var in module_vars if var in component_obj.source_code
-                        # ]
-
     # First extract classes, functions, and methods
-    walk(root, "module")
+    walk(root, "module", root)
     
     # Then extract global variables
     extract_globals()
@@ -474,4 +564,33 @@ def extract_components(tree, source, file_path, module_path):
         # Update the component's module_path
         component.module_path = module_path
 
+    return components
+
+def extract_all_components(tree, source, file_path, module_path):
+    """
+    Extract ALL code components with proper nesting and decoration detection
+    """
+    components = {}
+    root = tree.root_node
+    
+    # PASS 1: Extract top-level components
+    for child in root.children:
+        if child.type == "function_definition":
+            func_components = _extract_function(child, root, source, file_path, module_path)
+            components.update(func_components)
+        
+        elif child.type == "async_function_definition":
+            func_components = _extract_async_function(child, root, source, file_path, module_path)
+            components.update(func_components)
+        
+        elif child.type == "class_definition":
+            class_components = _extract_class(child, root, source, file_path, module_path)
+            components.update(class_components)
+    
+    # PASS 2: Extract module-level variables
+    for child in root.children:
+        if child.type == "assignment":
+            var_components = _extract_module_variable(child, source, file_path, module_path)
+            components.update(var_components)
+    
     return components

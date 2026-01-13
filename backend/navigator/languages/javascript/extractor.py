@@ -33,25 +33,72 @@ def get_jsdoc(node, source):
 
 
 def extract_parameters(node):
-    """Extract parameters from a function/method declaration node."""
+    """
+    Extract parameters with FULL metadata including defaults and type hints (TS/JSDoc)
+    
+    Args:
+        node: tree-sitter function/method node
+        
+    Returns:
+        list: List of Parameter objects
+    """
     parameters = []
     params = node.child_by_field_name("parameters")
     
     if params:
         for child in params.children:
             if child.type == "identifier":
-                parameters.append(Parameter(name=child.text.decode()))
+                param_name = child.text.decode()
+                parameters.append(Parameter(
+                    name=param_name,
+                    type_hint=None,
+                    default_value=None,
+                    is_required=True
+                ))
+                
             elif child.type == "assignment_pattern":
+                # Handles: param = defaultValue
                 left = child.child_by_field_name("left")
+                right = child.child_by_field_name("right")
+                
                 if left and left.type == "identifier":
-                    parameters.append(Parameter(name=left.text.decode()))
+                    param_name = left.text.decode()
+                    param_default = right.text.decode() if right else None
+                    
+                    parameters.append(Parameter(
+                        name=param_name,
+                        type_hint=None,
+                        default_value=param_default,
+                        is_required=False
+                    ))
+                    
             elif child.type == "rest_pattern":
+                # Handles: ...rest
                 for param_child in child.children:
                     if param_child.type == "identifier":
-                        parameters.append(Parameter(name=f"...{param_child.text.decode()}"))
+                        param_name = f"...{param_child.text.decode()}"
+                        parameters.append(Parameter(
+                            name=param_name,
+                            type_hint=None,
+                            is_required=True
+                        ))
                         break
-            elif child.type == "object_pattern" or child.type == "array_pattern":
-                parameters.append(Parameter(name=child.text.decode()))
+                        
+            elif child.type == "object_pattern":
+                # Handles: { prop1, prop2 }
+                parameters.append(Parameter(
+                    name=child.text.decode(),
+                    type_hint="object",
+                    is_required=True
+                ))
+                
+            elif child.type == "array_pattern":
+                # Handles: [a, b, c]
+                parameters.append(Parameter(
+                    name=child.text.decode(),
+                    type_hint="array",
+                    is_required=True
+                ))
     
     return parameters
 
@@ -75,14 +122,21 @@ def extract_imports_and_decorators(tree, source, module_path):
     
     def walk(node):
         if node.type == "import_statement":
+            # Handle: import x from 'module'
             for child in node.children:
-                if child.type in ("dotted_name", "aliased_import"):
-                    imports.append(child.text.decode())
+                if child.type == "string":
+                    import_path = child.text.decode().strip('\'"')
+                    imports.append(import_path)
+        
         elif node.type == "import_from_statement":
+            # Handle: import { x } from 'module'
             for child in node.children:
-                if child.type == "dotted_name":
-                    imports.append(child.text.decode())
+                if child.type == "string":
+                    import_path = child.text.decode().strip('\'"')
+                    imports.append(import_path)
+        
         elif node.type == "decorator":
+            # TypeScript/Babel decorators
             decorators.append(node.text.decode())
         
         for child in node.children:
@@ -92,12 +146,53 @@ def extract_imports_and_decorators(tree, source, module_path):
     return imports, decorators
 
 
+def extract_component_decorators(node, parent=None):
+    """
+    Extract ALL decorators for a function/class including:
+    - Direct decorators
+    - Stacked decorator chains
+    """
+    decorators = []
+    
+    if not node or not parent:
+        return decorators
+    
+    # Find node in parent's children
+    node_index = None
+    for i, child in enumerate(parent.children):
+        if child == node:
+            node_index = i
+            break
+    
+    if node_index is None:
+        return decorators
+    
+    # Look backwards for decorator nodes
+    i = node_index - 1
+    while i >= 0:
+        child = parent.children[i]
+        
+        if child.type == "decorator":
+            dec_text = child.text.decode().strip()
+            if dec_text.startswith('@'):
+                dec_text = dec_text[1:]
+            decorators.insert(0, dec_text)
+            i -= 1
+        elif child.type in ("comment", "newline", "line_break"):
+            i -= 1
+        else:
+            break
+    
+    return decorators
+
+
 def extract_function_calls(func_node, source):
     """Extract all function/method calls within a function"""
     calls = []
     
     def walk(node):
-        if node.type == "call":
+        # Call expressions: func(), obj.method()
+        if node.type == "call_expression":
             fn = node.child_by_field_name("function")
             if fn:
                 call_text = fn.text.decode()
@@ -109,279 +204,251 @@ def extract_function_calls(func_node, source):
     walk(func_node)
     return calls
 
+
 def _extract_module_level_vars(root) -> List[str]:
     """Extract module-level variable names"""
     vars = []
+    
     for child in root.children:
+        # var x = ..., const x = ..., let x = ...
         if child.type == "variable_declaration":
-            for declarator in child.children:
-                if declarator.type == "variable_declarator":
-                    name_node = declarator.child_by_field_name("name")
+            for decl_child in child.children:
+                if decl_child.type == "variable_declarator":
+                    name_node = decl_child.child_by_field_name("name")
                     if name_node and name_node.type == "identifier":
                         vars.append(name_node.text.decode())
-        elif child.type == "lexical_declaration":
-            for declarator in child.children:
-                if declarator.type == "variable_declarator":
-                    name_node = declarator.child_by_field_name("name")
-                    if name_node and name_node.type == "identifier":
-                        vars.append(name_node.text.decode())
+    
     return vars
+
 
 def extract_components(tree, source, file_path, module_path):
     """
-    Extract all code components (classes, functions, methods, variables) from a parsed JavaScript tree.
+    Extract all JavaScript components (functions, classes, methods, globals)
     """
     components = {}
     root = tree.root_node
     
-    # FIX: Extract module-level variables
+    # Extract module-level variables
     module_vars = _extract_module_level_vars(root)
     
-    file_imports, file_decorators = extract_imports_and_decorators(tree, source, module_path)
-
-
-    def walk(node, parent_id=None):
-
-        # -------- TOP-LEVEL FUNCTIONS --------
-        if node.type == "function_declaration" and not parent_id:
-            name_node = node.child_by_field_name("name")
-            if name_node:
-                name = name_node.text.decode()
-                func_id = f"{module_path}.{name}"
-                
-                has_jsdoc, jsdoc = get_jsdoc(node, source)
-                parameters = extract_parameters(node)
-                
-                start_line = node.start_point[0] + 1
-                end_line = node.end_point[0] + 1
-                lines_of_code = end_line - start_line + 1
-                
-                signature = extract_signature(node, source)
-                func_calls = extract_function_calls(node, source)
-
-                components[func_id] = CodeComponent(
-                    id=func_id,
-                    name=name,
-                    type=ComponentType.FUNCTION,
-                    location=Location(
-                        file_path=file_path,
-                        start_line=start_line,
-                        end_line=end_line
-                    ),
-                    source_code=source[node.start_byte:node.end_byte],
-                    signature=signature,
-                    existing_docstring=jsdoc if has_jsdoc else None,
-                    parameters=parameters,
-                    decorators=file_decorators,
-                    calls=func_calls,
-                    imports=file_imports,
-                    language="javascript",
-                    lines_of_code=lines_of_code,
-                )
-
-                components[func_id].metadata['shared_state_dependencies'] = [
-                    var for var in module_vars if var in source[node.start_byte:node.end_byte]
-                ]
-
-        # -------- CLASSES --------
-        elif node.type == "class_declaration":
-            name_node = node.child_by_field_name("name")
-            if name_node:
-                class_name = name_node.text.decode()
-                
-                if parent_id:
-                    class_id = f"{parent_id}.{class_name}"
-                else:
-                    class_id = f"{module_path}.{class_name}"
-
-                has_jsdoc, jsdoc = get_jsdoc(node, source)
-                
-                start_line = node.start_point[0] + 1
-                end_line = node.end_point[0] + 1
-                lines_of_code = end_line - start_line + 1
-                
-                signature = extract_signature(node, source)
-
-                components[class_id] = CodeComponent(
-                    id=class_id,
-                    name=class_name,
-                    type=ComponentType.CLASS,
-                    location=Location(
-                        file_path=file_path,
-                        start_line=start_line,
-                        end_line=end_line
-                    ),
-                    source_code=source[node.start_byte:node.end_byte],
-                    signature=signature,
-                    existing_docstring=jsdoc if has_jsdoc else None,
-                    parameters=[],
-                    decorators=file_decorators,
-                    imports=file_imports,
-                    language="javascript",
-                    lines_of_code=lines_of_code,
-                )
-
-                # Extract methods within the class
-                body = node.child_by_field_name("body")
-                if body:
-                    for child in body.children:
-                        if child.type == "method_definition":
-                            key = child.child_by_field_name("name")
-                            if key:
-                                method_name = key.text.decode()
-                                method_id = f"{class_id}.{method_name}"
-                                
-                                method_has_jsdoc, method_jsdoc = get_jsdoc(child, source)
-                                method_parameters = extract_parameters(child)
-                                
-                                method_start_line = child.start_point[0] + 1
-                                method_end_line = child.end_point[0] + 1
-                                method_lines_of_code = method_end_line - method_start_line + 1
-                                
-                                method_signature = extract_signature(child, source)
-                                method_calls = extract_function_calls(child, source)
-
-                                components[method_id] = CodeComponent(
-                                    id=method_id,
-                                    name=method_name,
-                                    type=ComponentType.METHOD,
-                                    location=Location(
-                                        file_path=file_path,
-                                        start_line=method_start_line,
-                                        end_line=method_end_line
-                                    ),
-                                    source_code=source[child.start_byte:child.end_byte],
-                                    signature=method_signature,
-                                    existing_docstring=method_jsdoc if method_has_jsdoc else None,
-                                    parameters=method_parameters,
-                                    decorators=file_decorators,
-                                    calls=method_calls,
-                                    imports=file_imports,
-                                    language="javascript",
-                                    lines_of_code=method_lines_of_code,
-                                )
-                        
-                        # Handle field definitions (class properties)
-                        elif child.type == "field_definition":
-                            prop = child.child_by_field_name("property")
-                            if prop and prop.type == "property_identifier":
-                                prop_name = prop.text.decode()
-                                field_id = f"{class_id}.{prop_name}"
-                                
-                                components[field_id] = CodeComponent(
-                                    id=field_id,
-                                    name=prop_name,
-                                    type=ComponentType.FIELD,
-                                    location=Location(
-                                        file_path=file_path,
-                                        start_line=child.start_point[0] + 1,
-                                        end_line=child.end_point[0] + 1
-                                    ),
-                                    source_code=source[child.start_byte:child.end_byte],
-                                    signature=f"{prop_name}: field",
-                                    existing_docstring=None,
-                                    parameters=[],
-                                    decorators=file_decorators,
-                                    imports=file_imports,
-                                    language="javascript",
-                                    lines_of_code=1,
-                                )
-
-        for c in node.children:
-            walk(c, parent_id)
-
-    # -------- EXTRACT MODULE-LEVEL VARIABLES (GLOBALS) --------
-    def extract_globals():
-        """Extract module-level variable declarations and arrow functions."""
-        for child in root.children:
-            if child.type == "variable_declaration":
-                for declarator_child in child.children:
-                    if declarator_child.type == "variable_declarator":
-                        name_node = declarator_child.child_by_field_name("name")
-                        if name_node and name_node.type == "identifier":
-                            var_name = name_node.text.decode()
-                            var_id = f"{module_path}.{var_name}"
-                            
-                            if var_id not in components:
-                                kind = "variable"
-                                for kind_node in child.children:
-                                    if kind_node.type in ("const", "let", "var"):
-                                        kind = kind_node.type
-                                        break
-                                
-                                start_line = child.start_point[0] + 1
-                                end_line = child.end_point[0] + 1
-                                
-                                components[var_id] = CodeComponent(
-                                    id=var_id,
-                                    name=var_name,
-                                    type=ComponentType.GLOBAL_VARIABLE,
-                                    location=Location(
-                                        file_path=file_path,
-                                        start_line=start_line,
-                                        end_line=end_line
-                                    ),
-                                    source_code=source[child.start_byte:child.end_byte],
-                                    signature=f"{var_name} = ...",
-                                    existing_docstring=None,
-                                    parameters=[],
-                                    decorators=[],
-                                    imports=file_imports,
-                                    language="javascript",
-                                    lines_of_code=1,
-                                )
-            
-            # Handle arrow functions assigned to variables
-            elif child.type == "lexical_declaration":
-                for declarator_child in child.children:
-                    if declarator_child.type == "variable_declarator":
-                        name_node = declarator_child.child_by_field_name("name")
-                        value_node = declarator_child.child_by_field_name("value")
-                        
-                        if (name_node and name_node.type == "identifier" and 
-                            value_node and value_node.type == "arrow_function"):
-                            
-                            func_name = name_node.text.decode()
-                            func_id = f"{module_path}.{func_name}"
-                            
-                            if func_id not in components:
-                                parameters = extract_parameters(value_node)
-                                
-                                start_line = child.start_point[0] + 1
-                                end_line = child.end_point[0] + 1
-                                lines_of_code = end_line - start_line + 1
-                                
-                                signature = extract_signature(value_node, source)
-                                func_calls = extract_function_calls(value_node, source)
-                                
-                                components[func_id] = CodeComponent(
-                                    id=func_id,
-                                    name=func_name,
-                                    type=ComponentType.FUNCTION,
-                                    location=Location(
-                                        file_path=file_path,
-                                        start_line=start_line,
-                                        end_line=end_line
-                                    ),
-                                    source_code=source[child.start_byte:child.end_byte],
-                                    signature=signature,
-                                    existing_docstring=None,
-                                    parameters=parameters,
-                                    decorators=[],
-                                    calls=func_calls,
-                                    imports=file_imports,
-                                    language="javascript",
-                                    lines_of_code=lines_of_code,
-                                )
-
-                                # components[func_id].metadata['shared_state_dependencies'] = [
-                                #     var for var in module_vars if var in source[node.start_byte:node.end_byte]
-                                # ]
-
-    # First extract classes and functions
-    walk(root, None)
+    file_imports, _ = extract_imports_and_decorators(tree, source, module_path)
     
-    # Then extract global variables
-    extract_globals()
+    def walk(node, parent_type=None, parent=None):
+        
+        # FUNCTIONS
+        if node.type == "function_declaration" and parent_type == "program":
+            func_name = node.child_by_field_name("name")
+            if not func_name:
+                return
+            
+            name = func_name.text.decode()
+            cid = f"{module_path}.{name}"
+            
+            has_jsdoc, jsdoc = get_jsdoc(node, source)
+            parameters = extract_parameters(node)
+            signature = extract_signature(node, source)
+            decorators = extract_component_decorators(node, parent) if parent else []
+            calls = extract_function_calls(node, source)
+            
+            start_line = node.start_point[0] + 1
+            end_line = node.end_point[0] + 1
+            
+            components[cid] = CodeComponent(
+                id=cid,
+                name=name,
+                type=ComponentType.FUNCTION,
+                location=Location(
+                    file_path=file_path,
+                    start_line=start_line,
+                    end_line=end_line
+                ),
+                source_code=source[node.start_byte:node.end_byte],
+                signature=signature,
+                parameters=parameters,
+                existing_docstring=jsdoc if has_jsdoc else None,
+                decorators=decorators,
+                calls=calls,
+                imports=file_imports,
+                language="javascript",
+                lines_of_code=end_line - start_line + 1,
+                is_async='async' in node.text.decode(),
+            )
+        
+        # ARROW FUNCTIONS (const f = () => {})
+        elif node.type == "variable_declaration" and parent_type == "program":
+            for child in node.children:
+                if child.type == "variable_declarator":
+                    name_node = child.child_by_field_name("name")
+                    value_node = child.child_by_field_name("value")
+                    
+                    if name_node and value_node and value_node.type == "arrow_function":
+                        var_name = name_node.text.decode()
+                        cid = f"{module_path}.{var_name}"
+                        
+                        has_jsdoc, jsdoc = get_jsdoc(node, source)
+                        parameters = extract_parameters(value_node)
+                        signature = extract_signature(value_node, source)
+                        calls = extract_function_calls(value_node, source)
+                        
+                        start_line = node.start_point[0] + 1
+                        end_line = node.end_point[0] + 1
+                        
+                        components[cid] = CodeComponent(
+                            id=cid,
+                            name=var_name,
+                            type=ComponentType.FUNCTION,
+                            location=Location(
+                                file_path=file_path,
+                                start_line=start_line,
+                                end_line=end_line
+                            ),
+                            source_code=source[node.start_byte:node.end_byte],
+                            signature=signature,
+                            parameters=parameters,
+                            existing_docstring=jsdoc if has_jsdoc else None,
+                            calls=calls,
+                            imports=file_imports,
+                            language="javascript",
+                            lines_of_code=end_line - start_line + 1,
+                            is_async='async' in source[node.start_byte:node.end_byte],
+                        )
+        
+        # CLASSES
+        elif node.type == "class_declaration":
+            class_name = node.child_by_field_name("name")
+            if not class_name:
+                return
+            
+            name = class_name.text.decode()
+            cid = f"{module_path}.{name}"
+            
+            has_jsdoc, jsdoc = get_jsdoc(node, source)
+            decorators = extract_component_decorators(node, parent) if parent else []
+            
+            # Extract parent classes
+            parent_classes = []
+            parent_class_node = node.child_by_field_name("superclass")
+            if parent_class_node:
+                parent_classes = [parent_class_node.text.decode()]
+            
+            start_line = node.start_point[0] + 1
+            end_line = node.end_point[0] + 1
+            
+            components[cid] = CodeComponent(
+                id=cid,
+                name=name,
+                type=ComponentType.CLASS,
+                location=Location(
+                    file_path=file_path,
+                    start_line=start_line,
+                    end_line=end_line
+                ),
+                source_code=source[node.start_byte:node.end_byte],
+                signature=f"class {name}",
+                parent_classes=parent_classes,
+                existing_docstring=jsdoc if has_jsdoc else None,
+                decorators=decorators,
+                imports=file_imports,
+                language="javascript",
+                lines_of_code=end_line - start_line + 1,
+            )
+            
+            # Extract methods
+            walk(node, "class", node)
+            return
+        
+        # METHODS
+        elif node.type == "method_definition" and parent_type == "class":
+            key = node.child_by_field_name("key")
+            if not key:
+                return
+            
+            method_name = key.text.decode()
+            parent_class_node = parent
+            if parent_class_node:
+                parent_name = parent_class_node.child_by_field_name("name")
+                if parent_name:
+                    parent_class_name = parent_name.text.decode()
+                    cid = f"{module_path}.{parent_class_name}.{method_name}"
+                    
+                    has_jsdoc, jsdoc = get_jsdoc(node, source)
+                    parameters = extract_parameters(node)
+                    signature = extract_signature(node, source)
+                    decorators = extract_component_decorators(node, parent)
+                    calls = extract_function_calls(node, source)
+                    
+                    start_line = node.start_point[0] + 1
+                    end_line = node.end_point[0] + 1
+                    
+                    is_static = False
+                    for child in node.children:
+                        if child.type == "static":
+                            is_static = True
+                            break
+                    
+                    components[cid] = CodeComponent(
+                        id=cid,
+                        name=method_name,
+                        type=ComponentType.METHOD,
+                        location=Location(
+                            file_path=file_path,
+                            start_line=start_line,
+                            end_line=end_line
+                        ),
+                        source_code=source[node.start_byte:node.end_byte],
+                        signature=signature,
+                        parameters=parameters,
+                        existing_docstring=jsdoc if has_jsdoc else None,
+                        decorators=decorators,
+                        calls=calls,
+                        imports=file_imports,
+                        language="javascript",
+                        lines_of_code=end_line - start_line + 1,
+                        is_static=is_static,
+                        is_async='async' in node.text.decode(),
+                    )
+        
+        # GLOBAL VARIABLES
+        elif node.type == "variable_declaration" and parent_type == "program":
+            for child in node.children:
+                if child.type == "variable_declarator":
+                    name_node = child.child_by_field_name("name")
+                    if name_node and name_node.type == "identifier":
+                        var_name = name_node.text.decode()
+                        # Skip if it's already extracted as function
+                        if f"{module_path}.{var_name}" not in components:
+                            cid = f"{module_path}.{var_name}"
+                            
+                            start_line = node.start_point[0] + 1
+                            end_line = node.end_point[0] + 1
+                            
+                            components[cid] = CodeComponent(
+                                id=cid,
+                                name=var_name,
+                                type=ComponentType.GLOBAL_VARIABLE,
+                                location=Location(
+                                    file_path=file_path,
+                                    start_line=start_line,
+                                    end_line=end_line
+                                ),
+                                source_code=source[node.start_byte:node.end_byte],
+                                signature=f"const {var_name}",
+                                imports=file_imports,
+                                language="javascript",
+                                lines_of_code=1,
+                            )
+        
+        for c in node.children:
+            walk(c, node.type, node)
+    
+    walk(root, "program", root)
+    
+    # Add module_path metadata
+    for comp in components.values():
+        parts = comp.id.split('.')
+        if comp.type == ComponentType.METHOD:
+            comp.module_path = '.'.join(parts[:-2]) if len(parts) > 2 else parts[0]
+        else:
+            comp.module_path = '.'.join(parts[:-1]) if len(parts) > 1 else parts[0]
     
     return components

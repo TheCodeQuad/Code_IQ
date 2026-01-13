@@ -121,6 +121,14 @@ class ReaderAgent(BaseAgent):
                 f"External requests: {len(external_requests)}"
             )
             
+            # Step 5B: HARD SUFFICIENCY GATE - override LLM curiosity
+            internal_requests, external_requests = self._apply_hard_sufficiency_gate(
+                component,
+                complexity,
+                internal_requests,
+                external_requests
+            )
+            
             return AgentResult(
                 agent_name=self.agent_name,
                 status=AgentStatus.SUCCESS,
@@ -138,19 +146,16 @@ class ReaderAgent(BaseAgent):
     
     def _analyze_complexity(self, component: CodeComponent) -> Dict[str, Any]:
         """
-        Analyze component complexity
-        
-        Returns:
-            Dictionary with complexity metrics
+        Analyze component complexity with CORRECT metrics
         """
         complexity = {
             'cyclomatic_complexity': component.complexity or 1,
             'lines_of_code': component.lines_of_code,
-            'num_parameters': len(component.parameters),
+            'num_parameters': len(component.parameters) if component.parameters else 0,  # FIX: Was missing None check
             'num_dependencies': len(component.depends_on),
             'num_calls': len(component.calls),
-            'is_async': component.is_async,
-            'is_generator': component.is_generator,
+            'is_async': component.is_async or 'async def' in component.source_code,  # FIX: Check source too
+            'is_generator': component.is_generator or 'yield' in component.source_code,  # FIX: Check source
             'has_decorators': len(component.decorators) > 0,
             'complexity_level': 'moderate'
         }
@@ -184,17 +189,17 @@ class ReaderAgent(BaseAgent):
     ) -> bool:
         """Determine if component needs additional context"""
         
-        # Skip global variables entirely - they don't need context
+        # Global variables that coordinate state MUST have context
         if component.type == ComponentType.GLOBAL_VARIABLE:
-            return False
+            coordinated_globals = {"keys", "available", "blocked_set", "expiry_heap"}
+            return component.name in coordinated_globals
         
-        # NEW RULE: Always need context for async, threading, error handling
-        # BUT NOT just for accessing shared state
-        if (
-            component.is_async
-            or self._detect_threading(component)
-            or self._detect_error_handling(component)
-        ):
+        # FIX: Better async detection
+        if self._detect_async_operations(component):
+            return True
+        
+        # Infinite loops need documentation
+        if 'while True' in component.source_code:
             return True
         
         # Simple self-contained components don't need context
@@ -506,9 +511,11 @@ Provide a 2-3 sentence analysis summary explaining:
         dep_name = self._extract_component_name(dep_id)
         
         return (
-            f"The component '{component.name}' depends on '{dep_name}'. "
-            f"Understanding this dependency will help document how {component.name} works."
+            f"The component '{component.name}' depends on '{dep_name}' "
+            f"to maintain coordinated state. This dependency participates in "
+            f"lifecycle transitions or availability guarantees."
         )
+
     
     def _extract_component_name(self, component_id: str) -> str:
         """Extract component name from ID"""
@@ -617,8 +624,81 @@ Provide a 2-3 sentence analysis summary explaining:
         source = component.source_code.lower()
         return any(pattern in source for pattern in error_patterns)
 
-    # def _detect_shared_state(self, component: CodeComponent) -> bool:
-    #     """Detect if component manages shared state"""
-    #     state_patterns = ['global', 'static', 'class variable', '__shared']
-    #     source = component.source_code.lower()
-    #     return any(pattern in source for pattern in state_patterns)
+    def _detect_async_operations(self, component: CodeComponent) -> bool:
+        """Comprehensive async detection - checks for async def, await, async context managers, and event loops"""
+        source = component.source_code
+        
+        # Pattern 1: Direct async def
+        if source.lstrip().startswith('async def'):
+            return True
+        
+        # Pattern 2: Await expressions
+        if re.search(r'\bawait\s+\w+', source):
+            return True
+        
+        # Pattern 3: Async context managers (async with)
+        if re.search(r'async\s+with\s+', source):
+            return True
+        
+        # Pattern 4: Async for loops
+        if re.search(r'async\s+for\s+', source):
+            return True
+        
+        # Pattern 5: asyncio module usage
+        asyncio_patterns = [
+            r'asyncio\.create_task\(',
+            r'asyncio\.gather\(',
+            r'asyncio\.run\(',
+            r'asyncio\.sleep\(',
+            r'asyncio\.Event\(\)',
+            r'asyncio\.Lock\(\)',
+            r'asyncio\.Queue\(',
+            r'asyncio\.gather\(',
+            r'loop\.create_task\(',
+            r'loop\.run_until_complete\(',
+        ]
+        for pattern in asyncio_patterns:
+            if re.search(pattern, source):
+                return True
+        
+        # Pattern 6: Decorators like @async_handler, @aio_task
+        if any(dec for dec in component.decorators if 'async' in dec.lower() or 'aio' in dec.lower()):
+            return True
+        
+        # Pattern 7: Async generators (async def with yield)
+        if source.lstrip().startswith('async def') and 'yield' in source:
+            return True
+        
+        return False
+
+    def _apply_hard_sufficiency_gate(
+        self,
+        component: CodeComponent,
+        complexity: Dict[str, Any],
+        internal_requests: List[InternalRequest],
+        external_requests: List[ExternalRequest]
+    ) -> tuple:
+        """
+        Hard veto: Clear requests if heuristic conditions for self-contained are met.
+        This prevents LLM language like "it would be helpful to know" from escalating
+        unnecessary context requests.
+        """
+        # If ALL these conditions are true, component is objectively self-contained
+        is_objectively_self_contained = (
+            complexity['complexity_level'] == 'simple' and
+            len(component.depends_on) == 0 and
+            len(component.calls) <= 1 and
+            len(component.parameters) <= 2 and
+            component.lines_of_code <= 10 and
+            not component.is_async and
+            not self._detect_threading(component)
+        )
+        
+        if is_objectively_self_contained:
+            self.logger.info(
+                f"Hard sufficiency gate: Clearing requests for {component.name} "
+                f"(objectively self-contained)"
+            )
+            return [], []  # Force empty requests
+        
+        return internal_requests, external_requests

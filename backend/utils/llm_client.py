@@ -3,6 +3,7 @@ LLM Client using llm.yaml config with Rate Limiting
 """
 import os
 import requests
+from requests.exceptions import RequestException
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 import time
