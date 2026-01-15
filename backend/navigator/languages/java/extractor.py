@@ -1,5 +1,6 @@
-﻿from typing import List
+﻿from typing import Dict, List
 from backend.models.code_component import CodeComponent, Location, Parameter, ComponentType
+import re
 
 
 def get_javadoc(node, source):
@@ -469,3 +470,79 @@ def extract_components(tree, source, file_path, module_path):
             comp.module_path = '.'.join(parts[:-1]) if len(parts) > 1 else parts[0]
     
     return components
+
+
+def _extract_field_declarations(self, source: str, class_node) -> List[Dict]:
+    """Extract field declarations with visibility and types"""
+    fields = []
+    
+    # Pattern: [visibility] [modifier] type name [= value];
+    field_pattern = r'(public|private|protected)?\s*(static)?\s*(final)?\s*(\w+(?:<[^>]+>)?)\s+(\w+)'
+    
+    for match in re.finditer(field_pattern, source):
+        visibility = match.group(1) or 'package'
+        is_static = bool(match.group(2))
+        is_final = bool(match.group(3))
+        field_type = match.group(4)
+        field_name = match.group(5)
+        
+        fields.append({
+            'name': field_name,
+            'type': field_type,
+            'visibility': visibility,
+            'is_static': is_static,
+            'is_final': is_final,
+            'initialized_in': self._find_initialization_point(source, field_name)
+        })
+    
+    return fields
+
+
+def _extract_java_modifiers(self, source: str, method_name: str) -> Dict:
+    """Extract modifiers for Java methods"""
+    # Find method definition line
+    method_pattern = rf'(public|private|protected)?\s*(static)?\s*(abstract)?\s*\w+\s+{method_name}\s*\('
+    match = re.search(method_pattern, source)
+    
+    if match:
+        return {
+            'visibility': match.group(1) or 'package',
+            'is_static': bool(match.group(2)),
+            'is_abstract': bool(match.group(3)),
+            'is_synchronized': 'synchronized' in source[max(0, match.start()-100):match.start()]
+        }
+    
+    return {'visibility': 'package', 'is_static': False}
+
+
+def _extract_java_exceptions(self, source: str) -> List[Dict]:
+    """Extract throws declarations and actual throws in Java"""
+    exceptions = []
+    
+    # throws declaration
+    throws_pattern = r'throws\s+([\w\s.,]+)'
+    for match in re.finditer(throws_pattern, source):
+        exc_list = match.group(1).split(',')
+        for exc in exc_list:
+            exceptions.append({
+                'exception_type': exc.strip(),
+                'declared': True,
+                'raised': False
+            })
+    
+    # actual throw statements
+    throw_pattern = r'throw\s+new\s+(\w+)'
+    for match in re.finditer(throw_pattern, source):
+        exc_type = match.group(1)
+        # Check if already in list
+        existing = next((e for e in exceptions if e['exception_type'] == exc_type), None)
+        if existing:
+            existing['raised'] = True
+        else:
+            exceptions.append({
+                'exception_type': exc_type,
+                'declared': False,
+                'raised': True
+            })
+    
+    return exceptions

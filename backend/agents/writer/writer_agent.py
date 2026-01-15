@@ -62,8 +62,8 @@ class WriterAgent(BaseAgent):
             complexity_level = reader_output.complexity_assessment.get('complexity_level', 'simple')
             if complexity_level in ['complex', 'moderate']:
                 code_facts = self._extract_all_code_facts(component, ctx)
-                self._classify_component_roles(component, ctx, code_facts)
-                self._generate_invariants(code_facts, component.source_code)
+                # self._classify_component_roles(component, ctx, code_facts)
+                # self._generate_invariants(code_facts, component.source_code)
             else:
                 code_facts = self._extract_minimal_facts(component)
             
@@ -83,7 +83,8 @@ class WriterAgent(BaseAgent):
                 examples=doc_data.get('examples', []),
                 notes=doc_data.get('notes', []),
                 warnings=doc_data.get('warnings', []),
-                style=self.docstring_style
+                style=self.docstring_style,
+                attributes_doc=doc_data.get('attributes', []), # NEW: Pass to model
             )
             
             # FIX 1: COMPUTE ACTUAL SCORES
@@ -112,236 +113,155 @@ class WriterAgent(BaseAgent):
                 error=str(e)
             )
 
+    # ============================================================================
+    # FIX 1: EXTRACTION - Add missing data to code_facts
+    # ============================================================================
+
     def _extract_minimal_facts(self, component: CodeComponent) -> Dict[str, Any]:
-        """Extract ONLY essential facts for simple components"""
+        """Extract minimal facts for simple components"""
+        control_flow = component.metadata.get('control_flow', {})
+        exceptions = component.metadata.get('exceptions', [])
         source = component.source_code
         
-        facts = {
-            'modifies_global_state': [],
-            'calls_functions': [],
-            'data_structures_used': set(),
-            'operations': [],
-            'control_flow': [],
-            'actual_returns': [],
-            'raises': [],
-            'parameter_usage': {},
-            'decorators': component.decorators or [],
-            'is_async': component.is_async,
-            'is_generator': component.is_generator,
-            'roles': [],
-            'invariants': []
-        }
+        # For classes, use attributes directly from Navigator (no fallback)
+        class_attributes = component.attributes if component.type == ComponentType.CLASS else []
         
-        # Quick pattern extraction
-        if 'return ' in source:
-            facts['actual_returns'] = re.findall(r'return\s+(.+?)(?:\n|$)', source)[:2]
-        
-        if 'raise ' in source:
-            raises = re.findall(r'raise\s+(\w+)', source)
-            facts['raises'] = [
-                {'exception': exc, 'condition': 'error condition', 'message': ''}
-                for exc in set(raises)
-            ]
-        
-        return facts
-
-    def _extract_all_code_facts(self, component: CodeComponent, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract ALL code facts in ONE pass (no LLM calls)"""
-        source = component.source_code
-        
-        facts = {
-            'modifies_global_state': [],
-            'reads_global_state': [],
-            'calls_functions': [],
-            'data_structures_used': set(),
-            'operations': [],
-            'control_flow': [],
-            'actual_returns': [],
-            'return_paths': [],
-            'state_transitions': [],
-            'raises': [],
-            'parameter_usage': {},  # IMPORTANT: Initialize for parameter analysis
-            'decorators': component.decorators or [],
-            'is_async': component.is_async,
-            'is_generator': component.is_generator,
-            'roles': [],
-            'invariants': []
-        }
-
-        # Global state analysis (AST-based)
-        assigned_vars = self._get_assigned_variables(source)
-        mutation_vars = re.findall(r'(\w+)\.(?:add|append|pop|remove|discard)\(', source)
-        module_globals = context.get('component', {}).metadata.get('module_globals', set())
-
-        for var in mutation_vars:
-            if var not in assigned_vars and var in module_globals:
-                facts['modifies_global_state'].append(var)
-        
-        facts['modifies_global_state'] = list(set(facts['modifies_global_state']))
-        
-        # Function calls
-        func_calls = re.findall(r'(\w+)\(', source)
-        builtins = {'if', 'for', 'while', 'return', 'yield', 'await', 'print', 'len', 'str', 'int', 'float'}
-        facts['calls_functions'] = [f for f in set(func_calls) if f not in builtins][:5]
-        
-        # Data structures
-        if 'heapq.heap' in source:
-            facts['data_structures_used'].add('min-heap')
-        if re.search(r'\w+\s*=\s*set\(\)', source):
-            facts['data_structures_used'].add('set')
-        if re.search(r'\w+\s*=\s*\{\}', source):
-            facts['data_structures_used'].add('dict')
-        if re.search(r'\w+\s*=\s*\[\]', source):
-            facts['data_structures_used'].add('list')
-        
-        # Operations
-        if '.add(' in source:
-            facts['operations'].append('adds elements to sets')
-        if '.pop(' in source or '.remove(' in source:
-            facts['operations'].append('removes elements')
-        if '.get(' in source:
-            facts['operations'].append('retrieves from dict')
-        if 'heapq.heappush' in source:
-            facts['operations'].append('pushes to heap')
-        
-        # Control flow
-        if 'while True:' in source:
-            facts['control_flow'].append('infinite loop')
-        if 'for ' in source:
-            facts['control_flow'].append('iteration')
-        if 'if ' in source and 'else' in source:
-            facts['control_flow'].append('conditional logic')
-        
-        # Return analysis
-        returns = re.findall(r'return\s+(.+?)(?:\n|$)', source)
-        facts['actual_returns'] = returns[:3]
-        facts['return_paths'] = self._analyze_return_paths(source)
-        
-        # Exceptions
-        raise_pattern = r'raise\s+(\w+)\(["\']([^"\']+)'
-        raises = re.findall(raise_pattern, source)
-        if not raises:
-            simple_raises = re.findall(r'raise\s+(\w+)', source)
-            raises = [(exc, '') for exc in simple_raises]
-        
-        lines = source.split('\n')
-        for exception, message in set(raises):
-            condition = "specific condition met"
-            for i, line in enumerate(lines):
-                if f'raise {exception}' in line and i > 0:
-                    prev_line = lines[i-1].strip()
-                    if prev_line.startswith('if '):
-                        condition = prev_line[3:].rstrip(':')
-            
-            facts['raises'].append({
-                'exception': exception,
-                'condition': condition,
-                'message': message
-            })
-        
-        # Extract parameter usage - THIS WAS MISSING
+        # Extract basic parameter usage even for simple components
+        parameter_usage = {}
         if component.parameters:
             for param in component.parameters:
                 param_name = param.name
-                # Find how parameter is used in source
-                pattern = rf'\b{re.escape(param_name)}\b'
-                usages = re.findall(pattern, source)
-                
-                facts['parameter_usage'][param_name] = {
-                    'count': len(usages),
-                    'usage_description': self._analyze_parameter_role(param_name, source, param),
+                count = source.count(param_name)
+                parameter_usage[param_name] = {
+                    'usage_type': 'used' if count > 0 else 'unused',
+                    'usage_description': f"Used {count} times in function",
                     'type': param.type_hint or 'unknown',
                     'default': param.default_value
                 }
+    
+        return {
+            'decorators': component.decorators or [],
+            'is_async': component.is_async or control_flow.get('is_async', False),
+            'is_generator': component.is_generator,
+            'return_type': component.return_type,
+            'raises': exceptions,
+            'parameters': [
+                {'name': p.name, 'type': p.type_hint or 'unknown', 'default': p.default_value}
+                for p in (component.parameters or [])
+            ],
+            'parameter_usage': parameter_usage,
+            'modifies_global_state': component.metadata.get('shared_state_dependencies', []),
+            'reads_global_state': [],
+            'has_loop': control_flow.get('has_loop', False),
+            'operations': [],
+            'data_structures_used': [],
+            'control_flow': ['async'] if component.is_async else [],
+            'actual_returns': [],
+            'state_mutations': {},
+            'invariants': [],
+            'roles': [],
+            'attributes': class_attributes,  # NEW: Add attributes
+        }
+
+    def _extract_all_code_facts(self, component: CodeComponent, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract comprehensive code facts for complex components"""
+        source = component.source_code
+        clean_source = self._strip_noise(source, component.language)
         
-        return facts
-
-    def _analyze_parameter_role(self, param_name: str, source: str, param) -> str:
-        """Analyze how a parameter is used"""
-        if f'{param_name}.add(' in source or f'{param_name}.discard(' in source:
-            return f"Set operations: added to or removed from {param_name}"
-        elif f'{param_name}[' in source:
-            return f"Accessed as container: used with index operations"
-        elif f'heappush' in source and param_name in source:
-            return f"Used in heap operations: inserted into priority queue"
-        else:
-            return f"The {param.type_hint or 'parameter'} value used in function logic"
-
-    def _analyze_return_paths(self, source: str) -> List[Dict[str, str]]:
-        """Analyze all return paths"""
-        paths = []
-        lines = source.split('\n')
-        
-        for i, line in enumerate(lines):
-            if 'return ' in line:
-                match = re.search(r'return\s+(.+?)(?:\n|$|#)', line)
-                if match:
-                    return_value = match.group(1).strip()
-                    condition = "unconditional"
-                    
-                    for j in range(max(0, i-3), i):
-                        prev = lines[j].strip()
-                        if prev.startswith(('if ', 'elif ')):
-                            condition = prev.split(':', 1)[0].split(None, 1)[1] if ' ' in prev else "condition"
-                            break
-                    
-                    paths.append({'value': return_value, 'condition': condition})
-        
-        return paths
-
-    def _classify_component_roles(self, component: CodeComponent, context: Dict[str, Any], code_facts: Dict[str, Any]) -> None:
-        """Tag component roles based on patterns"""
-        roles = set()
-        coordinated_names = {'available', 'blocked_set', 'expiry_heap', 'blocked_until', 'is_blocked'}
-        mutated = set(code_facts.get('modifies_global_state', []))
-        ds = code_facts.get('data_structures_used', set())
-
-        if mutated & coordinated_names:
-            roles.add('lifecycle_manager')
-
-        if 'min-heap' in ds or any('heap' in op for op in code_facts.get('operations', [])):
-            roles.add('allocator')
-
-        if any(name.endswith(('_api', '_token')) for name in mutated):
-            roles.add('api_boundary')
-
-        code_facts['roles'] = list(roles)
-
-    def _generate_invariants(self, code_facts: Dict[str, Any], source_code: str) -> None:
-        """Generate validated invariants from code patterns"""
-        invariants = []
-        modifies = set(code_facts.get('modifies_global_state', []))
-        
-        if 'lifecycle_manager' in code_facts.get('roles', []):
-            if 'available' in modifies and 'blocked_set' in modifies:
-                if self._validate_mutual_exclusion(source_code, 'available', 'blocked_set'):
-                    invariants.append("blocked keys must not appear in available (mutual exclusion)")
+        # Extract parameters WITH usage analysis (matching _extract_minimal_facts)
+        parameters = []
+        parameter_usage = {}
+        for p in (component.parameters or []):
+            param_name = p.name
+            count = source.count(param_name)
             
-            if 'blocked_until' in modifies or 'expiry_heap' in modifies:
-                if self._validate_expiry_cleanup(source_code, modifies):
-                    invariants.append("expired keys must be removed from all tracking structures")
+            parameters.append({
+                'name': p.name,
+                'type': p.type_hint or 'any',
+                'required': p.is_required,
+                'default': p.default_value
+            })
             
-            if 'expiry_heap' in modifies and self._validate_heap_usage(source_code):
-                invariants.append("heap ordering defines eviction precedence")
+            # FIX #6: Include usage context
+            parameter_usage[param_name] = {
+                'usage_type': 'used' if count > 0 else 'unused',
+                'usage_description': f"Used {count} times in function",
+                'type': p.type_hint or 'unknown',
+                'default': p.default_value
+            }
+
+        return {
+            'decorators': component.decorators or [],
+            'is_async': component.is_async,
+            'is_generator': component.is_generator,
+            'raises': component.metadata.get('exceptions', []),
+            'modifies_global_state': component.metadata.get('shared_state_dependencies', []),
+            'reads_global_state': [],
+            'parameter_usage': parameter_usage,  # FIX #6: Added parameter usage
+            'operations': [],
+            'data_structures_used': [],
+            'control_flow': [],
+            'return_type': component.return_type or 'any',
+            'actual_returns': self._extract_actual_returns(clean_source, component.language),
+            'parameters': parameters,
+            'attributes': component.attributes or [],
+            'roles': [],
+            'invariants': []
+        }
+
+    def _strip_noise(self, source: str, language: str) -> str:
+        """Remove comments and strings to allow accurate regex matching across languages"""
+        # Remove multiline comments
+        source = re.sub(r'/\*.*?\*/', '', source, flags=re.DOTALL) # C-style
+        source = re.sub(r'"""(.*?)"""', '', source, flags=re.DOTALL) # Python
+        # Remove single line comments
+        source = re.sub(r'//.*', '', source) # C-style
+        source = re.sub(r'#.*', '', source)  # Python
+        # Remove string literals
+        source = re.sub(r"'(.*?)'|\"(.*?)\"", '', source)
+        return source
+
+    def _extract_actual_returns(self, clean_source: str, language: str) -> List[str]:
+        """Extract return expressions (Fixes 'return type inconsistencies')"""
+        # Look for return keyword and capture until end of expression
+        # Works for: return x; (C/JS/Java) and return x (Python)
+        pattern = r'\breturn\s+([^;}\n#]+)'
+        matches = re.findall(pattern, clean_source)
+        return [m.strip() for m in matches if m.strip()][:3]
+
+    def _validate_documentation(self, doc_data: Dict[str, Any], component: CodeComponent) -> Dict[str, Any]:
+        """
+        Validate and fix documentation based on component type.
+        This prevents inappropriate fields (e.g., returns_doc on globals).
+        """
         
-        if invariants:
-            code_facts['invariants'] = invariants
-
-    def _validate_mutual_exclusion(self, source: str, var1: str, var2: str) -> bool:
-        """Verify mutual exclusion is enforced"""
-        patterns = [rf'if\s+.*{var1}.*:', rf'if\s+not.*{var2}.*:', rf'{var1}\s+and\s+{var2}']
-        return sum(1 for p in patterns if re.search(p, source)) >= 2
-
-    def _validate_expiry_cleanup(self, source: str, modifies: set) -> bool:
-        """Verify expiry cleanup exists"""
-        cleanup = [r'\.pop\(', r'\.remove\(', r'\.discard\(', r'del\s+']
-        has_cleanup = any(re.search(p, source) for p in cleanup)
-        has_expiry = any(v in source for v in modifies if 'expir' in v.lower() or 'block' in v.lower())
-        return has_cleanup and has_expiry
-
-    def _validate_heap_usage(self, source: str) -> bool:
-        """Verify heap operations are present"""
-        return bool(re.search(r'heapq\.heap|heappush|heappop', source))
+        # GLOBAL VARIABLES should NOT have returns or parameters
+        if component.type == ComponentType.GLOBAL_VARIABLE:
+            doc_data['returns'] = None
+            doc_data['parameters'] = []
+        
+        # CLASSES should NOT have returns
+        if component.type == ComponentType.CLASS:
+            doc_data['returns'] = None
+        
+        # PROPERTIES should NOT have parameters
+        modifiers = component.metadata.get('modifiers', {})
+        if modifiers.get('is_property'):
+            doc_data['parameters'] = []
+        
+        # STATIC/CLASS METHODS: parameters doc OK, but no self/cls
+        actual_params = {p.name for p in (component.parameters or [])}
+        if modifiers.get('is_static') or modifiers.get('is_class_method'):
+            if 'self' in actual_params:
+                actual_params.discard('self')
+            if 'cls' in actual_params:
+                actual_params.discard('cls')
+            doc_data['parameters'] = [
+                p for p in doc_data.get('parameters', [])
+                if p.get('name') in actual_params
+            ]
+        
+        return doc_data
 
     def _generate_documentation_single_call(
         self,
@@ -349,26 +269,26 @@ class WriterAgent(BaseAgent):
         context: Dict[str, Any],
         code_facts: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """ONE comprehensive LLM call for all documentation"""
+        """ONE comprehensive LLM call with validation"""
         prompt = self._build_comprehensive_prompt(component, context, code_facts)
         system_prompt = self._get_system_prompt()
-        
-        complexity = context.get('complexity_level', 'simple')
-        max_tokens = 3500 if complexity in ['complex', 'moderate'] else 2500
         
         try:
             response = self.generate_with_llm(
                 prompt=prompt,
                 system_prompt=system_prompt,
                 temperature=0.3,
-                max_tokens=max_tokens
+                max_tokens=3500
             )
             
             doc_data = self._parse_response(response, component, code_facts)
             
-            # Add auto-generated notes/warnings
-            doc_data['notes'] = self._extract_notes(component, code_facts)
-            doc_data['warnings'] = self._extract_warnings(code_facts)
+            # ✓ VALIDATE documentation AFTER LLM
+            doc_data = self._validate_documentation(doc_data, component)
+            
+            # Auto-generate notes/warnings from IR metadata
+            doc_data['notes'] = self._extract_notes_from_metadata(component, code_facts)
+            doc_data['warnings'] = self._extract_warnings_from_metadata(code_facts)
             
             return doc_data
             
@@ -382,41 +302,85 @@ class WriterAgent(BaseAgent):
         context: Dict[str, Any],
         code_facts: Dict[str, Any]
     ) -> str:
-        """Build comprehensive prompt"""
+        """Build comprehensive prompt - FIXED for role-specific efficiency and missing keys"""
         complexity = context.get('complexity_level', 'simple')
-        skip_examples = bool(context.get('usage_examples'))
         
-        # Minimal prompt for simple components
-        if complexity == 'simple':
-            return f"""Generate concise documentation for this {component.type.value}:
-
+        # ========== SPECIAL CASE: GLOBAL VARIABLES (Constants vs State) ==========
+        if component.type == ComponentType.GLOBAL_VARIABLE:
+            # Check if it's a constant (no mutations found by Navigator)
+            is_constant = not code_facts.get('modifies_global_state')
+            role_type = "Configuration Constant" if is_constant else "Mutable State"
+            
+            # Build usage context from existing code_facts
+            usage_lines = []
+            shared_deps = code_facts.get('modifies_global_state', [])
+            if shared_deps:
+                deps_str = ', '.join(shared_deps[:3])
+                usage_lines.append(f"Modified by: {deps_str}")
+            else:
+                usage_lines.append("Read-only constant")
+            
+            usage_context = "\n".join(usage_lines) if usage_lines else "Module-level variable"
+            
+            return f"""Generate documentation for this {role_type}. 
+            
 Name: {component.name}
-Signature: {component.signature or 'N/A'}
+Value/Code: {component.source_code.strip()}
+
+CONTEXT:
+{usage_context}
+
+RULES:
+1. SUMMARY: Active verb only (e.g., "Defines...", "Tracks...").
+2. DESCRIPTION: If constant, explain the IMPACT of changing this value. DO NOT describe the syntax.
+3. NO 'parameters' or 'returns' fields.
+
+Output JSON:
+{{
+  "summary": "High-level purpose (max 100 chars)",
+  "description": "Functional impact or synchronization role (2 sentences)",
+  "notes": ["Note on initialization/dependency"],
+  "warnings": []
+}}
+"""
+        # ========== SPECIAL CASE: CLASSES (Handling empty/data classes) ==========
+        if component.type == ComponentType.CLASS:
+            is_data_class = not component.methods or len(component.methods) <= 1
+            
+            # Build attributes section
+            attributes_section = ""
+            if code_facts.get('attributes'):
+                attributes_section = "\n=== CLASS ATTRIBUTES ===\n"
+                for attr in code_facts['attributes']:
+                    attr_type = attr.get('type', 'any')
+                    attr_name = attr.get('name', '')
+                    attributes_section += f"- {attr_name}: {attr_type}\n"
+            else:
+                attributes_section = "\n=== CLASS ATTRIBUTES ===\nNo attributes defined (see source code)\n"
+            
+            return f"""Generate documentation for this {component.name} ({'Data Model' if is_data_class else 'Service Class'}):
 
 Code:
 ```{component.language}
 {component.source_code}
 ```
 
-Output JSON with: summary, description, parameters, returns, raises.
-Be precise and specific. Use actual variable/function names from code.
+=== DATA FIELDS ===
+{', '.join([a.get('name') for a in component.attributes]) or 'Attributes are defined in constructor'}
 
-JSON format:
-{{
-  "summary": "One-line summary (max 150 chars)",
-  "description": "What THIS code does using actual names",
-  "parameters": [{{"name": "x", "type": "str", "description": "...", "default": null}}],
-  "returns": {{"type": "str", "description": "..."}},
-  "raises": [{{"exception": "ValueError", "description": "when..."}}],
-  "examples": [],
-  "notes": [],
-  "warnings": []
-}}
+CRITICAL: 
+- If this is a simple data holder, focus the DESCRIPTION on what entities this model represents.
+- If it has logic, focus on the primary responsibility.
+- Do NOT leave fields empty if no docstring exists; derive from code structure.
 
-CRITICAL: NEVER invent concepts. Use ACTUAL names from code. Base on code facts only."""
+{attributes_section}
+"""
 
-        # Full prompt for complex components
-        prompt = f"""Generate COMPLETE documentation for this {component.type.value}:
+        # ========== BASE PROMPT CONSTRUCTION ==========
+        async_prefix = "[ASYNCHRONOUS] " if code_facts.get('is_async') else ""
+        
+        prompt = f"""Generate COMPLETE documentation for this {component.type.value}: {component.name}
+{async_prefix}
 
 === COMPONENT ===
 Name: {component.name}
@@ -428,26 +392,47 @@ Code:
 {component.source_code}
 ```
 
+"""
+
+        # ========== CLASS SPECIFIC LOGIC ==========
+        if component.type == ComponentType.CLASS:
+            is_data_class = not component.methods or len(component.methods) <= 1
+            prompt += f"\nCategory: {'Data Model' if is_data_class else 'Service/Logic Class'}\n"
+            
+            # Build attributes section
+            attributes_section = "=== CLASS ATTRIBUTES ===\n"
+            if code_facts.get('attributes'):
+                for attr in code_facts['attributes']:
+                    attr_type = attr.get('type', 'any')
+                    attr_name = attr.get('name', '')
+                    prompt += f"- {attr_name} ({attr_type})\n"
+            else:
+                prompt += "No direct attributes found; derive from constructor/source.\n"
+            
+            prompt += "\nRULES:\n- Focus on the responsibility and primary data held.\n"
+
+        # ========== CODE FACTS (ALL TYPES) ==========
+        prompt += f"""
 === CODE FACTS ===
 Global State:
 - Modifies: {', '.join(code_facts.get('modifies_global_state', [])) or 'none'}
 - Reads: {', '.join(code_facts.get('reads_global_state', [])) or 'none'}
 
-Operations: {', '.join(code_facts['operations']) or 'none'}
-Data Structures: {', '.join(code_facts['data_structures_used']) or 'none'}
-Control Flow: {', '.join(code_facts['control_flow']) or 'linear'}
-Returns: {code_facts['actual_returns'][:2] if code_facts['actual_returns'] else 'none'}
+Operations: {', '.join(code_facts.get('operations', [])) or 'none'}
+Data Structures: {', '.join(code_facts.get('data_structures_used', [])) or 'none'}
+Control Flow: {', '.join(code_facts.get('control_flow', [])) or 'linear'}
+Returns Captured: {code_facts.get('actual_returns', [])[:2] or 'none'}
 """
 
         # Add parameter usage
-        if code_facts['parameter_usage']:
-            prompt += "\nParameters:\n"
+        if code_facts.get('parameter_usage'):
+            prompt += "\nParameters Usage context:\n"
             for name, usage in code_facts['parameter_usage'].items():
                 param = next((p for p in component.parameters if p.name == name), None)
                 type_hint = param.type_hint if param else 'unknown'
-                prompt += f"  - {name} ({type_hint}): {usage['usage_description']}\n"
+                prompt += f"  - {name} ({type_hint}): {usage.get('usage_description', 'input')}\n"
 
-        # Add exceptions
+        # Add exceptions, invariants, roles etc. (Rest of builders)
         if code_facts['raises']:
             prompt += "\nExceptions:\n"
             for exc in code_facts['raises']:
@@ -470,99 +455,133 @@ Returns: {code_facts['actual_returns'][:2] if code_facts['actual_returns'] else 
             for ex in context['usage_examples'][:2]:
                 prompt += f"```\n{ex[:200]}\n```\n"
 
-        # Add domain context
-        domain = context.get('domain', {})
-        if domain.get('domain_terms'):
-            prompt += f"\n=== DOMAIN TERMS ===\n{', '.join(sorted(domain['domain_terms']))}\n"
-            prompt += "Use these specific terms, NOT generic ones.\n"
+        # FIX: The prompt now tells the LLM EXACTLY which types to use.
+        params_instruction = ""
+        # Check for existence and then length to avoid KeyError
+        if code_facts.get('parameters'): 
+            params_instruction = "\n=== PARAMETER TYPE CONSTRAINTS (USE THESE EXACTLY) ===\n"
+            for p in code_facts['parameters']:
+                params_instruction += f"- {p['name']}: MUST use type '{p['type']}'\n"
 
-        # Output format
-        if skip_examples:
-            examples_part = '  "examples": [],'
-        else:
-            examples_part = '  "examples": [{"description": "...", "code": "...", "output": null}],'
-        
+        # FIX: Standardized JSON output for all types including Classes
         prompt += f"""
+{params_instruction}
+=== RETURN TYPE CONSTRAINT ===
+- MUST use type '{code_facts.get('return_type', 'any')}'
 
 === OUTPUT FORMAT ===
 {{
-  "summary": "One-line summary (max 150 chars)",
-  "description": "What THIS code does (3-7 sentences for complex code)",
-  "parameters": [{{"name": "x", "type": "str", "description": "...", "default": null}}],
-  "returns": {{"type": "str", "description": "actual return value"}},
-  "raises": [{{"exception": "ValueError", "description": "when..."}}],
-{examples_part}
+  "summary": "Start with active verb (e.g. 'Validates...'). Max 100 chars.",
+  "description": "How the component works internally. Mention variable names.",
+  "attributes": [
+    {{ "name": "attr_name", "type": "type", "description": "..." }}
+  ],
+  "parameters": [
+    {{ "name": "param_name", "type": "actual_type_here", "description": "..." }}
+  ],
+  "returns": {{ "type": "{code_facts.get('return_type', 'any')}", "description": "Semantic meaning" }},
+  "raises": [],
   "notes": [],
   "warnings": []
 }}
-
-CRITICAL RULES:
-1. NEVER invent concepts not in code
-2. Use ACTUAL variable/function names
-3. Use domain-specific terminology
-4. Base EVERYTHING on code facts
-5. Be specific to THIS code
-6. For examples: symbolic only, output=null unless certain
 """
-
-        # Add state coordination notes for global variables
-        if component.type == ComponentType.GLOBAL_VARIABLE:
-            coordinated = {
-                'keys': 'Dict[str, keyInfo] - Central store for all key metadata',
-                'available': 'set - Key IDs currently available (not blocked/expired)',
-                'blocked_set': 'set - Key IDs currently blocked (unavailable)',
-                'expiry_heap': 'list - Min-heap of (expires_at, id) tuples'
-            }
-            
-            if component.name in coordinated:
-                prompt += f"\n=== GLOBAL STATE COORDINATION ===\n"
-                prompt += f"{component.name}: {coordinated[component.name]}\n"
-                prompt += "Invariant: available ∩ blocked_set = ∅ (mutually exclusive)\n"
-                prompt += "Invariant: All keys in blocked_set must have expiry_heap entry\n"
-        
         return prompt
 
     def _get_system_prompt(self) -> str:
-        """System prompt for structured output"""
-        return """You are a technical documentation expert generating COMPLETE, GROUNDED documentation.
+        """Updated System Prompt to fix clarity/repetition issues"""
+        return """You are a technical documentation expert. 
 
-Output valid JSON with ALL fields. NO markdown, NO extra text.
+CRITICAL FOR CLARITY SCORE:
+- NEVER start with "This function", "This class", "represents", "is a".
+- Start EVERY summary with a strong active verb (e.g., "Validates", "Calculates", "Synchronizes").
+- If a component is ASYNC, the summary MUST mention it (e.g., "Asynchronously fetches...").
+- DO NOT repeat the summary in the description. The summary is 'What', the description is 'How/Why'.
+- Use domain-specific terms found in function calls.
 
-CRITICAL:
-- ONLY describe what code ACTUALLY does
-- Use SPECIFIC names from code
-- NEVER use generic terms when domain terms exist
-- Base on CODE FACTS provided
-- Keep summary under 150 chars
-- Description: 3-4 sentences for simple, 5-7 for complex
-- For state changes: name the variable and describe HOW it changes
-- For lifecycle/allocator roles: document invariants
+Output strictly valid JSON."""
 
-Present tense. Precise. Specific. No hallucinations."""
-
-    def _parse_response(self, response: str, component: CodeComponent, code_facts: Dict[str, Any]) -> Dict[str, Any]:
-        """Parse JSON response"""
+    def _parse_response(
+        self,
+        response: str,
+        component: CodeComponent,
+        code_facts: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Parse JSON response and FORCE-INJECT truth from Navigator.
+        This fixes parameter and return type inconsistencies caused by LLM hallucinations.
+        """
         try:
+            # 1. Clean and parse JSON
             cleaned = self._clean_json(response)
             data = json.loads(cleaned)
             
-            return {
-                'summary': data.get('summary', '').strip(),
+            # 2. Extract structured data with safety defaults
+            parsed = {
+                'summary': data.get('summary', '').strip()[:100],
                 'description': data.get('description', '').strip(),
+                'attributes': data.get('attributes', []),  # NEW: Extract attributes
                 'parameters': data.get('parameters', []),
-                'returns': data.get('returns'),
+                'returns': data.get('returns') or {'type': 'any', 'description': ''},
                 'raises': data.get('raises', []),
                 'examples': self._parse_examples(data.get('examples', [])),
                 'notes': data.get('notes', []),
                 'warnings': data.get('warnings', [])
             }
+
+            # ========================================================================
+            # FIX: FORCE-OVERWRITE LLM Hallucinations with Navigator Truth
+            # ========================================================================
             
+            # A) Force correct Return Type from Navigator
+            nav_return_type = component.return_type or 'any'
+            if parsed['returns']:
+                # The LLM is only allowed to change the description, NOT the type
+                parsed['returns']['type'] = nav_return_type
+
+            # B) Force correct Parameter Types and Names
+            nav_params = {p.name: p.type_hint for p in (component.parameters or [])}
+            if nav_params:  # Always validate if we have navigator params, regardless of LLM output
+                valid_params = []
+                for p_doc in parsed['parameters']:
+                    name = p_doc.get('name')
+                    if name in nav_params:
+                        # Overwrite the hallucinated type with the Navigator's discovered type
+                        p_doc['type'] = nav_params[name] or 'any'
+                        valid_params.append(p_doc)
+                
+                # If the LLM missed a parameter, add it back as a placeholder to ensure completeness
+                doc_param_names = {p.get('name') for p in valid_params}
+                for p_name, p_type in nav_params.items():
+                    if p_name not in doc_param_names:
+                        valid_params.append({
+                            'name': p_name,
+                            'type': p_type or 'any',
+                            'description': 'Parameter description missing from LLM response.'
+                        })
+                parsed['parameters'] = valid_params
+
+                # AFTER setting parsed['parameters'] = valid_params, add:
+                if len(valid_params) != len(nav_params):
+                    self.logger.warning(
+                        f"Parameter count mismatch for {component.name}: "
+                        f"LLM returned {len(valid_params)}, Navigator found {len(nav_params)}"
+                    )
+
+            # C) Filter verified exceptions
+            parsed['raises'] = self._validate_raises_against_code_facts(
+                parsed['raises'],
+                code_facts,
+                component
+            )
+            
+            return parsed
+        
         except json.JSONDecodeError as e:
             self.logger.error(f"JSON parse error: {e}")
             return self._create_fallback_doc(component, code_facts)
 
     def _clean_json(self, response: str) -> str:
-        """Extract JSON from response"""
+        """Extract JSON from response and remove markdown markers"""
         response = re.sub(r'```json\s*', '', response)
         response = re.sub(r'```\s*', '', response)
         
@@ -572,7 +591,7 @@ Present tense. Precise. Specific. No hallucinations."""
         return response[start:end+1] if start != -1 and end != -1 else response
 
     def _parse_examples(self, examples_data: List[Dict]) -> List[Example]:
-        """Convert example dicts to Example objects"""
+        """Convert raw example dicts from LLM to Example objects"""
         return [
             Example(
                 description=ex.get('description', ''),
@@ -582,36 +601,40 @@ Present tense. Precise. Specific. No hallucinations."""
             for ex in examples_data if isinstance(ex, dict)
         ]
 
-    def _extract_notes(self, component: CodeComponent, code_facts: Dict[str, Any]) -> List[str]:
-        """Auto-generate notes from code"""
+    def _extract_notes_from_metadata(self, component: CodeComponent, code_facts: Dict[str, Any]) -> List[str]:
+        """Generate notes from navigator's extracted metadata"""
         notes = []
         
-        if code_facts['is_async']:
+        if code_facts.get('is_async'):
             notes.append("This is an asynchronous function - must be awaited")
         
-        if code_facts['is_generator']:
+        if code_facts.get('is_generator'):
             notes.append("This is a generator function - returns an iterator")
         
-        if code_facts['decorators']:
+        if code_facts.get('decorators'):
             notes.append(f"Decorators: {', '.join(code_facts['decorators'])}")
         
-        if code_facts['modifies_global_state']:
+        if code_facts.get('modifies_global_state'):
             notes.append(f"Modifies global state: {', '.join(code_facts['modifies_global_state'][:3])}")
         
-        if 'min-heap' in code_facts['data_structures_used']:
-            notes.append("Uses min-heap for efficient O(log n) operations")
+        if code_facts.get('has_loop'):
+            loop_type = code_facts.get('loop_type', 'infinite')
+            notes.append(f"Contains {loop_type} loop")
         
         return notes
 
-    def _extract_warnings(self, code_facts: Dict[str, Any]) -> List[str]:
-        """Auto-generate warnings from code"""
+    def _extract_warnings_from_metadata(self, code_facts: Dict[str, Any]) -> List[str]:
+        """Generate warnings from navigator's extracted metadata"""
         warnings = []
         
-        if 'infinite loop' in code_facts['control_flow']:
-            warnings.append("Contains infinite loop - runs continuously")
+        if code_facts.get('has_try_except'):
+            warnings.append("Has error handling - check for exceptions that may be raised")
         
-        if code_facts['modifies_global_state'] and not code_facts['is_async']:
+        if code_facts.get('modifies_global_state'):
             warnings.append("Modifies shared state - consider thread safety")
+        
+        if code_facts.get('has_loop') and 'while True' in code_facts.get('source', ''):
+            warnings.append("Contains infinite loop - runs continuously")
         
         return warnings
 
@@ -638,8 +661,8 @@ Present tense. Precise. Specific. No hallucinations."""
                 for exc in code_facts['raises']
             ],
             'examples': [],
-            'notes': self._extract_notes(component, code_facts),
-            'warnings': self._extract_warnings(code_facts)
+            'notes': self._extract_notes_from_metadata(component, code_facts),
+            'warnings': self._extract_warnings_from_metadata(code_facts)
         }
 
     def _build_context(
@@ -680,51 +703,21 @@ Present tense. Precise. Specific. No hallucinations."""
         return context
 
     def _extract_domain_context(self, component: CodeComponent, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract domain-specific terms"""
+        """Extract domain-specific terms from function calls"""
         domain_info = {'domain_terms': set(), 'system_name': None}
         
-        source = component.source_code
-        
-        # Extract identifiers from source
-        identifiers = re.findall(r'\b[a-zA-Z_]\w*\b', source)
-        domain_info['domain_terms'].update(identifier.lower() for identifier in identifiers)
-        
-        # Filter generics
-        generic_terms = {
-            'def', 'class', 'return', 'value', 'data', 'state', 'object',
-            'type', 'list', 'dict', 'str', 'int', 'bool', 'none'
-        }
-        domain_info['domain_terms'] = {
-            t for t in domain_info['domain_terms']
-            if t not in generic_terms and len(t) > 2
-        }
+        # Use actual function calls as domain terms (better than regex extraction)
+        if component.calls:
+            for call in component.calls[:8]:
+                # Extract function name from full call path
+                call_name = call.split('.')[-1] if '.' in call else call
+                if len(call_name) > 2 and not call_name.startswith('_'):
+                    domain_info['domain_terms'].add(call_name)
         
         # Keep top 8
         domain_info['domain_terms'] = set(sorted(list(domain_info['domain_terms']))[:8])
         
         return domain_info
-
-    def _get_assigned_variables(self, source: str) -> set:
-        """Extract assigned variables using AST"""
-        try:
-            tree = ast.parse(source)
-            assigned = set()
-            
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    for child in ast.walk(node):
-                        if isinstance(child, ast.Assign):
-                            for target in child.targets:
-                                if isinstance(target, ast.Name):
-                                    assigned.add(target.id)
-                        elif isinstance(child, ast.AugAssign):
-                            if isinstance(child.target, ast.Name):
-                                assigned.add(child.target.id)
-                    break
-            
-            return assigned
-        except SyntaxError:
-            return set()
     
     def _compute_completeness_score(self, doc_data: Dict[str, Any], component: CodeComponent) -> float:
         """
@@ -737,7 +730,8 @@ Present tense. Precise. Specific. No hallucinations."""
         if component.type == ComponentType.GLOBAL_VARIABLE:
             required = ['summary', 'description']
         elif component.type == ComponentType.CLASS:
-            required = ['summary', 'description', 'attributes_doc']
+            # FIX: Changed 'attributes_doc' to 'attributes' to match doc_data keys
+            required = ['summary', 'description', 'attributes']
         else:  # FUNCTION, METHOD
             required = ['summary', 'description', 'parameters', 'returns']
         
@@ -758,211 +752,240 @@ Present tense. Precise. Specific. No hallucinations."""
 
     def _compute_clarity_score(self, doc_data: Dict[str, Any], component: CodeComponent, code_facts: Dict[str, Any]) -> float:
         """
-        Advanced clarity score based on:
-        - Semantic richness (actual code references)
-        - Linguistic quality (active voice, specificity)
-        - Completeness of explanations
-        - Example adequacy
+        Improved clarity scoring that rewards:
+        1. No boilerplate (summary ≠ description)
+        2. Code-specific language (actual names)
+        3. Behavioral description (not structural)
+        4. Completeness with appropriate fields
         
         Returns: 0.0-1.0
         """
-        description = doc_data.get('description', '')
-        parameters_doc = doc_data.get('parameters', [])
         
-        if not description:
+        summary = doc_data.get('summary', '')
+        description = doc_data.get('description', '')
+        
+        if not summary or not description:
             return 0.0
         
         score = 0.0
         max_score = 10.0
         
-        # ===== SEMANTIC RICHNESS (5 points) =====
+        # ===== FACTOR 1: DEDUPLICATION (0-2 points) =====
+        # Penalize if description just repeats summary
+        summary_words = set(summary.lower().split())
+        desc_words = set(description.lower().split())
         
-        # 1.1: Reference to actual parameter names (up to 2 points)
-        param_references = 0
-        if component.parameters:
-            for param in component.parameters:
-                if param.name.lower() in description.lower():
-                    param_references += 1
-            score += min(2.0, param_references * 0.5)
-        
-        # 1.2: Reference to actual return type/value (0.5 points)
-        if component.return_type and component.return_type != 'None':
-            type_keywords = component.return_type.lower().split('|')
-            for keyword in type_keywords:
-                if keyword.strip() in description.lower():
-                    score += 0.5
-                    break
-        
-        # 1.3: Reference to actual exceptions raised (0.5 points)
-        if code_facts.get('raises'):
-            for exc in code_facts['raises']:
-                exc_name = exc.get('exception', '').lower()
-                if exc_name in description.lower():
-                    score += 0.5
-                    break
-        
-        # 1.4: Reference to data structures/operations (1 point)
-        data_ops = code_facts.get('data_structures_used', set()) | set(code_facts.get('operations', []))
-        for op in data_ops:
-            if op.lower() in description.lower():
+        if summary_words and desc_words:
+            union_size = len(summary_words | desc_words)
+            intersection_size = len(summary_words & desc_words)
+            overlap_ratio = intersection_size / union_size if union_size > 0 else 0
+            
+            # Less overlap = higher score
+            # 0% overlap = 2 points (perfect)
+            # 50% overlap = 1 point (mediocre)
+            # 70%+ overlap = 0 points (boilerplate)
+            if overlap_ratio < 0.3:
+                score += 2.0
+            elif overlap_ratio < 0.5:
+                score += 1.5
+            elif overlap_ratio < 0.7:
                 score += 0.5
-                break
+            # else: score += 0
         
-        # 1.5: Reference to control flow patterns (1 point)
-        control_patterns = code_facts.get('control_flow', [])
-        for pattern in control_patterns:
-            if pattern.lower() in description.lower():
-                score += 1.0
-                break
+        # ===== FACTOR 2: CODE-SPECIFICITY (0-3 points) =====
+        # Reward using actual component names
+        code_keywords = set()
         
-        # ===== LINGUISTIC QUALITY (3 points) =====
-        
-        # 2.1: Active voice and present tense (1.5 points)
-        action_verbs = ['creates', 'returns', 'raises', 'modifies', 'processes', 'calculates', 
-                       'retrieves', 'validates', 'transforms', 'manages', 'tracks', 'handles']
-        has_action = any(verb in description.lower() for verb in action_verbs)
-        score += 1.5 if has_action else 0.0
-        
-        # 2.2: Avoids generic phrases (1 point)
-        generic_phrases = [
-            'does something', 'handles things', 'manages data',
-            'performs operations', 'does the', 'some stuff',
-            'various', 'multiple things', 'and so on'
-        ]
-        has_generic = any(phrase in description.lower() for phrase in generic_phrases)
-        score += 1.0 if not has_generic else 0.0
-        
-        # 2.3: Sentence structure clarity (0.5 points)
-        sentences = [s.strip() for s in description.split('.') if s.strip()]
-        if len(sentences) >= 2:
-            score += 0.5  # Multiple sentences indicate more complete explanation
-        
-        # ===== COMPLETENESS (2 points) =====
-        
-        # 3.1: Documentation length (good range: 100-500 chars)
-        desc_len = len(description)
-        if 100 <= desc_len <= 500:
-            score += 1.0
-        elif 50 <= desc_len <= 100 or 500 < desc_len <= 800:
-            score += 0.5
-        
-        # 3.2: Parameter documentation completeness (1 point)
+        # Add parameter names
         if component.parameters:
-            documented_params = {p['name'] for p in parameters_doc if 'name' in p}
-            actual_params = {p.name for p in component.parameters}
-            coverage = len(documented_params & actual_params) / len(actual_params)
-            score += coverage  # 0.0-1.0 based on coverage
+            code_keywords.update(p.name.lower() for p in component.parameters)
         
-        # ===== EXAMPLES (optional bonus) =====
-        examples = doc_data.get('examples', [])
-        if examples and len(examples) > 0:
-            score += min(1.0, len(examples) * 0.3)
+        # Add API-specific keywords
+        if component.type == ComponentType.API_ENDPOINT:
+            if component.http_method:
+                code_keywords.add(component.http_method.lower())
+            if component.path_parameters:
+                code_keywords.update(p.lower() for p in component.path_parameters)
+
+        # Add global state names
+        if code_facts.get('modifies_global_state'):
+            code_keywords.update(code_facts['modifies_global_state'])
+        
+        # Add operation keywords
+        if code_facts.get('operations'):
+            code_keywords.update(code_facts['operations'])
+        
+        # Add exception names
+        if code_facts.get('raises'):
+            code_keywords.update(e.get('exception', '').lower() for e in code_facts['raises'])
+        
+        if code_keywords:
+            mentions = len(code_keywords & set(description.lower().split()))
+            specificity_score = (mentions / len(code_keywords)) * 3.0
+            score += min(3.0, specificity_score)
+        
+        # ===== FACTOR 3: BEHAVIORAL VS STRUCTURAL (0-2 points) =====
+        # Reward behavioral language, penalize structural
+        behavioral_keywords = {
+            'creates', 'returns', 'raises', 'modifies', 'updates', 'manages',
+            'coordinates', 'transitions', 'handles', 'processes', 'validates',
+            'ensures', 'guarantees', 'maintains', 'tracks', 'schedules',
+            'initializes', 'cleans', 'removes', 'adds', 'blocks', 'releases'
+        }
+        
+        structural_keywords = {
+            'contains', 'has', 'stores', 'represents', 'defines', 'includes',
+            'this function', 'this class', 'this variable', 'the code',
+            'does something', 'performs', 'handles things', 'manages data'
+        }
+        
+        behavioral_count = len(behavioral_keywords & set(description.lower().split()))
+        structural_count = len(structural_keywords & set(description.lower().split()))
+        
+        behavioral_score = behavioral_count / max(behavioral_count + structural_count, 1)
+        score += behavioral_score * 2.0
+        
+        # ===== FACTOR 4: COMPLETENESS (0-2 points) =====
+        completeness = 0.0
+        
+        # Parameters documented
+        if component.parameters and doc_data.get('parameters'):
+            actual_params = {p.name for p in component.parameters}
+            documented_params = {p.get('name') for p in doc_data.get('parameters', []) if p.get('name')}
+            if actual_params & documented_params:
+                completeness += min(1.0, len(actual_params & documented_params) / len(actual_params))
+        
+        # Returns documented (if applicable)
+        if component.return_type and component.return_type != 'None':
+            if doc_data.get('returns') and doc_data['returns'].get('description'):
+                completeness += 0.5
+        
+        # Exceptions documented (if applicable)
+        if code_facts.get('raises'):
+            if doc_data.get('raises') and len(doc_data['raises']) > 0:
+                completeness += 0.5
+        
+        score += completeness
+        
+        # ===== FACTOR 5: LENGTH APPROPRIATENESS (0-1 point) =====
+        # Good description: 100-400 chars
+        desc_len = len(description)
+        if 100 <= desc_len <= 400:
+            score += 1.0
+        elif 50 <= desc_len < 100 or 400 < desc_len <= 600:
+            score += 0.5
         
         # Normalize to 0-1 range
         normalized = score / max_score
         return min(1.0, max(0.0, normalized))
 
-    def _generate_global_variable_documentation(
+   
+    def _validate_raises_against_code_facts(
         self,
-        component: CodeComponent,
-        code_facts: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        raises_from_llm: List[Dict[str, str]],
+        code_facts: Dict[str, Any],
+        component: CodeComponent
+    ) -> List[Dict[str, str]]:
         """
-        Generate rich documentation for global variables including:
-        - State coordination role
-        - Mutation patterns
-        - Lifecycle
-        - Thread safety considerations
+        FIX: Don't filter out everything if Navigator found 0 exceptions.
+        Sometimes the LLM is right and the tool missed it.
         """
-        doc_data = {
-            'summary': '',
-            'description': '',
-            'notes': [],
-            'warnings': []
+        if not raises_from_llm:
+            return []
+        
+        # Get verified exceptions from Navigator
+        verified_exceptions = {
+            exc.get('exception', '').lower() 
+            for exc in code_facts.get('raises', [])
         }
         
-        var_name = component.name
-        var_type = component.return_type or 'Unknown'
+        # INEFFICIENCY FIX: If Navigator found 0, trust LLM but warn. 
+        # Only filter if Navigator found SOME but not THIS ONE.
+        if not verified_exceptions:
+            return raises_from_llm[:2] # Limit hallucinations to 2 if unverified
         
-        # 1. Determine role
-        role = self._classify_global_variable_role(component, code_facts)
+        filtered_raises = []
+        for llm_raise in raises_from_llm:
+            exc_name = llm_raise.get('exception', '').lower()
+            if exc_name in verified_exceptions:
+                filtered_raises.append(llm_raise)
+            else:
+                self.logger.debug(
+                    f"[EXCEPTION FILTER] {component.name}: "
+                    f"Filtering unverified exception '{exc_name}'. "
+                    f"Verified: {verified_exceptions}"
+                )
         
-        # 2. Build summary
-        role_desc = {
-            'lifecycle_gate': 'controls component lifecycle',
-            'state_cache': 'caches component state',
-            'synchronization': 'synchronizes concurrent access',
-            'configuration': 'holds configuration state',
-            'accumulator': 'accumulates values across calls'
-        }.get(role, 'tracks shared state')
-        
-        doc_data['summary'] = f"{var_name} ({var_type}): {role_desc}"
-        
-        # 3. Build detailed description
-        desc_parts = [
-            f"Module-level {var_type} variable that {role_desc}.",
-            f"Initial value: {component.existing_docstring or 'See source'}",
-        ]
-        
-        # Add mutation info
-        modifiers = code_facts.get('modifies_global_state', [])
-        if var_name in [m for m in modifiers]:
-            desc_parts.append(
-                f"Modified by: {', '.join(code_facts.get('calls_functions', [])[:3])}"
-            )
-        
-        # Add access info
-        accessors = code_facts.get('accessed_by', [])
-        if accessors:
-            desc_parts.append(
-                f"Accessed by: {', '.join(accessors[:3])}"
-            )
-        
-        doc_data['description'] = ' '.join(desc_parts)
-        
-        # 4. Add thread safety warning if modified by multiple functions
-        if len(modifiers) > 1:
-            doc_data['warnings'].append(
-                f"Thread-safety: {var_name} is modified by multiple functions. "
-                f"Ensure proper synchronization when accessed concurrently."
-            )
-        
-        # 5. Add lifecycle note
-        doc_data['notes'].append(
-            f"Lifecycle: Initialized at module load time. "
-            f"Persists for entire program lifetime unless explicitly reset."
-        )
-        
-        # 6. Add usage pattern
-        doc_data['notes'].append(
-            f"Usage pattern: {role}. " +
-            ("Read-only after initialization." if not modifiers else 
-             "Mutable - modified during program execution.")
-        )
-        
-        return doc_data
+        return filtered_raises
 
-    def _classify_global_variable_role(self, component: CodeComponent, code_facts: Dict[str, Any]) -> str:
-        """Classify the role of a global variable"""
-        var_name = component.name.lower()
+    def _extract_global_usage(self, component: CodeComponent, context: Dict[str, Any]) -> str:
+        """
+        Extract usage context for global variables.
+        Analyzes where the global is read/modified in the codebase.
+        """
+        if component.type != ComponentType.GLOBAL_VARIABLE:
+            return ""
         
-        # Heuristic 1: Name-based classification
-        if any(word in var_name for word in ['lock', 'mutex', 'sem', 'event', 'condition']):
-            return 'synchronization'
-        if any(word in var_name for word in ['config', 'settings', 'options', 'params']):
-            return 'configuration'
-        if any(word in var_name for word in ['cache', 'cached', 'memo']):
-            return 'state_cache'
-        if any(word in var_name for word in ['queue', 'buffer', 'pool', 'heap']):
-            return 'accumulator'
-        if any(word in var_name for word in ['ready', 'done', 'complete', 'started', 'stopped']):
-            return 'lifecycle_gate'
-    
-        # Heuristic 2: Based on mutations
-        modifies = code_facts.get('modifies_global_state', [])
-        if len(modifies) == 0:
-            return 'state_cache'
-        elif len(modifies) > 2:
-            return 'accumulator'
-    
-        return 'lifecycle_gate'
+        usage_lines = []
+        
+        # Check shared state dependencies
+        shared_deps = component.metadata.get('shared_state_dependencies', [])
+        if shared_deps:
+            usage_lines.append(f"Modified by: {', '.join(shared_deps[:3])}")
+        
+        # Check if it's marked as constant (immutable)
+        is_constant = not shared_deps
+        if is_constant:
+            usage_lines.append("Read-only constant - used for configuration")
+        else:
+            usage_lines.append("Mutable state - tracked and modified during execution")
+        
+        # Get type from source code
+        source = component.source_code
+        if '=' in source:
+            rhs = source.split('=', 1)[1].strip()
+            usage_lines.append(f"Initialized as: {rhs[:50]}")
+        
+        return "\n".join(usage_lines) if usage_lines else "Module-level constant or state variable"
+
+    def _analyze_return_values(self, component: CodeComponent, code_facts: Dict[str, Any]) -> str:
+        """
+        Analyze what return statements actually produce.
+        Generates semantic meaning for return types.
+        """
+        return_type = component.return_type or 'any'
+        actual_returns = code_facts.get('actual_returns', [])
+        
+        if not actual_returns or return_type == 'None':
+            return "None; modifies state or side effects only"
+        
+        if len(actual_returns) == 0:
+            return f"Returns {return_type}"
+        
+        first_return = actual_returns[0]
+        
+        # Analyze return statement patterns
+        if first_return in ('True', 'False'):
+            return f"{return_type}: Boolean success/failure indicator"
+        
+        if first_return == 'None':
+            return "None; function completes without returning value"
+        
+        if '{' in first_return or return_type in ('dict', 'Dict'):
+            # Extract dict keys if possible
+            key_pattern = r'"(\w+)":|\'(\w+)\':'
+            keys = re.findall(key_pattern, first_return)
+            if keys:
+                key_names = [k[0] or k[1] for k in keys]
+                return f"{return_type}: Dictionary with keys {{{', '.join(key_names[:3])}}}"
+            return f"{return_type}: Structured dictionary response"
+        
+        if '[' in first_return or return_type in ('list', 'List'):
+            return f"{return_type}: Collection of items"
+        
+        if '(' in first_return and ')' in first_return:
+            # Likely a function call
+            func_name = first_return.split('(')[0].strip()
+            return f"{return_type}: Result from {func_name}()"
+        
+        return f"{return_type}: {first_return[:50]}"

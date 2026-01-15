@@ -226,8 +226,8 @@ class Orchestrator:
         writer_result = self.writer.execute(context)
         if not writer_result.is_success():
             self.logger.warning(f"Writer failed: {writer_result.error}")
-            # Return reader output as fallback
-            return reader_output
+            # Create fallback Documentation instead of returning reader_output
+            return self._create_fallback_documentation(component)
         
         writer_output = writer_result.output
         context.add_result('writer', writer_output)
@@ -250,6 +250,21 @@ class Orchestrator:
         
         return writer_output
 
+    def _create_fallback_documentation(self, component: CodeComponent) -> Documentation:
+        """
+        Create a fallback Documentation object in case of Writer failure
+        """
+        self.logger.info(f"Creating fallback documentation for {component.name}")
+        return Documentation(
+            id=f"fallback-{component.id}",
+            name=f"Fallback Documentation for {component.name}",
+            component_id=component.id,
+            docstring="Fallback documentation due to Writer failure.",
+            source="orchestrator",
+            type=component.type,
+            created_at=datetime.now(),
+            updated_at=datetime.now()
+        )
     
     def get_statistics(self) -> Dict[str, Any]:
         """Get orchestrator statistics"""

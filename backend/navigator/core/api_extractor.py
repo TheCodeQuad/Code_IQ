@@ -138,22 +138,30 @@ class GlobalAPIExtractor:
             func_name = func_match.group(1)
             params_str = func_match.group(2)
             
-            # Extract path/query parameters
+            # 1. Create IDs and Path Params
+            endpoint_id = f"{self.module_path}.{http_method.lower()}_{http_path.replace('/', '_').replace('{', '').replace('}', '')}"
             path_params = re.findall(r'\{(\w+)\}', http_path)
-            query_params = self._extract_query_params(params_str, path_params)
             
-            # Get function source
+            # 2. Extract parameters with improved type hints (Multi-language support)
+            parameters = []
+            for p in self._extract_query_params(params_str, path_params):
+                # Search for type hint patterns: 'p: type' (Python/TS) or 'type p' (Java)
+                type_hint = 'str' if p in path_params else 'any'
+                type_match = re.search(rf'(\w+)\s+{p}|{p}\s*:\s*([\w\[\]]+)', params_str)
+                if type_match:
+                    type_hint = type_match.group(1) or type_match.group(2)
+                
+                parameters.append(Parameter(
+                    name=p, 
+                    type_hint=type_hint, 
+                    is_required=p in path_params
+                ))
+            
+            # 3. Get function source
             end_line = self._find_function_end(func_def_line)
             func_source = '\n'.join(self.lines[func_def_line:end_line + 1])
             
-            # Create component ID
-            endpoint_id = f"{self.module_path}.{http_method.lower()}_{http_path.replace('/', '_').replace('{', '').replace('}', '')}"
-            
-            # Build parameters
-            parameters = [Parameter(name=p, type_hint='str', is_required=p in path_params) 
-                         for p in query_params]
-            
-            # Create component
+            # 4. Create component
             component = CodeComponent(
                 id=endpoint_id,
                 name=f"{http_method} {http_path}",
@@ -169,7 +177,7 @@ class GlobalAPIExtractor:
                 http_path=http_path,
                 framework=self.framework,
                 path_parameters=path_params,
-                query_parameters=query_params,
+                query_parameters=[p.name for p in parameters if p.name not in path_params],
                 parameters=parameters,
                 decorators=[line.strip()],
                 imports=self.file_imports,
@@ -178,9 +186,22 @@ class GlobalAPIExtractor:
                 is_async='async def' in func_line,
                 status_codes=[status_code],
             )
+
+            # Note: Ensure metadata is populated for Writer Agent
+            component.metadata.update({
+                'control_flow': {'is_async': 'async def' in func_line},
+                'exceptions': [] # Exceptions will be filled if second pass analysis is added
+            })
             
             endpoints[endpoint_id] = component
-        
+
+            # MISSING in _extract_fastapi_endpoints():
+            def _extract_pydantic_models(params_str: str) -> List[Dict]:
+                """Extract request body model from parameters like 'data: KeyCreateRequest'"""
+                model_match = re.search(r'(\w+)\s*:\s*(\w+(?:Request|Response|Model))', params_str)
+                if model_match:
+                    return [{'name': model_match.group(1), 'type': model_match.group(2)}]
+                return []
         return endpoints
     
     def _extract_flask_endpoints(self) -> Dict[str, CodeComponent]:
@@ -415,7 +436,8 @@ class GlobalAPIExtractor:
     
     def _extract_query_params(self, params_str: str, path_params: List[str]) -> List[str]:
         """Extract query parameters from function signature"""
-        params = re.findall(r'(\w+)\s*(?::|=|,)', params_str)
+        # Improved regex to catch 'name: type' (Python/TS/Java) or just 'name' (JS)
+        params = re.findall(r'(\w+)\s*(?::|=|,|\))', params_str)
         return [p for p in params if p not in path_params and p not in ['self', 'cls', 'request', 'response']]
 
 

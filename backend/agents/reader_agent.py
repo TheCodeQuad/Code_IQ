@@ -145,34 +145,47 @@ class ReaderAgent(BaseAgent):
             )
     
     def _analyze_complexity(self, component: CodeComponent) -> Dict[str, Any]:
-        """
-        Analyze component complexity with CORRECT metrics
-        """
+        """Analyze component complexity using IR metadata"""
+        
+        # Get navigator's extracted metadata
+        control_flow = component.metadata.get('control_flow', {})
+        exceptions = component.metadata.get('exceptions', [])
+        modifiers = component.metadata.get('modifiers', {})
+        
         complexity = {
             'cyclomatic_complexity': component.complexity or 1,
             'lines_of_code': component.lines_of_code,
-            'num_parameters': len(component.parameters) if component.parameters else 0,  # FIX: Was missing None check
+            'num_parameters': len(component.parameters) if component.parameters else 0,
             'num_dependencies': len(component.depends_on),
             'num_calls': len(component.calls),
-            'is_async': component.is_async or 'async def' in component.source_code,  # FIX: Check source too
-            'is_generator': component.is_generator or 'yield' in component.source_code,  # FIX: Check source
+            'is_async': control_flow.get('is_async') or component.is_async,
+            'is_generator': component.is_generator,
             'has_decorators': len(component.decorators) > 0,
+            'has_loops': control_flow.get('has_loop', False),
+            'has_error_handling': control_flow.get('has_try_except', False),
             'complexity_level': 'moderate'
         }
         
-        # Calculate overall complexity score
+        # Calculate complexity score using all metadata
         score = 0
         score += complexity['cyclomatic_complexity']
-        score += min(complexity['num_parameters'], 5)  # Cap at 5
+        score += min(complexity['num_parameters'], 5)
         score += min(complexity['num_dependencies'], 5)
-        score += complexity['lines_of_code'] // 10  # 1 point per 10 lines
+        score += complexity['lines_of_code'] // 10
         
-        if complexity['is_async'] or complexity['is_generator']:
+        # Add bonuses based on navigator's extraction
+        if complexity['has_loops']:
+            score += 2
+        if complexity['has_error_handling'] or exceptions:
+            score += 1
+        if complexity['is_async']:
             score += 3
+        if modifiers.get('is_abstract'):
+            score += 1
         
         complexity['complexity_score'] = score
         
-        # Categorize complexity
+        # Categorize
         if score <= self.simple_complexity_threshold:
             complexity['complexity_level'] = 'simple'
         elif score <= self.complex_complexity_threshold:
@@ -191,40 +204,27 @@ class ReaderAgent(BaseAgent):
         
         # Global variables that coordinate state MUST have context
         if component.type == ComponentType.GLOBAL_VARIABLE:
-            coordinated_globals = {"keys", "available", "blocked_set", "expiry_heap"}
-            return component.name in coordinated_globals
+            return component.name in {"keys", "available", "blocked_set", "expiry_heap"}
         
-        # FIX: Better async detection
-        if self._detect_async_operations(component):
+        # Check navigator's control_flow for async operations
+        control_flow = component.metadata.get('control_flow', {})
+        if control_flow.get('is_async') or control_flow.get('has_concurrency'):
             return True
         
         # Infinite loops need documentation
-        if 'while True' in component.source_code:
+        if control_flow.get('has_loop') and 'while True' in component.source_code:
             return True
         
         # Simple self-contained components don't need context
         if complexity['complexity_level'] == 'simple':
-            # Only return True if the component is public AND has dependencies or calls
             if self._is_public(component) and component.type.value in ['function', 'method']:
                 if len(component.depends_on) > 0 or len(component.calls) > 0:
                     return True
-                else:
-                    return False
-
-            # Otherwise, simple components don't need context
             return False
         
-        # Only complex components truly need context
-        if complexity['complexity_level'] != 'complex':
-            # Moderate components: only if they have external dependencies or many internal dependencies
-            if len(component.depends_on) > 5:
-                return True
-            
-            # Check for external libraries (pandas, numpy, requests, etc.)
-            if self._has_external_dependencies(component):
-                return True
-            
-            return False
+        # Moderate components only if they have many dependencies
+        if complexity['complexity_level'] == 'moderate':
+            return len(component.depends_on) > 5 or self._has_external_dependencies(component)
         
         # Complex components always need context
         return True
@@ -362,16 +362,12 @@ class ReaderAgent(BaseAgent):
         # Check imports, decorators, or other explicit references
         explicit_refs = set(getattr(component, "imports", [])) | set(getattr(component, "decorators", []))
 
-        for concept in self._detect_external_concepts(component):
+        for concept in explicit_refs:
             # 1. Not in project DAG
             if concept in dag_ids:
                 continue
             
-            # 2. Explicitly referenced (already filtered by _detect_external_concepts)
-            if not any(concept in ref for ref in explicit_refs):
-                continue
-            
-            # 3. Non-obvious runtime effect (check if in whitelist)
+            # 2. Check if it's in the whitelist
             if concept not in NON_OBVIOUS_APIS:
                 continue
 
@@ -421,7 +417,7 @@ Complexity Assessment:
 
 Code:
 ```{component.language}
-{component.source_code[:500]}{'...' if len(component.source_code) > 500 else ''}
+{component.source_code}
 ```
 
 Information Needs:
@@ -524,24 +520,24 @@ Provide a 2-3 sentence analysis summary explaining:
             return component_id.split(':')[-1]
         return component_id
     
-    def _identify_library(self, import_statement: str) -> Optional[str]:
-        """Identify library from import statement"""
-        # Extract library name from import
-        # e.g., "import numpy as np" -> "numpy"
-        # e.g., "from sklearn.model_selection import train_test_split" -> "sklearn"
+    # def _identify_library(self, import_statement: str) -> Optional[str]:
+    #     """Identify library from import statement"""
+    #     # Extract library name from import
+    #     # e.g., "import numpy as np" -> "numpy"
+    #     # e.g., "from sklearn.model_selection import train_test_split" -> "sklearn"
         
-        patterns = [
-            r'import\s+(\w+)',
-            r'from\s+(\w+)',
-            r'require\(["\'](\w+)["\']\)',
-        ]
+    #     patterns = [
+    #         r'import\s+(\w+)',
+    #         r'from\s+(\w+)',
+    #         r'require\(["\'](\w+)["\']\)',
+    #     ]
         
-        for pattern in patterns:
-            match = re.search(pattern, import_statement)
-            if match:
-                return match.group(1)
+    #     for pattern in patterns:
+    #         match = re.search(pattern, import_statement)
+    #         if match:
+    #             return match.group(1)
         
-        return None
+    #     return None
     
     def _load_external_libraries(self) -> List[str]:
         """Load list of external libraries that need explanation"""
@@ -564,112 +560,44 @@ Provide a 2-3 sentence analysis summary explaining:
             'greedy', 'backtracking', 'divide and conquer',
         ]
     
-    def _detect_external_concepts(self, component: CodeComponent) -> List[str]:
-        """
-        Detect external concepts, APIs, annotations, or DSLs referenced by the component.
-        Returns a list of concept names/identifiers.
-        """
-        concepts = set()
+    # def _detect_external_concepts(self, component: CodeComponent) -> List[str]:
+    #     """
+    #     Detect external concepts, APIs, annotations, or DSLs referenced by the component.
+    #     Returns a list of concept names/identifiers.
+    #     """
+    #     concepts = set()
 
-        # 1. Add decorators and annotations (often used for non-obvious behavior)
-        for deco in getattr(component, "decorators", []):
-            if "." in deco:
-                concepts.add(deco)
+    #     # 1. Add decorators and annotations (often used for non-obvious behavior)
+    #     for deco in getattr(component, "decorators", []):
+    #         if "." in deco:
+    #             concepts.add(deco)
         
-        # 2. Add explicit imports that look like external APIs or DSLs
-        for imp in getattr(component, "imports", []):
-            # Only consider imports with a dot (e.g., 'javax.persistence.Entity')
-            if "." in imp:
-                concepts.add(imp)
+    #     # 2. Add explicit imports that look like external APIs or DSLs
+    #     for imp in getattr(component, "imports", []):
+    #         # Only consider imports with a dot (e.g., 'javax.persistence.Entity')
+    #         if "." in imp:
+    #             concepts.add(imp)
         
-        # 3. Optionally, scan source code for known external API patterns
-        known_patterns = [
-            r"javax\.persistence\.\w+",
-            r"lombok\.\w+",
-            r"spring\.transactional",
-            r"@Entity",
-            r"@Data",
-            r"@Transactional"
-        ]
-        for pattern in known_patterns:
-            matches = re.findall(pattern, component.source_code)
-            for match in matches:
-                concepts.add(match.replace("@", ""))
+    #     # 3. Optionally, scan source code for known external API patterns
+    #     known_patterns = [
+    #         r"javax\.persistence\.\w+",
+    #         r"lombok\.\w+",
+    #         r"spring\.transactional",
+    #         r"@Entity",
+    #         r"@Data",
+    #         r"@Transactional"
+    #     ]
+    #     for pattern in known_patterns:
+    #         matches = re.findall(pattern, component.source_code)
+    #         for match in matches:
+    #             concepts.add(match.replace("@", ""))
         
-        return list(concepts)
+    #     return list(concepts)
     
     def _detect_threading(self, component: CodeComponent) -> bool:
-        """Detect if component creates threads or uses concurrency"""
-        threading_patterns = [
-            'new Thread(',
-            'threading.Thread(',
-            '.start()',
-            'executor',
-            'ExecutorService',
-            'async def',
-            'await ',
-            '.wait()',
-            '.notify(',
-            'Lock(',
-            'Semaphore(',
-            'synchronized',
-        ]
-        
-        source = component.source_code.lower()
-        return any(pattern.lower() in source for pattern in threading_patterns)
-
-    def _detect_error_handling(self, component: CodeComponent) -> bool:
-        """Detect if component has error handling logic"""
-        error_patterns = ['try', 'except', 'finally', 'throw', 'catch']
-        source = component.source_code.lower()
-        return any(pattern in source for pattern in error_patterns)
-
-    def _detect_async_operations(self, component: CodeComponent) -> bool:
-        """Comprehensive async detection - checks for async def, await, async context managers, and event loops"""
-        source = component.source_code
-        
-        # Pattern 1: Direct async def
-        if source.lstrip().startswith('async def'):
-            return True
-        
-        # Pattern 2: Await expressions
-        if re.search(r'\bawait\s+\w+', source):
-            return True
-        
-        # Pattern 3: Async context managers (async with)
-        if re.search(r'async\s+with\s+', source):
-            return True
-        
-        # Pattern 4: Async for loops
-        if re.search(r'async\s+for\s+', source):
-            return True
-        
-        # Pattern 5: asyncio module usage
-        asyncio_patterns = [
-            r'asyncio\.create_task\(',
-            r'asyncio\.gather\(',
-            r'asyncio\.run\(',
-            r'asyncio\.sleep\(',
-            r'asyncio\.Event\(\)',
-            r'asyncio\.Lock\(\)',
-            r'asyncio\.Queue\(',
-            r'asyncio\.gather\(',
-            r'loop\.create_task\(',
-            r'loop\.run_until_complete\(',
-        ]
-        for pattern in asyncio_patterns:
-            if re.search(pattern, source):
-                return True
-        
-        # Pattern 6: Decorators like @async_handler, @aio_task
-        if any(dec for dec in component.decorators if 'async' in dec.lower() or 'aio' in dec.lower()):
-            return True
-        
-        # Pattern 7: Async generators (async def with yield)
-        if source.lstrip().startswith('async def') and 'yield' in source:
-            return True
-        
-        return False
+        """Detect concurrency - use navigator's metadata"""
+        control_flow = component.metadata.get('control_flow', {})
+        return control_flow.get('has_concurrency', False) or 'Thread' in component.source_code
 
     def _apply_hard_sufficiency_gate(
         self,
