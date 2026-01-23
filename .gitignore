@@ -16,7 +16,7 @@ dist/
 
 # Navigator outputs (generated)
 backend/navigator/output/
-data/
+data/**/
 
 # Logs (runtime)
 logs/

@@ -77,6 +77,8 @@ class ReaderAgent(BaseAgent):
             # Step 1: Analyze complexity
             complexity = self._analyze_complexity(component)
             
+            component.creates_threads = self._detect_threading(component)
+
             # Step 2: Assess if additional context is needed
             needs_context = self._needs_additional_context(component, complexity)
             
@@ -119,6 +121,14 @@ class ReaderAgent(BaseAgent):
                 f"External requests: {len(external_requests)}"
             )
             
+            # Step 5B: HARD SUFFICIENCY GATE - override LLM curiosity
+            internal_requests, external_requests = self._apply_hard_sufficiency_gate(
+                component,
+                complexity,
+                internal_requests,
+                external_requests
+            )
+            
             return AgentResult(
                 agent_name=self.agent_name,
                 status=AgentStatus.SUCCESS,
@@ -135,37 +145,47 @@ class ReaderAgent(BaseAgent):
             )
     
     def _analyze_complexity(self, component: CodeComponent) -> Dict[str, Any]:
-        """
-        Analyze component complexity
+        """Analyze component complexity using IR metadata"""
         
-        Returns:
-            Dictionary with complexity metrics
-        """
+        # Get navigator's extracted metadata
+        control_flow = component.metadata.get('control_flow', {})
+        exceptions = component.metadata.get('exceptions', [])
+        modifiers = component.metadata.get('modifiers', {})
+        
         complexity = {
             'cyclomatic_complexity': component.complexity or 1,
             'lines_of_code': component.lines_of_code,
-            'num_parameters': len(component.parameters),
+            'num_parameters': len(component.parameters) if component.parameters else 0,
             'num_dependencies': len(component.depends_on),
             'num_calls': len(component.calls),
-            'is_async': component.is_async,
+            'is_async': control_flow.get('is_async') or component.is_async,
             'is_generator': component.is_generator,
             'has_decorators': len(component.decorators) > 0,
-            'complexity_level': 'simple'
+            'has_loops': control_flow.get('has_loop', False),
+            'has_error_handling': control_flow.get('has_try_except', False),
+            'complexity_level': 'moderate'
         }
         
-        # Calculate overall complexity score
+        # Calculate complexity score using all metadata
         score = 0
         score += complexity['cyclomatic_complexity']
-        score += min(complexity['num_parameters'], 5)  # Cap at 5
+        score += min(complexity['num_parameters'], 5)
         score += min(complexity['num_dependencies'], 5)
-        score += complexity['lines_of_code'] // 10  # 1 point per 10 lines
+        score += complexity['lines_of_code'] // 10
         
-        if complexity['is_async'] or complexity['is_generator']:
+        # Add bonuses based on navigator's extraction
+        if complexity['has_loops']:
+            score += 2
+        if complexity['has_error_handling'] or exceptions:
+            score += 1
+        if complexity['is_async']:
             score += 3
+        if modifiers.get('is_abstract'):
+            score += 1
         
         complexity['complexity_score'] = score
         
-        # Categorize complexity
+        # Categorize
         if score <= self.simple_complexity_threshold:
             complexity['complexity_level'] = 'simple'
         elif score <= self.complex_complexity_threshold:
@@ -180,41 +200,31 @@ class ReaderAgent(BaseAgent):
         component: CodeComponent,
         complexity: Dict[str, Any]
     ) -> bool:
-        """
-        Determine if component needs additional context
+        """Determine if component needs additional context"""
         
-        Args:
-            component: Code component
-            complexity: Complexity assessment
-            
-        Returns:
-            True if additional context is needed
-        """
+        # Global variables that coordinate state MUST have context
+        if component.type == ComponentType.GLOBAL_VARIABLE:
+            return component.name in {"keys", "available", "blocked_set", "expiry_heap"}
+        
+        # Check navigator's control_flow for async operations
+        control_flow = component.metadata.get('control_flow', {})
+        if control_flow.get('is_async') or control_flow.get('has_concurrency'):
+            return True
+        
+        # Infinite loops need documentation
+        if control_flow.get('has_loop') and 'while True' in component.source_code:
+            return True
+        
         # Simple self-contained components don't need context
         if complexity['complexity_level'] == 'simple':
-            # Only public functions need usage examples
             if self._is_public(component) and component.type.value in ['function', 'method']:
-                return True
-            
-            # Check if it has dependencies or calls
-            if len(component.depends_on) == 0 and len(component.calls) == 0:
-                return False
-            
-            # Simple components with few dependencies don't need context
-            if len(component.depends_on) <= 1:
-                return False
-        
-        # Only complex components truly need context
-        if complexity['complexity_level'] != 'complex':
-            # Moderate components: only if they have external dependencies or many internal dependencies
-            if len(component.depends_on) > 5:
-                return True
-            
-            # Check for external libraries (pandas, numpy, requests, etc.)
-            if self._has_external_dependencies(component):
-                return True
-            
+                if len(component.depends_on) > 0 or len(component.calls) > 0:
+                    return True
             return False
+        
+        # Moderate components only if they have many dependencies
+        if complexity['complexity_level'] == 'moderate':
+            return len(component.depends_on) > 5 or self._has_external_dependencies(component)
         
         # Complex components always need context
         return True
@@ -283,22 +293,27 @@ class ReaderAgent(BaseAgent):
         self,
         component: CodeComponent
     ) -> List[InternalRequest]:
-        """
-        Generate requests for reference/usage information
-        
-        Args:
-            component: Code component
-            
-        Returns:
-            List of reference requests
-        """
+        """Generate requests for reference/usage information"""
         requests = []
         
-        # Public functions/classes need usage examples
-        if self._is_public(component):
+        # Only request usage examples for PUBLIC + COMPLEX or PUBLIC + AMBIGUOUS components
+        if self._is_public(component) and component.type in [ComponentType.FUNCTION, ComponentType.METHOD, ComponentType.CLASS]:
+            # Skip if already has good docstring
+            if component.existing_docstring and len(component.existing_docstring) > 50:
+                self.logger.debug(f"Skipping reference request for {component.name} - has good docstring")
+                return requests
+            
+            # Skip if it's simple and self-contained
+            if (len(component.parameters) <= 2 and 
+                len(component.calls) <= 1 and 
+                component.lines_of_code <= 10):
+                self.logger.debug(f"Skipping reference request for {component.name} - simple and self-contained")
+                return requests
+            
+            # Only request for actually complex or ambiguous functions
             reason = (
-                f"This is a public {component.type.value if hasattr(component.type, 'value') else component.type}. "
-                f"Usage examples will help users understand how to use it correctly."
+                f"This is a public {component.type.value}. "
+                f"Usage examples will help clarify its behavior."
             )
             
             priority = 8 if component.type == ComponentType.FUNCTION else 7
@@ -309,21 +324,6 @@ class ReaderAgent(BaseAgent):
                 component_name=component.name,
                 reason=reason,
                 priority=priority
-            ))
-        
-        # Complex components benefit from usage context
-        elif component.complexity and component.complexity > self.complex_complexity_threshold:
-            reason = (
-                f"This is a public {component.type.value if hasattr(component.type, 'value') else component.type}. "
-                f"Real-world usage examples will clarify its purpose and behavior."
-            )
-            
-            requests.append(InternalRequest(
-                request_type="reference",
-                component_id=component.id,
-                component_name=component.name,
-                reason=reason,
-                priority=6
             ))
         
         return requests
@@ -362,16 +362,12 @@ class ReaderAgent(BaseAgent):
         # Check imports, decorators, or other explicit references
         explicit_refs = set(getattr(component, "imports", [])) | set(getattr(component, "decorators", []))
 
-        for concept in self._detect_external_concepts(component):
+        for concept in explicit_refs:
             # 1. Not in project DAG
             if concept in dag_ids:
                 continue
             
-            # 2. Explicitly referenced (already filtered by _detect_external_concepts)
-            if not any(concept in ref for ref in explicit_refs):
-                continue
-            
-            # 3. Non-obvious runtime effect (check if in whitelist)
+            # 2. Check if it's in the whitelist
             if concept not in NON_OBVIOUS_APIS:
                 continue
 
@@ -421,7 +417,7 @@ Complexity Assessment:
 
 Code:
 ```{component.language}
-{component.source_code[:500]}{'...' if len(component.source_code) > 500 else ''}
+{component.source_code}
 ```
 
 Information Needs:
@@ -511,9 +507,11 @@ Provide a 2-3 sentence analysis summary explaining:
         dep_name = self._extract_component_name(dep_id)
         
         return (
-            f"The component '{component.name}' depends on '{dep_name}'. "
-            f"Understanding this dependency will help document how {component.name} works."
+            f"The component '{component.name}' depends on '{dep_name}' "
+            f"to maintain coordinated state. This dependency participates in "
+            f"lifecycle transitions or availability guarantees."
         )
+
     
     def _extract_component_name(self, component_id: str) -> str:
         """Extract component name from ID"""
@@ -522,24 +520,24 @@ Provide a 2-3 sentence analysis summary explaining:
             return component_id.split(':')[-1]
         return component_id
     
-    def _identify_library(self, import_statement: str) -> Optional[str]:
-        """Identify library from import statement"""
-        # Extract library name from import
-        # e.g., "import numpy as np" -> "numpy"
-        # e.g., "from sklearn.model_selection import train_test_split" -> "sklearn"
+    # def _identify_library(self, import_statement: str) -> Optional[str]:
+    #     """Identify library from import statement"""
+    #     # Extract library name from import
+    #     # e.g., "import numpy as np" -> "numpy"
+    #     # e.g., "from sklearn.model_selection import train_test_split" -> "sklearn"
         
-        patterns = [
-            r'import\s+(\w+)',
-            r'from\s+(\w+)',
-            r'require\(["\'](\w+)["\']\)',
-        ]
+    #     patterns = [
+    #         r'import\s+(\w+)',
+    #         r'from\s+(\w+)',
+    #         r'require\(["\'](\w+)["\']\)',
+    #     ]
         
-        for pattern in patterns:
-            match = re.search(pattern, import_statement)
-            if match:
-                return match.group(1)
+    #     for pattern in patterns:
+    #         match = re.search(pattern, import_statement)
+    #         if match:
+    #             return match.group(1)
         
-        return None
+    #     return None
     
     def _load_external_libraries(self) -> List[str]:
         """Load list of external libraries that need explanation"""
@@ -562,36 +560,73 @@ Provide a 2-3 sentence analysis summary explaining:
             'greedy', 'backtracking', 'divide and conquer',
         ]
     
-    def _detect_external_concepts(self, component: CodeComponent) -> List[str]:
-        """
-        Detect external concepts, APIs, annotations, or DSLs referenced by the component.
-        Returns a list of concept names/identifiers.
-        """
-        concepts = set()
+    # def _detect_external_concepts(self, component: CodeComponent) -> List[str]:
+    #     """
+    #     Detect external concepts, APIs, annotations, or DSLs referenced by the component.
+    #     Returns a list of concept names/identifiers.
+    #     """
+    #     concepts = set()
 
-        # 1. Add decorators and annotations (often used for non-obvious behavior)
-        for deco in getattr(component, "decorators", []):
-            if "." in deco:
-                concepts.add(deco)
+    #     # 1. Add decorators and annotations (often used for non-obvious behavior)
+    #     for deco in getattr(component, "decorators", []):
+    #         if "." in deco:
+    #             concepts.add(deco)
         
-        # 2. Add explicit imports that look like external APIs or DSLs
-        for imp in getattr(component, "imports", []):
-            # Only consider imports with a dot (e.g., 'javax.persistence.Entity')
-            if "." in imp:
-                concepts.add(imp)
+    #     # 2. Add explicit imports that look like external APIs or DSLs
+    #     for imp in getattr(component, "imports", []):
+    #         # Only consider imports with a dot (e.g., 'javax.persistence.Entity')
+    #         if "." in imp:
+    #             concepts.add(imp)
         
-        # 3. Optionally, scan source code for known external API patterns
-        known_patterns = [
-            r"javax\.persistence\.\w+",
-            r"lombok\.\w+",
-            r"spring\.transactional",
-            r"@Entity",
-            r"@Data",
-            r"@Transactional"
-        ]
-        for pattern in known_patterns:
-            matches = re.findall(pattern, component.source_code)
-            for match in matches:
-                concepts.add(match.replace("@", ""))
+    #     # 3. Optionally, scan source code for known external API patterns
+    #     known_patterns = [
+    #         r"javax\.persistence\.\w+",
+    #         r"lombok\.\w+",
+    #         r"spring\.transactional",
+    #         r"@Entity",
+    #         r"@Data",
+    #         r"@Transactional"
+    #     ]
+    #     for pattern in known_patterns:
+    #         matches = re.findall(pattern, component.source_code)
+    #         for match in matches:
+    #             concepts.add(match.replace("@", ""))
         
-        return list(concepts)
+    #     return list(concepts)
+    
+    def _detect_threading(self, component: CodeComponent) -> bool:
+        """Detect concurrency - use navigator's metadata"""
+        control_flow = component.metadata.get('control_flow', {})
+        return control_flow.get('has_concurrency', False) or 'Thread' in component.source_code
+
+    def _apply_hard_sufficiency_gate(
+        self,
+        component: CodeComponent,
+        complexity: Dict[str, Any],
+        internal_requests: List[InternalRequest],
+        external_requests: List[ExternalRequest]
+    ) -> tuple:
+        """
+        Hard veto: Clear requests if heuristic conditions for self-contained are met.
+        This prevents LLM language like "it would be helpful to know" from escalating
+        unnecessary context requests.
+        """
+        # If ALL these conditions are true, component is objectively self-contained
+        is_objectively_self_contained = (
+            complexity['complexity_level'] == 'simple' and
+            len(component.depends_on) == 0 and
+            len(component.calls) <= 1 and
+            len(component.parameters) <= 2 and
+            component.lines_of_code <= 10 and
+            not component.is_async and
+            not self._detect_threading(component)
+        )
+        
+        if is_objectively_self_contained:
+            self.logger.info(
+                f"Hard sufficiency gate: Clearing requests for {component.name} "
+                f"(objectively self-contained)"
+            )
+            return [], []  # Force empty requests
+        
+        return internal_requests, external_requests

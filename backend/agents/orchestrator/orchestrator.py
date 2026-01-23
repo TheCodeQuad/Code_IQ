@@ -8,9 +8,9 @@ from datetime import datetime
 from backend.agents.base_agent import AgentContext, AgentResult, AgentStatus
 from backend.agents.reader_agent import ReaderAgent
 from backend.agents.searcher_agent import SearcherAgent
-# from backend.agents.writer.writer_agent import WriterAgent
-# from backend.agents.verifier_agent import VerifierAgent
-from backend.agents.orchestrator.workflow import WorkflowManager
+from backend.agents.writer.writer_agent import WriterAgent
+from backend.agents.verifier_agent import VerifierAgent
+from backend.agents.orchestrator.workflow import WorkflowManager, WorkflowStage
 from backend.models.code_component import CodeComponent
 from backend.models.documentation import Documentation
 from backend.utils.logger import get_logger
@@ -30,6 +30,8 @@ class Orchestrator:
         # Initialize agents
         self.reader = ReaderAgent()
         self.searcher = SearcherAgent()
+        self.writer = WriterAgent()
+        self.verifier = VerifierAgent()
         
         # Workflow manager
         self.workflow = WorkflowManager()
@@ -56,6 +58,13 @@ class Orchestrator:
 
         documented_components = []
         component_map = {c.id: c for c in components}  # For dependency lookup
+        
+        # FIX 1: Initialize searcher with repository data
+        try:
+            self.searcher.set_repository_data(components)
+            self.logger.info("Searcher initialized with repository data")
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize searcher with repository data: {e}")
 
         for idx, component in enumerate(components):
             self.logger.info(
@@ -103,6 +112,7 @@ class Orchestrator:
         """
         Process a single component through iterative Reader-Searcher loop,
         where Reader re-evaluates after Searcher provides context.
+        Then generates documentation with Writer and optionally verifies with Verifier.
         """
         # Use passed project_dag, with fallback to instance variable
         dag = project_dag or self.project_dag
@@ -120,9 +130,10 @@ class Orchestrator:
             }
         )
         
-        max_iterations = 10
+        max_iterations = 3  # Reduced from 10
         last_internal_requests = None
         last_external_requests = None
+        empty_results_count = 0
 
         for iteration in range(max_iterations):
             # 1. Reader agent - pass accumulated context
@@ -160,6 +171,17 @@ class Orchestrator:
             searcher_output = searcher_result.output
             context.add_result('searcher', searcher_output)
             
+            # FIX 2: Check if Searcher returned nothing
+            if (len(searcher_output.dependency_contexts) == 0 and
+                len(searcher_output.reference_contexts) == 0 and
+                len(searcher_output.external_contexts) == 0):
+                empty_results_count += 1
+                if empty_results_count >= 2:
+                    self.logger.info("Searcher returned empty results twice; stopping.")
+                    break
+            else:
+                empty_results_count = 0
+    
             # 3. Add Searcher's findings to accumulated context for Reader's next iteration
             context.metadata['accumulated_context']['internal'].extend([
                 {
@@ -197,12 +219,52 @@ class Orchestrator:
                 f"{len(searcher_output.external_contexts)} external contexts"
             )
 
-        print(f"ReaderOutput for {component.id}: {reader_output}")
         self.logger.info(f"Reader-Searcher loop completed for {component.name} after {iteration + 1} iterations")
         
-        # Return reader output as documentation placeholder
-        return reader_output
+        # 4. Writer agent - generates comprehensive documentation
+        self.logger.info(f"Writer generating documentation for {component.name}")
+        writer_result = self.writer.execute(context)
+        if not writer_result.is_success():
+            self.logger.warning(f"Writer failed: {writer_result.error}")
+            # Create fallback Documentation instead of returning reader_output
+            return self._create_fallback_documentation(component)
+        
+        writer_output = writer_result.output
+        context.add_result('writer', writer_output)
+        
+        self.logger.info(f"Documentation generated: {len(writer_output.docstring)} chars")
+        
+        # 5. Verifier agent (optional) - validates and improves documentation
+        if self.workflow.is_stage_required(WorkflowStage.VERIFY):
+            self.logger.info(f"Verifier validating documentation for {component.name}")
+            verifier_result = self.verifier.execute(context)
+            if verifier_result.is_success():
+                verifier_output = verifier_result.output
+                context.add_result('verifier', verifier_output)
+                # Use improved documentation if available
+                if hasattr(verifier_output, 'improved_documentation') and verifier_output.improved_documentation:
+                    writer_output = verifier_output.improved_documentation
+                    self.logger.info(f"Using improved documentation from Verifier")
+            else:
+                self.logger.warning(f"Verifier failed: {verifier_result.error}")
+        
+        return writer_output
 
+    def _create_fallback_documentation(self, component: CodeComponent) -> Documentation:
+        """
+        Create a fallback Documentation object in case of Writer failure
+        """
+        self.logger.info(f"Creating fallback documentation for {component.name}")
+        return Documentation(
+            id=f"fallback-{component.id}",
+            name=f"Fallback Documentation for {component.name}",
+            component_id=component.id,
+            docstring="Fallback documentation due to Writer failure.",
+            source="orchestrator",
+            type=component.type,
+            created_at=datetime.now(),
+            updated_at=datetime.now()
+        )
     
     def get_statistics(self) -> Dict[str, Any]:
         """Get orchestrator statistics"""
