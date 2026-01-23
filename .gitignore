@@ -2,6 +2,9 @@
 venv/
 env/
 .Python
+.env
+.env.local
+*.env
 
 # Cache / bytecode
 __pycache__/

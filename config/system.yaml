@@ -58,6 +58,6 @@ cache:
   ttl: 86400  # 24 hours
   
 performance:
-  max_workers: 4
-  batch_size: 10
-  memory_limit: "4GB"
+  max_workers: 16
+  batch_size: 32
+  memory_limit: "15GB"
