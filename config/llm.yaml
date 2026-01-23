@@ -49,17 +49,39 @@ providers:
 
   local:
     enabled: true
-    api_base_url: "http://localhost:11434/v1/chat/completions"
+    api_base_url: "http://localhost:11434"  # Ollama native API
     api_key_env: "DUMMY"
+    timeout: 300
     models:
       default: "qwen2.5:7b"
-    default_params:
-      temperature: 0.7
-      max_tokens: 4000
-    rate_limits:
-      tier_1:
-        requests: 500
-        tokens: 200000
+      qwen2.5-7b:
+        name: "Qwen 2.5 7B"
+        model_id: "qwen2.5:7b"
+        context_window: 32768
+        max_output_tokens: 8192
+        capabilities:
+          - text_generation
+          - code_analysis
+  
+  default_params:
+    temperature: 0.7
+    max_tokens: 4000
+    num_gpu: -1              # CHANGE: -1 = offload ALL layers to GPU
+    num_ctx: 16384           # INCREASE: Use full context window
+    num_batch: 512           # REDUCE: 512 -> 256 for RTX 4070
+    num_thread: 16           # INCREASE: Match your CPU cores (or get from os.cpu_count())
+    num_parallel: 2          # ADD: Allow 2 parallel requests
+  
+  gpu_config:
+    gpu_layers: -1           # All layers to GPU
+    main_gpu: 0
+    low_vram: false          # RTX 4070 has 12GB, sufficient for 7B
+    memory_fraction: 0.95    # USE 95% of GPU VRAM
+  
+  rate_limits:
+    tier_1:
+      requests: 1000
+      tokens: 500000
 
   gemini:
     enabled: false
@@ -106,7 +128,7 @@ providers:
       temperature: 0.7
       max_tokens: 2000
 
-# Agent-specific LLM assignments — use OpenRouter provider
+# Agent-specific LLM assignments — use local Ollama
 agent_models:
   reader:
     provider: "local"
@@ -114,6 +136,10 @@ agent_models:
     params:
       temperature: 0.3
       max_tokens: 8000
+      num_ctx: 20480         # INCREASE: Reader needs context
+      num_batch: 512         # REDUCE from 512
+      num_gpu: -1            # ADD: Force GPU offload
+      num_parallel: 2        # ADD
 
   searcher:
     provider: "local"
@@ -121,6 +147,10 @@ agent_models:
     params:
       temperature: 0.5
       max_tokens: 2000
+      num_ctx: 8192          # Keep reasonable
+      num_batch: 512         # REDUCE from 512
+      num_gpu: -1            # ADD
+      num_parallel: 2        # ADD
 
   writer:
     provider: "local"
@@ -128,6 +158,10 @@ agent_models:
     params:
       temperature: 0.7
       max_tokens: 4000
+      num_ctx: 12288         # INCREASE
+      num_batch: 512         # REDUCE from 512
+      num_gpu: -1            # ADD
+      num_parallel: 2        # ADD
 
   verifier:
     provider: "local"
@@ -135,6 +169,10 @@ agent_models:
     params:
       temperature: 0.2
       max_tokens: 4000
+      num_ctx: 12288
+      num_batch: 512         # REDUCE from 512
+      num_gpu: -1            # ADD
+      num_parallel: 2        # ADD
 
   evaluator:
     provider: "local"
@@ -142,3 +180,7 @@ agent_models:
     params:
       temperature: 0.4
       max_tokens: 8000
+      num_ctx: 20480         # INCREASE
+      num_batch: 512         # REDUCE from 512
+      num_gpu: -1            # ADD
+      num_parallel: 2        # ADD
