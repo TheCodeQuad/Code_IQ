@@ -20,6 +20,8 @@ from navigator.core.topo import (
 from agents.orchestrator.orchestrator import Orchestrator
 from backend.pipeline.pipeline import run_pipeline
 from backend.utils.file_handler import FileHandler
+from backend.utils.logger import get_logger
+logger = get_logger(__name__)
 # ============================================================================
 # FASTAPI APP SETUP
 # ============================================================================
@@ -302,6 +304,21 @@ def analyze_repo(req: AnalyzeRequest):
         topo_order = result["topological_order"]
         dfs_order = result["dfs_order"]
         docs = result["documentation"]
+
+        # Save writer output (documentation) to disk
+        writer_output_path = PROJECT_ROOT / "data" / "intermediate" / "agent_output" / "writer" / f"{repo_name}_writer_output.json"
+        try:
+            serialized_docs = {}
+            for doc in docs:
+                if hasattr(doc, 'to_dict'):
+                    serialized_docs[doc.component_id] = doc.to_dict()
+                else:
+                    serialized_docs[doc.component_id] = FileHandler.serialize_component(doc)
+            
+            FileHandler.write_json(writer_output_path, serialized_docs)
+            logger.info(f"Writer output saved to {writer_output_path}")
+        except Exception as e:
+            logger.warning(f"Failed to save writer output: {e}")
 
         # Prepare component data for response
         components_dict = {}

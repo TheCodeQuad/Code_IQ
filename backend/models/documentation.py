@@ -124,7 +124,12 @@ class Documentation:
     
     def _format_google(self) -> str:
         """Format as Google-style docstring"""
-        lines = [self.summary, ""]
+        # FIX: Prepend [Async] if component is async
+        summary = self.summary
+        if self.metadata.get('is_async'):
+            summary = f"[Async] {summary}"
+            
+        lines = [summary, ""]
         
         if self.description:
             lines.extend([self.description, ""])
@@ -146,6 +151,13 @@ class Documentation:
             lines.append("Raises:")
             for exc in self.raises_doc:
                 lines.append(f"    {exc['exception']}: {exc['description']}")
+            lines.append("")
+
+        if self.attributes_doc:  # NEW: Actual printing logic
+            lines.append("Attributes:")
+            for attr in self.attributes_doc:
+                type_str = f" ({attr['type']})" if attr.get('type') else ""
+                lines.append(f"    {attr['name']}{type_str}: {attr['description']}")
             lines.append("")
         
         if self.examples:

@@ -64,19 +64,22 @@ class SearcherAgent(BaseAgent):
     
     def __init__(self):
         super().__init__("searcher")
-        
+    
         self.knowledge_base_path = Path(
             self.config.get('system.paths.knowledge_base', 'data/knowledge_base')
         )
         self.file_handler = FileHandler()
-        
+    
         # Load knowledge base
         self.functions_kb = self._load_knowledge_base('functions.json')
         self.classes_kb = self._load_knowledge_base('classes.json')
         self.modules_kb = self._load_knowledge_base('modules.json')
-        
+    
         # Cache for component lookup
         self.component_cache = {}
+    
+        # FIX 3: Add summary cache
+        self.summary_cache = {}
 
     def set_repository_data(
         self,
@@ -216,26 +219,21 @@ class SearcherAgent(BaseAgent):
         request: InternalRequest,
         context: AgentContext
     ) -> Optional[DependencyContext]:
-        """
-        Search for dependency information
-        
-        Args:
-            request: Internal dependency request
-            context: Agent context
-            
-        Returns:
-            DependencyContext or None
-        """
+        """Search for dependency information"""
         try:
-            # Try to find in previous results (if available)
             component = self._find_component(request.component_id, context)
             
             if not component:
                 self.logger.warning(f"Dependency not found: {request.component_id}")
                 return None
             
-            # Generate summary using LLM
-            summary = self._generate_dependency_summary(component)
+            # FIX: Use existing docstring or signature instead of LLM call
+            # Local dependencies don't need LLM processing
+            if component.existing_docstring:
+                summary = component.existing_docstring[:200]
+            else:
+                # Fallback to signature only, no LLM
+                summary = f"{component.name}: {component.signature}"
             
             return DependencyContext(
                 component_id=component.id,
@@ -268,16 +266,17 @@ class SearcherAgent(BaseAgent):
         try:
             component = context.component
             
-            # Find where this component is called
+            # Find where this component is actually called
             usage_examples = self._find_usage_examples(component, context)
             call_sites = self._find_call_sites(component, context)
             
             if not usage_examples and not call_sites:
-                self.logger.warning(f"No references found for: {component.name}")
+                self.logger.warning(f"No actual references found for: {component.name}")
+                # This is OK - some components may not be called
                 return None
             
-            # Generate usage summary
-            usage_summary = self._generate_usage_summary(
+            # Generate summary from actual usage
+            usage_summary = self._generate_usage_summary_from_data(
                 component,
                 usage_examples,
                 call_sites
@@ -335,7 +334,21 @@ class SearcherAgent(BaseAgent):
             return None
     
     def _generate_dependency_summary(self, component: CodeComponent) -> str:
-        """Generate summary of a dependency"""
+        """Generate summary of a dependency (with caching)"""
+        cache_key = f"dep_summary:{component.id}"
+        
+        # Check cache first
+        if cache_key in self.summary_cache:
+            self.logger.debug(f"Using cached summary for {component.name}")
+            return self.summary_cache[cache_key]
+        
+        # Use existing docstring if available
+        if component.existing_docstring:
+            summary = component.existing_docstring[:200]
+            self.summary_cache[cache_key] = summary
+            return summary
+        
+        # Only call LLM if no docstring and not cached
         prompt = f"""Provide a brief summary of what this code component does:
 
 Component: {component.name}
@@ -355,10 +368,14 @@ Provide a 1-2 sentence summary focusing on its purpose and main functionality.""
                 temperature=0.3,
                 max_tokens=200
             )
-            return summary.strip()
+            summary = summary.strip()
+            self.summary_cache[cache_key] = summary
+            return summary
         except Exception as e:
             self.logger.warning(f"Failed to generate dependency summary: {e}")
-            return f"{component.name}: {component.signature}"
+            fallback = f"{component.name}: {component.signature}"
+            self.summary_cache[cache_key] = fallback
+            return fallback
     
     def _generate_usage_summary(
         self,
@@ -504,54 +521,120 @@ Provide:
         if component_id in self.component_cache:
             return self.component_cache[component_id]
         
-        # Try to find in metadata
-        previous_docs = context.metadata.get('previous_docs', [])
-        
-        # This would need access to the full component list
-        # For now, return None - in real implementation, this would
-        # access the navigator results
+        # Try to find in component map (from repository data)
+        if hasattr(self, 'component_map') and component_id in self.component_map:
+            component = self.component_map[component_id]
+            self.component_cache[component_id] = component
+            return component
         
         return None
     
     def _extract_usage_pattern(self, component: CodeComponent) -> str:
-        """Extract typical usage pattern"""
-        if component.type.value == 'function':
-            params = ', '.join(p.name for p in component.parameters[:3])
-            if len(component.parameters) > 3:
-                params += ', ...'
-            return f"{component.name}({params})"
+        """Extract usage pattern from signature"""
+        # Just use the signature directly - it's already good!
+        if component.signature:
+            return component.signature
         
-        return component.signature
-    
-    def _find_usage_examples(
-        self,
-        component: CodeComponent,
-        context: AgentContext
-    ) -> List[str]:
-        """Find usage examples for component"""
-        examples = []
-        
-        # In real implementation, this would search through
-        # the codebase for calls to this component
-        
-        # For now, create synthetic examples based on signature
-        if component.type.value == 'function':
-            example = f"result = {component.name}("
-            example += ", ".join(f"arg{i}" for i in range(len(component.parameters)))
-            example += ")"
-            examples.append(example)
-        
-        return examples
+        # Fallback
+        params = ', '.join(p.name for p in (component.parameters or [])[:3])
+        if len(component.parameters or []) > 3:
+            params += ', ...'
+        return f"{component.name}({params})"
     
     def _find_call_sites(
         self,
         component: CodeComponent,
         context: AgentContext
     ) -> List[Dict[str, Any]]:
-        """Find where component is called"""
+        """Find actual call sites using reverse call graph"""
         call_sites = []
         
-        # In real implementation, this would use the DAG/IR
-        # to find all locations where this component is called
+        # Use searcher's reverse_call_graph (built from component.calls)
+        if not hasattr(self, 'reverse_call_graph'):
+            return []
         
-        return call_sites
+        # Get all components that call this one
+        calling_components = self.reverse_call_graph.get(component.id, [])
+        
+        for caller_id in calling_components:
+            caller = self.component_map.get(caller_id)
+            if not caller:
+                continue
+            
+            # Find the actual call line in source code
+            source = caller.source_code
+            call_lines = []
+            
+            for i, line in enumerate(source.split('\n')):
+                if component.name in line and '(' in line:
+                    call_lines.append({
+                        'line_num': i + 1,
+                        'source': line.strip(),
+                        'context': f"Called in {caller.name}()"
+                    })
+            
+            if call_lines:
+                call_sites.append({
+                    'caller_id': caller_id,
+                    'caller_name': caller.name,
+                    'call_count': len(call_lines),
+                    'call_lines': call_lines[:2],  # Top 2 examples
+                    'call_context': caller.signature
+                })
+        
+        return call_sites[:5]  # Top 5 call sites
+    
+    def _find_usage_examples(
+        self,
+        component: CodeComponent,
+        context: AgentContext
+    ) -> List[str]:
+        """Find actual usage examples from codebase"""
+        examples = []
+        
+        if not hasattr(self, 'reverse_call_graph'):
+            return []
+        
+        # Get callers
+        calling_components = self.reverse_call_graph.get(component.id, [])
+        
+        for caller_id in calling_components[:3]:  # Top 3 callers
+            caller = self.component_map.get(caller_id)
+            if not caller:
+                continue
+            
+            # Extract actual call from source
+            for line in caller.source_code.split('\n'):
+                if component.name in line and '(' in line:
+                    # Extract just the function call
+                    import re
+                    match = re.search(rf'{re.escape(component.name)}\([^)]*\)', line)
+                    if match:
+                        examples.append(match.group(0))
+        
+        # If no real examples found, generate synthetic one
+        if not examples:
+            params = ', '.join(f'arg{i}' for i in range(len(component.parameters or [])))
+            examples.append(f"{component.name}({params})")
+        
+        return examples[:3]
+    
+    def _generate_usage_summary_from_data(
+        self,
+        component: CodeComponent,
+        usage_examples: List[str],
+        call_sites: List[Dict[str, Any]]
+    ) -> str:
+        """Generate usage summary from actual codebase data"""
+        if not usage_examples and not call_sites:
+            return f"No usage information found for {component.name}"
+        
+        summary = f"{component.name} is called {len(call_sites)} times in the codebase"
+        
+        if call_sites:
+            callers = [cs['caller_name'] for cs in call_sites]
+            summary += f" by: {', '.join(callers[:3])}"
+            if len(callers) > 3:
+                summary += f" and {len(callers) - 3} other components"
+        
+        return summary + "."
