@@ -1,9 +1,11 @@
 """
 Main Orchestrator
-Coordinates the multi-agent workflow
+Coordinates the multi-agent workflow with parallel processing support
 """
 from typing import List, Dict, Any, Optional
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 from backend.agents.base_agent import AgentContext, AgentResult, AgentStatus
 from backend.agents.reader_agent import ReaderAgent
@@ -21,6 +23,7 @@ logger = get_logger(__name__)
 class Orchestrator:
     """
     Main orchestrator that coordinates all agents
+    Supports parallel processing for better GPU utilization
     """
     
     def __init__(self, project_dag=None):
@@ -44,28 +47,60 @@ class Orchestrator:
         # Store project DAG for use in components
         self.project_dag = project_dag or set()
         
-        self.logger.info("Orchestrator initialized")
+        # Thread safety for stats
+        self._stats_lock = threading.Lock()
+        
+        # Parallel processing config
+        self._max_workers = self.config.get('system.performance.max_workers', 4)
+        self._parallel_enabled = self.config.get('system.pipeline.parallel_processing', False)
+        
+        self.logger.info(f"Orchestrator initialized (parallel={self._parallel_enabled}, workers={self._max_workers})")
     
     def process_components(
         self,
         components: List[CodeComponent]
     ) -> List[Documentation]:
         """
-        Process all components through the agent pipeline
+        Process all components through the agent pipeline.
+        Supports parallel processing when enabled in config.
         """
-        self.logger.info(f"Processing {len(components)} components")
+        self.logger.info(f"Processing {len(components)} components (parallel={self._parallel_enabled})")
         start_time = datetime.now()
 
-        documented_components = []
         component_map = {c.id: c for c in components}  # For dependency lookup
         
-        # FIX 1: Initialize searcher with repository data
+        # Initialize searcher with repository data
         try:
             self.searcher.set_repository_data(components)
             self.logger.info("Searcher initialized with repository data")
         except Exception as e:
             self.logger.warning(f"Failed to initialize searcher with repository data: {e}")
 
+        # Choose processing mode
+        if self._parallel_enabled and len(components) > 1:
+            documented_components = self._process_parallel(components, component_map)
+        else:
+            documented_components = self._process_sequential(components, component_map)
+        
+        elapsed_time = (datetime.now() - start_time).total_seconds()
+        
+        self.logger.info(
+            f"Documentation generation complete: "
+            f"{self.successful_docs} succeeded, "
+            f"{self.failed_docs} failed, "
+            f"Time: {elapsed_time:.2f}s"
+        )
+        
+        return documented_components
+    
+    def _process_sequential(
+        self,
+        components: List[CodeComponent],
+        component_map: Dict[str, CodeComponent]
+    ) -> List[Documentation]:
+        """Process components sequentially (original behavior)"""
+        documented_components = []
+        
         for idx, component in enumerate(components):
             self.logger.info(
                 f"Processing component {idx + 1}/{len(components)}: "
@@ -73,7 +108,7 @@ class Orchestrator:
             )
 
             try:
-                doc = self.process_single_component(component, documented_components, component_map,self.project_dag)
+                doc = self.process_single_component(component, documented_components, component_map, self.project_dag)
                 if doc:
                     documented_components.append(doc)
                     self.successful_docs += 1
@@ -90,17 +125,85 @@ class Orchestrator:
             
             self.total_components_processed += 1
         
-        elapsed_time = (datetime.now() - start_time).total_seconds()
+        return documented_components
+    
+    def _process_parallel(
+        self,
+        components: List[CodeComponent],
+        component_map: Dict[str, CodeComponent]
+    ) -> List[Documentation]:
+        """
+        Process components in parallel batches for better GPU utilization.
+        Uses ThreadPoolExecutor to submit multiple LLM requests concurrently.
+        """
+        documented_components = []
+        batch_size = min(self._max_workers, 4)  # Limit batch size for GPU memory
         
-        self.logger.info(
-            f"Documentation generation complete: "
-            f"{self.successful_docs} succeeded, "
-            f"{self.failed_docs} failed, "
-            f"Time: {elapsed_time:.2f}s"
-        )
+        self.logger.info(f"Parallel processing with batch_size={batch_size}, max_workers={self._max_workers}")
+        
+        # Process in batches to avoid overwhelming the GPU
+        for batch_start in range(0, len(components), batch_size):
+            batch = components[batch_start:batch_start + batch_size]
+            batch_docs = []
+            
+            self.logger.info(
+                f"Processing batch {batch_start // batch_size + 1}/"
+                f"{(len(components) + batch_size - 1) // batch_size}: "
+                f"{len(batch)} components"
+            )
+            
+            with ThreadPoolExecutor(max_workers=len(batch)) as executor:
+                # Submit all components in batch
+                future_to_component = {
+                    executor.submit(
+                        self._process_component_thread_safe,
+                        component,
+                        documented_components.copy(),  # Snapshot for thread safety
+                        component_map
+                    ): component
+                    for component in batch
+                }
+                
+                # Collect results as they complete
+                for future in as_completed(future_to_component):
+                    component = future_to_component[future]
+                    try:
+                        doc = future.result()
+                        if doc:
+                            batch_docs.append(doc)
+                            with self._stats_lock:
+                                self.successful_docs += 1
+                        else:
+                            with self._stats_lock:
+                                self.failed_docs += 1
+                            self.logger.warning(f"Failed to document {component.name}")
+                    except Exception as e:
+                        self.logger.error(f"Error processing {component.name}: {e}", exc_info=True)
+                        with self._stats_lock:
+                            self.failed_docs += 1
+                    
+                    with self._stats_lock:
+                        self.total_components_processed += 1
+            
+            # Add batch results to main list
+            documented_components.extend(batch_docs)
         
         return documented_components
     
+    def _process_component_thread_safe(
+        self,
+        component: CodeComponent,
+        previous_docs: List[Documentation],
+        component_map: Dict[str, CodeComponent]
+    ) -> Optional[Documentation]:
+        """Thread-safe wrapper for process_single_component"""
+        try:
+            return self.process_single_component(
+                component, previous_docs, component_map, self.project_dag
+            )
+        except Exception as e:
+            self.logger.error(f"Thread error for {component.name}: {e}")
+            return None
 
     def process_single_component(
         self,

@@ -1,13 +1,15 @@
 """
-LLM Client using llm.yaml config with Rate Limiting
+LLM Client using llm.yaml config with Rate Limiting and Response Caching
 Supports: OpenRouter, Ollama (local), and other OpenAI-compatible APIs
 """
 import os
+import hashlib
 import requests
 from requests.exceptions import RequestException
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 import time
+from functools import lru_cache
 from backend.utils.logger import get_logger
 from backend.utils.config_handler import get_config
 import psutil
@@ -58,7 +60,7 @@ class RateLimiter:
         self.last_request_time = time.time()
 
 class LLMClient:
-    """LLM Client using llm.yaml config with Rate Limiting"""
+    """LLM Client using llm.yaml config with Rate Limiting and Response Caching"""
 
     def __init__(self):
         self.config = get_config()
@@ -92,6 +94,12 @@ class LLMClient:
         max_requests = rate_limit_config.get('tier_1', {}).get('requests', 50)
         self.rate_limiter = RateLimiter(max_requests_per_minute=max_requests)
         
+        # Response cache for repeated prompts (reduces redundant LLM calls)
+        self._response_cache: Dict[str, LLMResponse] = {}
+        self._cache_enabled = self.config.get('system.cache.enabled', True)
+        self._cache_max_size = 100  # Max cached responses
+        self._cache_hits = 0
+        
         # Stats tracking
         self.request_count = 0
         self.total_tokens = 0
@@ -100,6 +108,29 @@ class LLMClient:
         logger.info(f"LLM Client initialized with provider: {self.default_provider}, model: {self.default_model}")
         logger.info(f"CPU cores detected: {cpu_count}, using {self.default_params.get('num_thread')} threads")
         logger.info(f"GPU config: num_gpu={self.default_params.get('num_gpu')}, num_batch={self.default_params.get('num_batch')}")
+
+    def _get_cache_key(self, prompt: str, system_prompt: str, model: str, temperature: float) -> str:
+        """Generate a cache key from request parameters"""
+        key_data = f"{prompt}|{system_prompt}|{model}|{temperature}"
+        return hashlib.md5(key_data.encode()).hexdigest()
+
+    def _get_cached_response(self, cache_key: str) -> Optional[LLMResponse]:
+        """Get cached response if available"""
+        if self._cache_enabled and cache_key in self._response_cache:
+            self._cache_hits += 1
+            logger.debug(f"Cache hit (total: {self._cache_hits})")
+            return self._response_cache[cache_key]
+        return None
+
+    def _cache_response(self, cache_key: str, response: LLMResponse):
+        """Cache a response for future use"""
+        if not self._cache_enabled:
+            return
+        # Simple LRU: remove oldest if at capacity
+        if len(self._response_cache) >= self._cache_max_size:
+            oldest_key = next(iter(self._response_cache))
+            del self._response_cache[oldest_key]
+        self._response_cache[cache_key] = response
 
     def _is_ollama_provider(self, provider: str = None) -> bool:
         """Check if using local Ollama provider"""
@@ -267,7 +298,22 @@ class LLMClient:
         )
 
     def generate(self, request: LLMRequest, agent_params: Dict = None) -> LLMResponse:
-        """Generate response from LLM with rate limiting and retry logic"""
+        """Generate response from LLM with rate limiting, caching, and retry logic"""
+        
+        # Check cache first (only for deterministic requests with low temperature)
+        if request.temperature <= 0.3:
+            cache_key = self._get_cache_key(
+                request.prompt,
+                request.system_prompt or "",
+                request.model or self.default_model,
+                request.temperature
+            )
+            cached = self._get_cached_response(cache_key)
+            if cached:
+                return cached
+        else:
+            cache_key = None
+        
         max_retries = 4
         base_backoff = 2
 
@@ -277,9 +323,15 @@ class LLMClient:
             try:
                 # Route to appropriate provider
                 if self._is_ollama_provider():
-                    return self._generate_ollama(request, agent_params)
+                    response = self._generate_ollama(request, agent_params)
                 else:
-                    return self._generate_openai_compatible(request)
+                    response = self._generate_openai_compatible(request)
+                
+                # Cache the response for future use
+                if cache_key:
+                    self._cache_response(cache_key, response)
+                
+                return response
                     
             except requests.exceptions.HTTPError as e:
                 if hasattr(e, 'response') and e.response.status_code == 429 and attempt < max_retries - 1:
@@ -351,7 +403,7 @@ class LLMClient:
         return (input_tokens / 1000 * rates['input']) + (output_tokens / 1000 * rates['output'])
 
     def get_stats(self) -> Dict[str, Any]:
-        """Get usage statistics"""
+        """Get usage statistics including cache performance"""
         return {
             'total_requests': self.request_count,
             'total_tokens': self.total_tokens,
@@ -359,7 +411,15 @@ class LLMClient:
             'average_tokens_per_request': round(self.total_tokens / max(self.request_count, 1), 2),
             'provider': self.default_provider,
             'model': self.default_model,
+            'cache_hits': self._cache_hits,
+            'cache_size': len(self._response_cache),
+            'cache_hit_rate': round(self._cache_hits / max(self.request_count + self._cache_hits, 1) * 100, 1),
         }
+    
+    def clear_cache(self):
+        """Clear the response cache"""
+        self._response_cache.clear()
+        logger.info("LLM response cache cleared")
 
 # Singleton instance
 _llm_client = None
