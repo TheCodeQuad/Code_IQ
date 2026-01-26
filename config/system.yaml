@@ -10,7 +10,7 @@ system:
       - multi_agent_system
       - evaluator
     
-    parallel_processing: false
+    parallel_processing: true  # Enable parallel component processing for GPU utilization
     checkpoint_enabled: true
     resume_on_failure: true
 
@@ -37,7 +37,7 @@ llm:
   max_tokens: 4000
   
 logging:
-  level: "INFO"
+  level: "WARNING"  # Changed from INFO to reduce Python overhead
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
   file: "logs/system.log"
   module_specific:

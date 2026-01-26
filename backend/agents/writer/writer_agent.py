@@ -377,128 +377,85 @@ CRITICAL:
 """
 
         # ========== BASE PROMPT CONSTRUCTION ==========
-        async_prefix = "[ASYNCHRONOUS] " if code_facts.get('is_async') else ""
+        async_prefix = "[ASYNC] " if code_facts.get('is_async') else ""
         
-        prompt = f"""Generate COMPLETE documentation for this {component.type.value}: {component.name}
+        # OPTIMIZATION: For simple functions, use minimal prompt
+        is_simple = (
+            component.lines_of_code <= 15 and
+            len(component.parameters or []) <= 3 and
+            not code_facts.get('raises') and
+            not code_facts.get('modifies_global_state')
+        )
+        
+        # Truncate source code for large functions to reduce prefill time
+        source_code = component.source_code
+        if len(source_code) > 2000 and not is_simple:
+            source_code = source_code[:1500] + "\n# ... (truncated) ...\n" + source_code[-400:]
+        
+        prompt = f"""Document this {component.type.value}: {component.name}
 {async_prefix}
-
-=== COMPONENT ===
-Name: {component.name}
-Type: {component.type.value}
 Signature: {component.signature or 'N/A'}
 
-Code:
 ```{component.language}
-{component.source_code}
+{source_code}
 ```
-
 """
+
+        # ========== SIMPLE FUNCTION: MINIMAL PROMPT ==========
+        if is_simple and component.type in [ComponentType.FUNCTION, ComponentType.METHOD]:
+            # Compact JSON schema for simple functions
+            prompt += f"""
+Return: {code_facts.get('return_type', 'any')}
+Output JSON: {{"summary": "verb phrase", "description": "how it works", "parameters": [...], "returns": {{"type": "{code_facts.get('return_type', 'any')}", "description": "..."}}}}
+"""
+            return prompt
 
         # ========== CLASS SPECIFIC LOGIC ==========
         if component.type == ComponentType.CLASS:
             is_data_class = not component.methods or len(component.methods) <= 1
             prompt += f"\nCategory: {'Data Model' if is_data_class else 'Service/Logic Class'}\n"
             
-            # Build attributes section
-            attributes_section = "=== CLASS ATTRIBUTES ===\n"
+            # Build attributes section - only if attributes exist
             if code_facts.get('attributes'):
-                for attr in code_facts['attributes']:
-                    attr_type = attr.get('type', 'any')
-                    attr_name = attr.get('name', '')
-                    prompt += f"- {attr_name} ({attr_type})\n"
-            else:
-                prompt += "No direct attributes found; derive from constructor/source.\n"
-            
-            prompt += "\nRULES:\n- Focus on the responsibility and primary data held.\n"
+                prompt += "Attributes: "
+                prompt += ", ".join([f"{a.get('name')}:{a.get('type', 'any')}" for a in code_facts['attributes'][:5]])
+                prompt += "\n"
 
-        # ========== CODE FACTS (ALL TYPES) ==========
+        # ========== CODE FACTS (ONLY NON-EMPTY) ==========
+        facts = []
+        if code_facts.get('modifies_global_state'):
+            facts.append(f"Modifies: {', '.join(code_facts['modifies_global_state'][:3])}")
+        if code_facts.get('operations'):
+            facts.append(f"Ops: {', '.join(code_facts['operations'][:3])}")
+        if code_facts.get('control_flow') and code_facts['control_flow'] != ['linear']:
+            facts.append(f"Flow: {', '.join(code_facts['control_flow'])}")
+        
+        if facts:
+            prompt += "\nFacts: " + " | ".join(facts) + "\n"
+
+        # Add parameter types (compact format)
+        if code_facts.get('parameters'):
+            param_types = [f"{p['name']}:{p['type']}" for p in code_facts['parameters'][:6]]
+            prompt += f"\nParams: {', '.join(param_types)}\n"
+
+        # Add exceptions (only if present)
+        if code_facts.get('raises'):
+            exc_list = [f"{e['exception']}" for e in code_facts['raises'][:3]]
+            prompt += f"Raises: {', '.join(exc_list)}\n"
+
+        # Compact JSON output format
         prompt += f"""
-=== CODE FACTS ===
-Global State:
-- Modifies: {', '.join(code_facts.get('modifies_global_state', [])) or 'none'}
-- Reads: {', '.join(code_facts.get('reads_global_state', [])) or 'none'}
+Return type: {code_facts.get('return_type', 'any')}
 
-Operations: {', '.join(code_facts.get('operations', [])) or 'none'}
-Data Structures: {', '.join(code_facts.get('data_structures_used', [])) or 'none'}
-Control Flow: {', '.join(code_facts.get('control_flow', [])) or 'linear'}
-Returns Captured: {code_facts.get('actual_returns', [])[:2] or 'none'}
-"""
-
-        # Add parameter usage
-        if code_facts.get('parameter_usage'):
-            prompt += "\nParameters Usage context:\n"
-            for name, usage in code_facts['parameter_usage'].items():
-                param = next((p for p in component.parameters if p.name == name), None)
-                type_hint = param.type_hint if param else 'unknown'
-                prompt += f"  - {name} ({type_hint}): {usage.get('usage_description', 'input')}\n"
-
-        # Add exceptions, invariants, roles etc. (Rest of builders)
-        if code_facts['raises']:
-            prompt += "\nExceptions:\n"
-            for exc in code_facts['raises']:
-                prompt += f"  - {exc['exception']}: {exc['condition']}\n"
-
-        # Add invariants
-        if code_facts.get('invariants'):
-            prompt += "\n=== INVARIANTS ===\n"
-            for inv in code_facts['invariants']:
-                prompt += f"  - {inv}\n"
-
-        # Add role-specific guidance
-        if code_facts.get('roles'):
-            prompt += f"\n=== ROLES ===\n{', '.join(code_facts['roles'])}\n"
-            prompt += "Document state-machine behavior and coordination if lifecycle_manager.\n"
-
-        # Add usage examples
-        if context.get('usage_examples'):
-            prompt += "\n=== REAL USAGE ===\n"
-            for ex in context['usage_examples'][:2]:
-                prompt += f"```\n{ex[:200]}\n```\n"
-
-        # FIX: The prompt now tells the LLM EXACTLY which types to use.
-        params_instruction = ""
-        # Check for existence and then length to avoid KeyError
-        if code_facts.get('parameters'): 
-            params_instruction = "\n=== PARAMETER TYPE CONSTRAINTS (USE THESE EXACTLY) ===\n"
-            for p in code_facts['parameters']:
-                params_instruction += f"- {p['name']}: MUST use type '{p['type']}'\n"
-
-        # FIX: Standardized JSON output for all types including Classes
-        prompt += f"""
-{params_instruction}
-=== RETURN TYPE CONSTRAINT ===
-- MUST use type '{code_facts.get('return_type', 'any')}'
-
-=== OUTPUT FORMAT ===
-{{
-  "summary": "Start with active verb (e.g. 'Validates...'). Max 100 chars.",
-  "description": "How the component works internally. Mention variable names.",
-  "attributes": [
-    {{ "name": "attr_name", "type": "type", "description": "..." }}
-  ],
-  "parameters": [
-    {{ "name": "param_name", "type": "actual_type_here", "description": "..." }}
-  ],
-  "returns": {{ "type": "{code_facts.get('return_type', 'any')}", "description": "Semantic meaning" }},
-  "raises": [],
-  "notes": [],
-  "warnings": []
-}}
+Output JSON:
+{{"summary": "active verb phrase (max 100 chars)", "description": "implementation details", "parameters": [{{"name": "...", "type": "...", "description": "..."}}], "returns": {{"type": "{code_facts.get('return_type', 'any')}", "description": "..."}}, "raises": [], "notes": []}}
 """
         return prompt
 
     def _get_system_prompt(self) -> str:
-        """Updated System Prompt to fix clarity/repetition issues"""
-        return """You are a technical documentation expert. 
-
-CRITICAL FOR CLARITY SCORE:
-- NEVER start with "This function", "This class", "represents", "is a".
-- Start EVERY summary with a strong active verb (e.g., "Validates", "Calculates", "Synchronizes").
-- If a component is ASYNC, the summary MUST mention it (e.g., "Asynchronously fetches...").
-- DO NOT repeat the summary in the description. The summary is 'What', the description is 'How/Why'.
-- Use domain-specific terms found in function calls.
-
-Output strictly valid JSON."""
+        """Concise system prompt for faster processing"""
+        return """Technical documentation expert. Output valid JSON only.
+Rules: Start summary with active verb. No "This function/class". Summary=What, Description=How."""
 
     def _parse_response(
         self,
