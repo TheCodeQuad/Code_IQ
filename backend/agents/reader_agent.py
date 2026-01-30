@@ -67,42 +67,50 @@ class ReaderAgent(BaseAgent):
     
     def process(self, context: AgentContext) -> AgentResult:
         """
-        Process component and determine information needs
+        Process component and determine information needs.
+        Uses Navigator's pre-extracted metadata instead of redundant analysis.
         """
         try:
             component = context.component
             
-            self.logger.info(f"Analyzing component: {component.name}")
+            self.logger.info(f"Reader analyzing: {component.name}")
             
-            # Step 1: Analyze complexity
-            complexity = self._analyze_complexity(component)
+            # Get Navigator's extracted control flow and metadata
+            control_flow = component.metadata.get('control_flow', {})
             
-            component.creates_threads = self._detect_threading(component)
-
-            # Step 2: Assess if additional context is needed
-            needs_context = self._needs_additional_context(component, complexity)
+            # Assess if additional context is needed
+            needs_context = self._assess_information_needs(component, control_flow)
             
-            # Step 3: Generate internal requests
+            # Generate requests based on identified needs
             internal_requests = []
+            external_requests = []
+            
             if needs_context:
                 internal_requests = self._generate_internal_requests(component)
             
-            # Step 4: Get project_dag from metadata and generate external requests
             project_dag = context.metadata.get('project_dag')
             external_requests = self._generate_external_requests(component, project_dag)
             
-            # Step 5: Create analysis summary
+            # Create human-readable summary
             summary = self._create_analysis_summary(
                 component,
-                complexity,
+                control_flow,
                 needs_context,
                 internal_requests,
                 external_requests
             )
             
+            # Build output
             output = ReaderOutput(
                 component_id=component.id,
-                complexity_assessment=complexity,
+                complexity_assessment={
+                    'complexity_level': self._get_complexity_level(component),
+                    'lines_of_code': component.lines_of_code,
+                    'is_async': control_flow.get('is_async', False),
+                    'has_loops': control_flow.get('has_loop', False),
+                    'num_dependencies': len(component.depends_on),
+                    'num_calls': len(component.calls),
+                },
                 needs_additional_context=needs_context,
                 internal_requests=internal_requests,
                 external_requests=external_requests,
@@ -110,23 +118,17 @@ class ReaderAgent(BaseAgent):
                 metadata={
                     'component_type': component.type,
                     'is_public': self._is_public(component),
-                    'has_docstring': bool(component.existing_docstring)
+                    'has_docstring': bool(component.existing_docstring),
+                    'is_async': control_flow.get('is_async', False),
+                    'has_threading': control_flow.get('has_concurrency', False),
                 }
             )
             
             self.logger.info(
-                f"Reader analysis complete: "
+                f"Reader complete: "
                 f"Needs context: {needs_context}, "
                 f"Internal requests: {len(internal_requests)}, "
                 f"External requests: {len(external_requests)}"
-            )
-            
-            # Step 5B: HARD SUFFICIENCY GATE - override LLM curiosity
-            internal_requests, external_requests = self._apply_hard_sufficiency_gate(
-                component,
-                complexity,
-                internal_requests,
-                external_requests
             )
             
             return AgentResult(
@@ -144,89 +146,55 @@ class ReaderAgent(BaseAgent):
                 error=str(e)
             )
     
-    def _analyze_complexity(self, component: CodeComponent) -> Dict[str, Any]:
-        """Analyze component complexity using IR metadata"""
+    def _get_complexity_level(self, component: CodeComponent) -> str:
+        """Determine complexity level based on Navigator's metadata."""
+        # Use Navigator's complexity if available, otherwise estimate
+        cyclomatic = component.complexity or 1
+        dependencies = len(component.depends_on)
+        loc = component.lines_of_code
+        params = len(component.parameters) if component.parameters else 0
         
-        # Get navigator's extracted metadata
-        control_flow = component.metadata.get('control_flow', {})
-        exceptions = component.metadata.get('exceptions', [])
-        modifiers = component.metadata.get('modifiers', {})
+        # Simple scoring based on Navigator's facts
+        score = cyclomatic + min(dependencies, 5) + min(params, 3) + (loc // 15)
         
-        complexity = {
-            'cyclomatic_complexity': component.complexity or 1,
-            'lines_of_code': component.lines_of_code,
-            'num_parameters': len(component.parameters) if component.parameters else 0,
-            'num_dependencies': len(component.depends_on),
-            'num_calls': len(component.calls),
-            'is_async': control_flow.get('is_async') or component.is_async,
-            'is_generator': component.is_generator,
-            'has_decorators': len(component.decorators) > 0,
-            'has_loops': control_flow.get('has_loop', False),
-            'has_error_handling': control_flow.get('has_try_except', False),
-            'complexity_level': 'moderate'
-        }
-        
-        # Calculate complexity score using all metadata
-        score = 0
-        score += complexity['cyclomatic_complexity']
-        score += min(complexity['num_parameters'], 5)
-        score += min(complexity['num_dependencies'], 5)
-        score += complexity['lines_of_code'] // 10
-        
-        # Add bonuses based on navigator's extraction
-        if complexity['has_loops']:
-            score += 2
-        if complexity['has_error_handling'] or exceptions:
-            score += 1
-        if complexity['is_async']:
-            score += 3
-        if modifiers.get('is_abstract'):
-            score += 1
-        
-        complexity['complexity_score'] = score
-        
-        # Categorize
         if score <= self.simple_complexity_threshold:
-            complexity['complexity_level'] = 'simple'
+            return 'simple'
         elif score <= self.complex_complexity_threshold:
-            complexity['complexity_level'] = 'moderate'
+            return 'moderate'
         else:
-            complexity['complexity_level'] = 'complex'
-        
-        return complexity
+            return 'complex'
     
-    def _needs_additional_context(
+    def _assess_information_needs(
         self,
         component: CodeComponent,
-        complexity: Dict[str, Any]
+        control_flow: Dict[str, Any]
     ) -> bool:
-        """Determine if component needs additional context"""
+        """Determine if component needs additional documentation context."""
         
-        # Global variables that coordinate state MUST have context
+        # State-coordinating globals always need context
         if component.type == ComponentType.GLOBAL_VARIABLE:
             return component.name in {"keys", "available", "blocked_set", "expiry_heap"}
         
-        # Check navigator's control_flow for async operations
-        control_flow = component.metadata.get('control_flow', {})
+        # Async and concurrent components need documentation
         if control_flow.get('is_async') or control_flow.get('has_concurrency'):
             return True
         
-        # Infinite loops need documentation
-        if control_flow.get('has_loop') and 'while True' in component.source_code:
+        # Infinite loops need explanation
+        if control_flow.get('has_infinite_loop', False):
             return True
         
-        # Simple self-contained components don't need context
-        if complexity['complexity_level'] == 'simple':
-            if self._is_public(component) and component.type.value in ['function', 'method']:
-                if len(component.depends_on) > 0 or len(component.calls) > 0:
-                    return True
-            return False
+        complexity = self._get_complexity_level(component)
         
-        # Moderate components only if they have many dependencies
-        if complexity['complexity_level'] == 'moderate':
-            return len(component.depends_on) > 5 or self._has_external_dependencies(component)
+        # Simple, self-contained public components usually don't need context
+        if complexity == 'simple' and self._is_public(component):
+            has_dependencies = len(component.depends_on) > 0 or len(component.calls) > 0
+            return has_dependencies
         
-        # Complex components always need context
+        # Moderate: need context if many external dependencies
+        if complexity == 'moderate':
+            return len(component.depends_on) > 5
+        
+        # Complex components always benefit from documentation
         return True
     
     def _generate_internal_requests(
@@ -384,68 +352,45 @@ class ReaderAgent(BaseAgent):
     def _create_analysis_summary(
         self,
         component: CodeComponent,
-        complexity: Dict[str, Any],
+        control_flow: Dict[str, Any],
         needs_context: bool,
         internal_requests: List[InternalRequest],
         external_requests: List[ExternalRequest]
     ) -> str:
-        """
-        Create a summary of the analysis using LLM
+        """Create a human-readable analysis summary via LLM."""
         
-        Args:
-            component: Code component
-            complexity: Complexity assessment
-            needs_context: Whether additional context is needed
-            internal_requests: List of internal requests
-            external_requests: List of external requests
-            
-        Returns:
-            Analysis summary
-        """
-        prompt = f"""Analyze this code component and provide a brief summary:
+        complexity_level = self._get_complexity_level(component)
+        
+        prompt = f"""Analyze this code component and provide a 2-3 sentence summary:
 
 Component: {component.name}
 Type: {component.type.value}
 Visibility: {"Public" if self._is_public(component) else "Private"}
-
-Complexity Assessment:
-- Cyclomatic Complexity: {complexity['cyclomatic_complexity']}
-- Lines of Code: {complexity['lines_of_code']}
-- Number of Parameters: {complexity['num_parameters']}
-- Number of Dependencies: {complexity['num_dependencies']}
-- Complexity Level: {complexity['complexity_level']}
+Complexity: {complexity_level}
+Lines: {component.lines_of_code}
+Dependencies: {len(component.depends_on)}
+Async: {control_flow.get('is_async', False)}
+Has loops: {control_flow.get('has_loop', False)}
 
 Code:
 ```{component.language}
 {component.source_code}
 ```
 
-Information Needs:
-- Needs Additional Context: {needs_context}
-- Internal Requests: {len(internal_requests)} (dependencies: {sum(1 for r in internal_requests if r.request_type == 'dependency')}, references: {sum(1 for r in internal_requests if r.request_type == 'reference')})
-- External Requests: {len(external_requests)}
-
-Provide a 2-3 sentence analysis summary explaining:
-1. What this component does
-2. Its complexity level and why
-3. What information would be most helpful for documenting it
+Explain: (1) what it does, (2) why it's {complexity_level}, (3) what documentation would help.
 """
-        
-        system_prompt = """You are a code analysis expert. Provide concise, technical analysis summaries."""
         
         try:
             summary = self.generate_with_llm(
                 prompt=prompt,
-                system_prompt=system_prompt,
+                system_prompt="You are a code analysis expert. Be concise and technical.",
                 temperature=0.3,
-                max_tokens=300
+                max_tokens=250
             )
             return summary.strip()
         except Exception as e:
             self.logger.warning(f"Failed to generate LLM summary: {e}")
-            return f"Analysis of {component.name}: {complexity['complexity_level']} complexity, {len(internal_requests)} internal and {len(external_requests)} external information needs identified."
-    
-    # Helper methods
+            return f"{component.name}: {complexity_level} complexity, {len(internal_requests)} internal requests."
     
     def _is_public(self, component: CodeComponent) -> bool:
         """Check if component is public"""
@@ -455,21 +400,6 @@ Provide a 2-3 sentence analysis summary explaining:
         
         # For other languages, check for public modifiers
         return True
-    
-    def _has_external_dependencies(self, component: CodeComponent) -> bool:
-        """Check if component has external dependencies"""
-        external_patterns = [
-            'import ',
-            'from ',
-            'require(',
-            'include ',
-        ]
-        
-        for pattern in external_patterns:
-            if pattern in component.source_code:
-                return True
-        
-        return False
     
     def _calculate_dependency_priority(
         self,
@@ -593,40 +523,3 @@ Provide a 2-3 sentence analysis summary explaining:
     #             concepts.add(match.replace("@", ""))
         
     #     return list(concepts)
-    
-    def _detect_threading(self, component: CodeComponent) -> bool:
-        """Detect concurrency - use navigator's metadata"""
-        control_flow = component.metadata.get('control_flow', {})
-        return control_flow.get('has_concurrency', False) or 'Thread' in component.source_code
-
-    def _apply_hard_sufficiency_gate(
-        self,
-        component: CodeComponent,
-        complexity: Dict[str, Any],
-        internal_requests: List[InternalRequest],
-        external_requests: List[ExternalRequest]
-    ) -> tuple:
-        """
-        Hard veto: Clear requests if heuristic conditions for self-contained are met.
-        This prevents LLM language like "it would be helpful to know" from escalating
-        unnecessary context requests.
-        """
-        # If ALL these conditions are true, component is objectively self-contained
-        is_objectively_self_contained = (
-            complexity['complexity_level'] == 'simple' and
-            len(component.depends_on) == 0 and
-            len(component.calls) <= 1 and
-            len(component.parameters) <= 2 and
-            component.lines_of_code <= 10 and
-            not component.is_async and
-            not self._detect_threading(component)
-        )
-        
-        if is_objectively_self_contained:
-            self.logger.info(
-                f"Hard sufficiency gate: Clearing requests for {component.name} "
-                f"(objectively self-contained)"
-            )
-            return [], []  # Force empty requests
-        
-        return internal_requests, external_requests
