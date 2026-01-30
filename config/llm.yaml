@@ -1,12 +1,24 @@
 # LLM Provider Configurations
 providers:
   openrouter:
-    enabled: false
+    enabled: true
     api_base_url: "https://openrouter.ai/api/v1/chat/completions"
     api_key_env: "OPENROUTER_API_KEY"
     timeout: 120
     models:
-      default: "openai/gpt-4-turbo"
+      default: "tngtech/deepseek-r1t-chimera:free"
+      deepseek-r1t-chimera:
+        name: "DeepSeek R1T Chimera"
+        model_id: "tngtech/deepseek-r1t-chimera:free"
+        context_window: 128000
+        max_output_tokens: 8192
+        cost_per_1k_input: 0
+        cost_per_1k_output: 0
+        capabilities:
+          - text_generation
+          - code_analysis
+          - long_context
+          - reasoning
       gpt-4-turbo:
         name: "GPT-4 Turbo"
         model_id: "openai/gpt-4-turbo"
@@ -48,7 +60,7 @@ providers:
         tokens: 1000000
 
   local:
-    enabled: true
+    enabled: false
     api_base_url: "http://localhost:11434"
     api_key_env: "DUMMY"
     timeout: 300
@@ -120,59 +132,39 @@ providers:
       temperature: 0.7
       max_tokens: 2000
 
-# Agent-specific LLM assignments — use local Ollama
+# Agent-specific LLM assignments — use OpenRouter DeepSeek R1T Chimera
 agent_models:
   reader:
-    provider: "local"
-    model: "qwen2.5:7b"
+    provider: "openrouter"
+    model: "tngtech/deepseek-r1t-chimera:free"
     params:
       temperature: 0.3
       max_tokens: 8000
-      num_ctx: 20480         # INCREASE: Reader needs context
-      num_batch: 512         # REDUCE from 512
-      num_gpu: -1            # ADD: Force GPU offload
-      num_parallel: 2        # ADD
 
   searcher:
-    provider: "local"
-    model: "qwen2.5:7b"
+    provider: "openrouter"
+    model: "tngtech/deepseek-r1t-chimera:free"
     params:
       temperature: 0.5
       max_tokens: 2000
-      num_ctx: 8192          # Keep reasonable
-      num_batch: 512         # REDUCE from 512
-      num_gpu: -1            # ADD
-      num_parallel: 2        # ADD
 
   writer:
-    provider: "local"
-    model: "qwen2.5:7b"
+    provider: "openrouter"
+    model: "tngtech/deepseek-r1t-chimera:free"
     params:
       temperature: 0.7
       max_tokens: 4000
-      num_ctx: 12288         # INCREASE
-      num_batch: 512         # REDUCE from 512
-      num_gpu: -1            # ADD
-      num_parallel: 2        # ADD
 
   verifier:
-    provider: "local"
-    model: "qwen2.5:7b"
+    provider: "openrouter"
+    model: "tngtech/deepseek-r1t-chimera:free"
     params:
       temperature: 0.2
       max_tokens: 4000
-      num_ctx: 12288
-      num_batch: 512         # REDUCE from 512
-      num_gpu: -1            # ADD
-      num_parallel: 2        # ADD
 
   evaluator:
-    provider: "local"
-    model: "qwen2.5:7b"
+    provider: "openrouter"
+    model: "tngtech/deepseek-r1t-chimera:free"
     params:
       temperature: 0.4
       max_tokens: 8000
-      num_ctx: 20480         # INCREASE
-      num_batch: 512         # REDUCE from 512
-      num_gpu: -1            # ADD
-      num_parallel: 2        # ADD

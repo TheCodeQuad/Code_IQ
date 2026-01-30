@@ -67,9 +67,9 @@ class LLMClient:
         self.llm_config = self.config.get('llm', {})
         self.providers = self.llm_config.get('providers', {})
         self.agent_models = self.llm_config.get('agent_models', {})
-        self.default_provider = next((k for k, v in self.providers.items() if v.get('enabled')), 'local')
+        self.default_provider = next((k for k, v in self.providers.items() if v.get('enabled')), 'openrouter')
         self.default_model = self.providers[self.default_provider]['models']['default']
-        self.base_url = self.providers[self.default_provider].get('api_base_url', "http://localhost:11434")
+        self.base_url = self.providers[self.default_provider].get('api_base_url', "https://openrouter.ai/api/v1/chat/completions")
         self.api_key_env = self.providers[self.default_provider].get('api_key_env', None)
         
         # Get provider-specific config
@@ -395,6 +395,7 @@ class LLMClient:
             'openai/gpt-4-turbo': {'input': 0.01, 'output': 0.03},
             'openai/gpt-3.5-turbo': {'input': 0.0005, 'output': 0.0015},
             'qwen2.5:7b': {'input': 0.0, 'output': 0.0},  # Local = free
+            'tngtech/deepseek-r1t-chimera:free': {'input': 0.0, 'output': 0.0},  # OpenRouter free tier
         }
         
         rates = pricing.get(model, {'input': 0.001, 'output': 0.002})
