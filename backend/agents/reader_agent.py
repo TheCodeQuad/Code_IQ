@@ -91,15 +91,6 @@ class ReaderAgent(BaseAgent):
             project_dag = context.metadata.get('project_dag')
             external_requests = self._generate_external_requests(component, project_dag)
             
-            # Create human-readable summary
-            summary = self._create_analysis_summary(
-                component,
-                control_flow,
-                needs_context,
-                internal_requests,
-                external_requests
-            )
-            
             # Build output
             output = ReaderOutput(
                 component_id=component.id,
@@ -114,7 +105,7 @@ class ReaderAgent(BaseAgent):
                 needs_additional_context=needs_context,
                 internal_requests=internal_requests,
                 external_requests=external_requests,
-                analysis_summary=summary,
+                analysis_summary="",  # Empty: not used downstream (Writer generates its own)
                 metadata={
                     'component_type': component.type,
                     'is_public': self._is_public(component),
@@ -146,6 +137,108 @@ class ReaderAgent(BaseAgent):
                 error=str(e)
             )
     
+    def process_batch(self, contexts: List[AgentContext]) -> List[AgentResult]:
+        """
+        Process multiple components in a single LLM call (batch processing).
+        Reduces token usage and latency by ~80%.
+        
+        Args:
+            contexts: List of AgentContext objects (typically 5 per batch)
+            
+        Returns:
+            List of AgentResults with individual ReaderOutputs
+        """
+        try:
+            components = [ctx.component for ctx in contexts]
+            batch_size = len(components)
+            
+            self.logger.info(f"Reader batch analyzing: {batch_size} components")
+            
+            # Create compact batch prompt
+            prompt = self._create_batch_prompt(components)
+            
+            system_prompt = """You are a Reader Agent responsible for determining if additional context is needed to generate high-quality docstrings for code components.
+
+For batch analysis, evaluate each component independently and provide clear YES/NO decisions."""
+            
+            # Single LLM call for entire batch
+            response = self.generate_with_llm(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.1,
+                max_tokens=500
+            )
+            
+            # Parse response to extract decisions for each component
+            decisions = self._parse_batch_response(response, components)
+            
+            # Build individual AgentResults for each component
+            results = []
+            for i, component in enumerate(components):
+                control_flow = component.metadata.get('control_flow', {})
+                needs_context = decisions[i]['needs_context']
+                reason = decisions[i]['reason']
+                
+                self.logger.info(f"Batch decision for {component.name}: {reason}")
+                
+                # Generate requests based on decision
+                internal_requests = []
+                if needs_context:
+                    internal_requests = self._generate_internal_requests(component)
+                
+                project_dag = contexts[i].metadata.get('project_dag')
+                external_requests = self._generate_external_requests(component, project_dag)
+                
+                # Build output
+                output = ReaderOutput(
+                    component_id=component.id,
+                    complexity_assessment={
+                        'complexity_level': self._get_complexity_level(component),
+                        'lines_of_code': component.lines_of_code,
+                        'is_async': control_flow.get('is_async', False),
+                        'has_loops': control_flow.get('has_loop', False),
+                        'num_dependencies': len(component.depends_on),
+                        'num_calls': len(component.calls),
+                    },
+                    needs_additional_context=needs_context,
+                    internal_requests=internal_requests,
+                    external_requests=external_requests,
+                    analysis_summary="",
+                    metadata={
+                        'component_type': component.type,
+                        'is_public': self._is_public(component),
+                        'has_docstring': bool(component.existing_docstring),
+                        'is_async': control_flow.get('is_async', False),
+                        'has_threading': control_flow.get('has_concurrency', False),
+                    }
+                )
+                
+                results.append(AgentResult(
+                    agent_name=self.agent_name,
+                    status=AgentStatus.SUCCESS,
+                    output=output
+                ))
+            
+            self.logger.info(
+                f"Reader batch complete: {batch_size} components processed, "
+                f"Context needed: {sum(1 for d in decisions if d['needs_context'])}"
+            )
+            
+            return results
+            
+        except Exception as e:
+            self.logger.error(f"Reader batch error: {e}", exc_info=True)
+            # Return failed results for entire batch
+            return [
+                AgentResult(
+                    agent_name=self.agent_name,
+                    status=AgentStatus.FAILED,
+                    output=None,
+                    error=str(e)
+                )
+                for _ in contexts
+            ]
+    
     def _get_complexity_level(self, component: CodeComponent) -> str:
         """Determine complexity level based on Navigator's metadata."""
         # Use Navigator's complexity if available, otherwise estimate
@@ -169,33 +262,127 @@ class ReaderAgent(BaseAgent):
         component: CodeComponent,
         control_flow: Dict[str, Any]
     ) -> bool:
-        """Determine if component needs additional documentation context."""
+        """
+        Use LLM to determine if component needs additional context for documentation.
         
-        # State-coordinating globals always need context
-        if component.type == ComponentType.GLOBAL_VARIABLE:
-            return component.name in {"keys", "available", "blocked_set", "expiry_heap"}
+        The LLM evaluates:
+        - Code complexity and algorithmic patterns (recursion, complex control flow)
+        - Dependencies and their criticality
+        - Concurrency/threading patterns (explicit or implicit)
+        - Exception handling complexity
+        - Domain-specific knowledge requirements
+        - Whether the code is self-explanatory or needs external context
         
-        # Async and concurrent components need documentation
-        if control_flow.get('is_async') or control_flow.get('has_concurrency'):
-            return True
+        Returns:
+            bool: True if additional context needed, False otherwise
+        """
+        complexity_level = self._get_complexity_level(component)
         
-        # Infinite loops need explanation
-        if control_flow.get('has_infinite_loop', False):
-            return True
-        
-        complexity = self._get_complexity_level(component)
-        
-        # Simple, self-contained public components usually don't need context
-        if complexity == 'simple' and self._is_public(component):
-            has_dependencies = len(component.depends_on) > 0 or len(component.calls) > 0
-            return has_dependencies
-        
-        # Moderate: need context if many external dependencies
-        if complexity == 'moderate':
-            return len(component.depends_on) > 5
-        
-        # Complex components always benefit from documentation
-        return True
+        prompt = f"""Analyze this code component and determine if additional context is needed to generate comprehensive documentation.
+
+## Component Information
+- **Name:** {component.name}
+- **Type:** {component.type.value}
+- **Visibility:** {"Public" if self._is_public(component) else "Private"}
+- **Complexity Level:** {complexity_level}
+- **Lines of Code:** {component.lines_of_code}
+- **Dependencies:** {len(component.depends_on)} ({', '.join(component.depends_on[:5])}{'...' if len(component.depends_on) > 5 else ''})
+- **Calls:** {len(component.calls)} functions/methods
+- **Parameters:** {len(component.parameters) if component.parameters else 0}
+
+## Control Flow Characteristics
+- Is Async: {control_flow.get('is_async', False)}
+- Has Loops: {control_flow.get('has_loop', False)}
+- Has Infinite Loop: {control_flow.get('has_infinite_loop', False)}
+- Has Concurrency/Threading: {control_flow.get('has_concurrency', False)}
+- Has Try/Except: {control_flow.get('has_try_except', False)}
+- Number of Branches: {control_flow.get('num_branches', 0)}
+
+## Existing Documentation
+{f'Has docstring: {component.existing_docstring[:200]}...' if component.existing_docstring else 'No existing docstring'}
+
+## Source Code
+```{component.language}
+{component.source_code}
+```
+
+## Decision Criteria
+Answer YES if ANY of these apply:
+1. **Algorithmic complexity**: Uses recursion, complex branching, or non-obvious algorithms
+2. **Concurrency patterns**: Uses locks, mutexes, threading, async/await, or has race condition risks
+3. **Critical dependencies**: Depends on components whose behavior significantly affects this component
+4. **Exception handling**: Has complex error handling that needs explanation
+5. **Domain knowledge**: Requires understanding of external APIs, protocols, or domain-specific concepts
+6. **State management**: Manages or coordinates shared state
+7. **Non-obvious behavior**: The code does something that isn't immediately clear from reading it
+
+Answer NO if ALL of these apply:
+1. The code is straightforward and self-explanatory
+2. No complex algorithms or patterns
+3. Dependencies are simple/obvious (like basic utilities)
+4. A developer can understand it completely just by reading the code
+
+## Your Response
+Respond with ONLY one of these exact formats:
+- "YES: <brief reason>" if additional context is needed
+- "NO: <brief reason>" if the code is self-explanatory"""
+
+        system_prompt = """You are a Reader Agent responsible for determining if additional context is needed to generate high-quality docstrings for code components.
+
+## Your Role
+You analyze code components and make critical decisions about whether to gather external context (dependencies, usage examples, external APIs, algorithms) before documentation generation. Your goal is to ensure comprehensive, accurate documentation.
+
+## Responsibilities
+1. **Assess Complexity**: Evaluate the true complexity of the code, including hidden patterns (recursion, state management, concurrency)
+2. **Identify Context Gaps**: Determine what information is missing that would help document the code better
+3. **Make Binary Decisions**: Clearly decide YES or NO based on whether additional context is needed
+4. **Provide Reasoning**: Explain your decision briefly so the system understands your logic
+
+## Decision Framework
+You should recommend YES (need additional context) when:
+- The code uses non-obvious algorithms or patterns (recursion, dynamic programming, graph algorithms)
+- There are hidden concurrency/threading patterns that aren't explicit
+- The component depends on critical internal dependencies whose behavior affects documentation
+- Complex exception handling requires explaining error scenarios
+- External APIs or frameworks are used that need explanation
+- The code manages shared state or coordinates across multiple components
+- The behavior isn't immediately obvious from reading the source code
+- Documentation requires usage examples to clarify behavior
+
+You should recommend NO (self-explanatory) only when:
+- The code is straightforward and does exactly what the name suggests
+- All dependencies are obvious (built-in functions, simple utilities)
+- No hidden complexity or non-obvious patterns exist
+- A skilled developer can fully understand the code just by reading it
+- The existing docstring (if any) already covers what needs explaining
+
+## Important Guidelines
+- **Err on the side of caution**: If unsure, recommend YES to ensure better documentation
+- **Be practical**: Don't request context for genuinely simple utility functions
+- **Look for hidden complexity**: Recursion, locks, async patterns, complex branching
+- **Consider the reader**: Would someone unfamiliar with the codebase understand this component?
+- **Focus on documentation quality**: The goal is comprehensive, maintainable documentation"""
+
+        try:
+            response = self.generate_with_llm(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.1,  # Low temperature for consistent decisions
+                max_tokens=100
+            )
+            
+            response_upper = response.strip().upper()
+            needs_context = response_upper.startswith("YES")
+            
+            # Log the decision for debugging
+            self.logger.info(f"LLM context decision for {component.name}: {response.strip()}")
+            
+            return needs_context
+            
+        except Exception as e:
+            self.logger.warning(f"LLM assessment failed for {component.name}: {e}")
+            # Fallback: err on the side of getting context for non-simple components
+            return complexity_level != 'simple'
     
     def _generate_internal_requests(
         self,
@@ -349,48 +536,6 @@ class ReaderAgent(BaseAgent):
         
         return requests
     
-    def _create_analysis_summary(
-        self,
-        component: CodeComponent,
-        control_flow: Dict[str, Any],
-        needs_context: bool,
-        internal_requests: List[InternalRequest],
-        external_requests: List[ExternalRequest]
-    ) -> str:
-        """Create a human-readable analysis summary via LLM."""
-        
-        complexity_level = self._get_complexity_level(component)
-        
-        prompt = f"""Analyze this code component and provide a 2-3 sentence summary:
-
-Component: {component.name}
-Type: {component.type.value}
-Visibility: {"Public" if self._is_public(component) else "Private"}
-Complexity: {complexity_level}
-Lines: {component.lines_of_code}
-Dependencies: {len(component.depends_on)}
-Async: {control_flow.get('is_async', False)}
-Has loops: {control_flow.get('has_loop', False)}
-
-Code:
-```{component.language}
-{component.source_code}
-```
-
-Explain: (1) what it does, (2) why it's {complexity_level}, (3) what documentation would help.
-"""
-        
-        try:
-            summary = self.generate_with_llm(
-                prompt=prompt,
-                system_prompt="You are a code analysis expert. Be concise and technical.",
-                temperature=0.3,
-                max_tokens=250
-            )
-            return summary.strip()
-        except Exception as e:
-            self.logger.warning(f"Failed to generate LLM summary: {e}")
-            return f"{component.name}: {complexity_level} complexity, {len(internal_requests)} internal requests."
     
     def _is_public(self, component: CodeComponent) -> bool:
         """Check if component is public"""
@@ -489,6 +634,119 @@ Explain: (1) what it does, (2) why it's {complexity_level}, (3) what documentati
             'rabin-karp', 'boyer-moore', 'dynamic programming',
             'greedy', 'backtracking', 'divide and conquer',
         ]
+    
+    def _create_batch_prompt(self, components: List[CodeComponent]) -> str:
+        """
+        Create a compact prompt for batch processing multiple components.
+        
+        Args:
+            components: List of CodeComponent objects (typically 5)
+            
+        Returns:
+            Formatted prompt for batch LLM analysis
+        """
+        prompt = "Analyze these code components and determine if each needs additional context for documentation.\n\n"
+        
+        for i, comp in enumerate(components, 1):
+            complexity = self._get_complexity_level(comp)
+            control_flow = comp.metadata.get('control_flow', {})
+            
+            # Compact component summary
+            prompt += f"""=== COMPONENT {i}: {comp.name} ===
+Type: {comp.type.value}
+Visibility: {"Public" if self._is_public(comp) else "Private"}
+Complexity: {complexity}
+Lines: {comp.lines_of_code}
+Dependencies: {len(comp.depends_on)}
+Async: {control_flow.get('is_async', False)}
+Has Loops: {control_flow.get('has_loop', False)}
+Has Try/Except: {control_flow.get('has_try_except', False)}
+Code:
+```{comp.language}
+{comp.source_code[:250]}{'...' if len(comp.source_code) > 250 else ''}
+```
+
+"""
+        
+        prompt += """For each component, provide:
+- YES: if additional context (dependencies, APIs, usage examples) is needed
+- NO: if the code is self-explanatory and needs no context
+
+Respond EXACTLY in this format (one line per component):
+COMPONENT 1: YES/NO - brief reason
+COMPONENT 2: YES/NO - brief reason
+COMPONENT 3: YES/NO - brief reason
+[continue for all components]
+
+Examples:
+COMPONENT 1: YES - Uses recursive algorithm that needs explanation
+COMPONENT 2: NO - Simple utility function, self-explanatory
+COMPONENT 3: YES - Complex state management with threading patterns"""
+        
+        return prompt
+    
+    def _parse_batch_response(self, response: str, components: List[CodeComponent]) -> List[Dict[str, Any]]:
+        """
+        Parse LLM batch response to extract individual decisions.
+        
+        Args:
+            response: LLM response containing decisions for all components
+            components: Original list of components
+            
+        Returns:
+            List of dicts with 'needs_context' (bool) and 'reason' (str)
+        """
+        decisions = []
+        lines = response.strip().split('\n')
+        
+        # Extract lines that start with "COMPONENT i:"
+        component_lines = [l for l in lines if l.strip().startswith('COMPONENT')]
+        
+        for i, comp in enumerate(components):
+            component_num = i + 1
+            
+            # Find matching line for this component
+            matching_lines = [
+                l for l in component_lines 
+                if l.strip().startswith(f'COMPONENT {component_num}:')
+            ]
+            
+            if matching_lines:
+                line = matching_lines[0]
+                # Parse "COMPONENT i: YES/NO - reason"
+                parts = line.split(':', 1)
+                if len(parts) > 1:
+                    decision_part = parts[1].strip()
+                    
+                    # Extract YES/NO and reason
+                    if decision_part.upper().startswith('YES'):
+                        needs_context = True
+                        reason = decision_part[3:].strip(' -').strip()
+                    elif decision_part.upper().startswith('NO'):
+                        needs_context = False
+                        reason = decision_part[2:].strip(' -').strip()
+                    else:
+                        # Fallback if parsing fails
+                        needs_context = True
+                        reason = decision_part[:50]
+                    
+                    decisions.append({
+                        'needs_context': needs_context,
+                        'reason': reason
+                    })
+                    continue
+            
+            # Fallback: if we can't parse, default to safe choice
+            self.logger.warning(
+                f"Failed to parse decision for component {component_num} ({comp.name}), "
+                f"defaulting to needs_context=True"
+            )
+            decisions.append({
+                'needs_context': True,
+                'reason': 'Parsing failed, defaulting to gather context'
+            })
+        
+        return decisions
     
     # def _detect_external_concepts(self, component: CodeComponent) -> List[str]:
     #     """

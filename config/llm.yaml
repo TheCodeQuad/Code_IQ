@@ -1,23 +1,23 @@
 # LLM Provider Configurations
 providers:
   openrouter:
-    enabled: true
+    enabled: false  # Disabled - using local inference instead
     api_base_url: "https://openrouter.ai/api/v1/chat/completions"
     api_key_env: "OPENROUTER_API_KEY"
     timeout: 120
     models:
       default: "tngtech/deepseek-r1t-chimera:free"
       deepseek-r1t-chimera:
-        name: "DeepSeek R1T Chimera"
+        name: "DeepSeek R1T Chimera Free"
         model_id: "tngtech/deepseek-r1t-chimera:free"
         context_window: 128000
         max_output_tokens: 8192
-        cost_per_1k_input: 0
-        cost_per_1k_output: 0
+        cost_per_1k_input: 0.0
+        cost_per_1k_output: 0.0
         capabilities:
           - text_generation
           - code_analysis
-          - long_context
+          - code_generation
           - reasoning
       gpt-4-turbo:
         name: "GPT-4 Turbo"
@@ -59,33 +59,24 @@ providers:
         requests: 100
         tokens: 1000000
 
+  # Local inference via llama-cpp-python (no HTTP overhead, model loaded once)
   local:
-    enabled: false
-    api_base_url: "http://localhost:11434"
-    api_key_env: "DUMMY"
-    timeout: 300
+    enabled: true  # Set to true to use local model
+    mode: "llama_cpp"  # "llama_cpp" for direct inference, "ollama" for Ollama API
+    # Path to your GGUF model file (download from HuggingFace)
+    # Recommended: https://huggingface.co/unsloth/DeepSeek-R1-Distill-Qwen-1.5B-GGUF
+    model_path: "models/DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf"
+    n_ctx: 8192  # Context window size
+    n_gpu_layers: -1  # -1 = all layers on GPU, 0 = CPU only
+    n_threads: null  # null = auto-detect, or set specific thread count
     models:
-      default: "qwen2.5:7b"
-      qwen2.5-7b:
-        name: "Qwen 2.5 7B"
-        model_id: "qwen2.5:7b"
-        context_window: 32768
-        max_output_tokens: 8192
-        capabilities:
-          - text_generation
-          - code_analysis
+      default: "DeepSeek-R1-Distill-Qwen-1.5B"
     default_params:
       temperature: 0.7
       max_tokens: 4000
-      num_gpu: -1              # ALL layers to GPU (your A2 has 16GB - plenty for 7B model)
-      num_ctx: 16384           # Reduced for faster prefill - increase if needed
-      num_batch: 512           # Reduced for more consistent GPU utilization
-      num_thread: 16           # Adjust to your CPU core count
-      num_parallel: 4          # A2 can handle more parallelism
-    rate_limits:
-      tier_1:
-        requests: 1000
-        tokens: 500000
+    # Ollama fallback settings (if mode: "ollama")
+    api_base_url: "http://localhost:11434/v1/chat/completions"
+    api_key_env: "DUMMY"
 
   gemini:
     enabled: false
@@ -132,39 +123,39 @@ providers:
       temperature: 0.7
       max_tokens: 2000
 
-# Agent-specific LLM assignments — use OpenRouter DeepSeek R1T Chimera
+# Agent-specific LLM assignments — using local inference
 agent_models:
   reader:
-    provider: "openrouter"
-    model: "tngtech/deepseek-r1t-chimera:free"
+    provider: "local"
+    model: "DeepSeek-R1-Distill-Qwen-1.5B"
     params:
       temperature: 0.3
-      max_tokens: 8000
+      max_tokens: 4000  # Reduced for 1.5B model context
 
   searcher:
-    provider: "openrouter"
-    model: "tngtech/deepseek-r1t-chimera:free"
+    provider: "local"
+    model: "DeepSeek-R1-Distill-Qwen-1.5B"
     params:
       temperature: 0.5
       max_tokens: 2000
 
   writer:
-    provider: "openrouter"
-    model: "tngtech/deepseek-r1t-chimera:free"
+    provider: "local"
+    model: "DeepSeek-R1-Distill-Qwen-1.5B"
     params:
       temperature: 0.7
       max_tokens: 4000
 
   verifier:
-    provider: "openrouter"
-    model: "tngtech/deepseek-r1t-chimera:free"
+    provider: "local"
+    model: "DeepSeek-R1-Distill-Qwen-1.5B"
     params:
       temperature: 0.2
       max_tokens: 4000
 
   evaluator:
-    provider: "openrouter"
-    model: "tngtech/deepseek-r1t-chimera:free"
+    provider: "local"
+    model: "DeepSeek-R1-Distill-Qwen-1.5B"
     params:
       temperature: 0.4
-      max_tokens: 8000
+      max_tokens: 4000  # Reduced for 1.5B model context

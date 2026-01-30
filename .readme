@@ -13,7 +13,7 @@ npm run dev
 
 ### Prerequisites
 
-- Python 3.11+
+- Python 3.11
 - Git
 - (Optional) OpenAI API key or local LLM (Ollama)
 
