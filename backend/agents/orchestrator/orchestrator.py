@@ -98,34 +98,192 @@ class Orchestrator:
         components: List[CodeComponent],
         component_map: Dict[str, CodeComponent]
     ) -> List[Documentation]:
-        """Process components sequentially (original behavior)"""
+        """
+        Process components sequentially with batch Reader Agent.
+        Batches components in groups of 5 for Reader analysis,
+        then processes each component individually with Searcher and Writer.
+        """
         documented_components = []
+        batch_size = 5  # Batch size for Reader Agent
         
-        for idx, component in enumerate(components):
-            self.logger.info(
-                f"Processing component {idx + 1}/{len(components)}: "
-                f"{component.name} ({component.type})"
-            )
-
-            try:
-                doc = self.process_single_component(component, documented_components, component_map, self.project_dag)
-                if doc:
-                    documented_components.append(doc)
-                    self.successful_docs += 1
-                else:
-                    self.failed_docs += 1
-                    self.logger.warning(f"Failed to document {component.name}")
-                    
-            except Exception as e:
-                self.logger.error(
-                    f"Error processing {component.name}: {e}",
-                    exc_info=True
-                )
-                self.failed_docs += 1
+        # Process components in Reader batches
+        for batch_start in range(0, len(components), batch_size):
+            batch = components[batch_start:batch_start + batch_size]
+            batch_end = min(batch_start + batch_size, len(components))
             
-            self.total_components_processed += 1
+            self.logger.info(
+                f"Processing Reader batch {batch_start // batch_size + 1}/"
+                f"{(len(components) + batch_size - 1) // batch_size}: "
+                f"components {batch_start + 1}-{batch_end}"
+            )
+            
+            # Create contexts for batch
+            batch_contexts = [
+                AgentContext(
+                    component=comp,
+                    metadata={
+                        'previous_docs': documented_components.copy(),
+                        'timestamp': datetime.now().isoformat(),
+                        'accumulated_context': {
+                            'internal': [],
+                            'external': []
+                        },
+                        'project_dag': self.project_dag
+                    }
+                )
+                for comp in batch
+            ]
+            
+            # BATCH READER CALL (1 LLM call for entire batch)
+            try:
+                reader_batch_results = self.reader.process_batch(batch_contexts)
+                self.logger.info(f"Reader batch completed successfully")
+            except Exception as e:
+                self.logger.error(f"Reader batch failed: {e}", exc_info=True)
+                self.failed_docs += len(batch)
+                self.total_components_processed += len(batch)
+                continue
+            
+            # Now process each component individually with Searcher and Writer
+            for idx, component in enumerate(batch):
+                self.logger.info(
+                    f"Processing component {batch_start + idx + 1}/{len(components)}: "
+                    f"{component.name} ({component.type})"
+                )
+                
+                try:
+                    # Get Reader output from batch
+                    reader_result = reader_batch_results[idx]
+                    if not reader_result.is_success():
+                        self.logger.error(
+                            f"Reader failed for {component.name}: {reader_result.error}"
+                        )
+                        self.failed_docs += 1
+                        self.total_components_processed += 1
+                        continue
+                    
+                    # Create context with reader result for individual processing
+                    context = AgentContext(
+                        component=component,
+                        previous_results={'reader': reader_result.output},
+                        metadata={
+                            'previous_docs': documented_components.copy(),
+                            'timestamp': datetime.now().isoformat(),
+                            'accumulated_context': {
+                                'internal': [],
+                                'external': []
+                            },
+                            'project_dag': self.project_dag
+                        }
+                    )
+                    
+                    # Process with Searcher-Writer iterative loop
+                    doc = self._process_with_searcher_writer_loop(
+                        component,
+                        context,
+                        component_map
+                    )
+                    
+                    if doc:
+                        documented_components.append(doc)
+                        self.successful_docs += 1
+                    else:
+                        self.failed_docs += 1
+                        self.logger.warning(f"Failed to document {component.name}")
+                        
+                except Exception as e:
+                    self.logger.error(
+                        f"Error processing {component.name}: {e}",
+                        exc_info=True
+                    )
+                    self.failed_docs += 1
+                
+                self.total_components_processed += 1
         
         return documented_components
+    
+    def _process_with_searcher_writer_loop(
+        self,
+        component: CodeComponent,
+        context: AgentContext,
+        component_map: Dict[str, CodeComponent]
+    ) -> Optional[Documentation]:
+        """
+        Run the iterative Searcher-Writer loop for a component.
+        Reader has already been executed and result is in context.
+        """
+        max_iterations = 3
+        last_internal_requests = None
+        last_external_requests = None
+
+        for iteration in range(max_iterations):
+            reader_output = context.get_result('reader')
+            
+            # Check for convergence
+            internal_requests = [(r.request_type, r.component_id) for r in reader_output.internal_requests]
+            external_requests = [(r.request_type, r.query) for r in reader_output.external_requests]
+            
+            if (internal_requests == last_internal_requests and
+                external_requests == last_external_requests):
+                self.logger.info("No new information requested by Reader; stopping early.")
+                break
+            
+            last_internal_requests = internal_requests
+            last_external_requests = external_requests
+
+            # If Reader doesn't need more context, stop
+            if not getattr(reader_output, "needs_additional_context", False):
+                self.logger.info(f"Reader satisfied after iteration {iteration + 1}")
+                break
+
+            # Searcher agent
+            searcher_result = self.searcher.execute(context)
+            if not searcher_result.is_success():
+                self.logger.warning(f"Searcher failed: {searcher_result.error}")
+                break
+            
+            searcher_output = searcher_result.output
+            context.add_result('searcher', searcher_output)
+            
+            # Check if Searcher returned nothing
+            if (len(searcher_output.dependency_contexts) == 0 and
+                len(searcher_output.reference_contexts) == 0 and
+                len(searcher_output.external_contexts) == 0):
+                self.logger.info("Searcher found no new information; stopping iterations.")
+                break
+            
+            # Update accumulated context for next Reader iteration
+            accumulated = context.metadata['accumulated_context']
+            accumulated['internal'].extend(searcher_output.dependency_contexts)
+            accumulated['external'].extend(searcher_output.external_contexts)
+            
+            # Re-run Reader with accumulated context
+            reader_result = self.reader.execute(context)
+            if not reader_result.is_success():
+                self.logger.warning(f"Reader re-evaluation failed: {reader_result.error}")
+                break
+            
+            context.add_result('reader', reader_result.output)
+
+        # Writer agent - generate documentation
+        writer_result = self.writer.execute(context)
+        if not writer_result.is_success():
+            self.logger.error(f"Writer failed: {writer_result.error}")
+            return None
+        
+        documentation = writer_result.output
+        context.add_result('writer', documentation)
+
+        # Optional: Verifier agent
+        use_verifier = self.config.get('agents.verifier.enabled', False)
+        if use_verifier:
+            verifier_result = self.verifier.execute(context)
+            if verifier_result.is_success():
+                verification_output = verifier_result.output
+                context.add_result('verifier', verification_output)
+                self.logger.info(f"Verifier passed for {component.name}")
+
+        return documentation
     
     def _process_parallel(
         self,
