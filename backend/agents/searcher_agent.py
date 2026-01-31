@@ -5,6 +5,7 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
+from xml.etree import ElementTree as ET
 import networkx as nx
 
 from backend.agents.base_agent import BaseAgent, AgentContext, AgentResult, AgentStatus
@@ -111,16 +112,159 @@ class SearcherAgent(BaseAgent):
         )
 
     
+    def _parse_reader_xml_output(self, xml_output: str) -> Dict[str, Any]:
+        """
+        Parse Reader's XML output into structured data.
+        Expected format:
+        <READER_OUTPUT>
+            <INFO_NEED>true/false</INFO_NEED>
+            <REQUEST>
+                <INTERNAL>
+                    <CALLS>
+                        <CLASS>class1,class2</CLASS>
+                        <FUNCTION>func1,func2</FUNCTION>
+                        <METHOD>method1,method2</METHOD>
+                    </CALLS>
+                    <CALL_BY>true/false</CALL_BY>
+                </INTERNAL>
+                <RETRIEVAL>
+                    <QUERY>query1,query2</QUERY>
+                </RETRIEVAL>
+            </REQUEST>
+        </READER_OUTPUT>
+        """
+        try:
+            root = ET.fromstring(xml_output)
+            
+            # Extract INFO_NEED
+            info_need_elem = root.find('INFO_NEED')
+            needs_context = info_need_elem.text == 'true' if info_need_elem is not None else False
+            
+            # Extract INTERNAL requests
+            internal_elem = root.find('.//INTERNAL')
+            internal_requests = []
+            search_references = False
+            
+            if internal_elem is not None:
+                # Extract CALLS
+                calls_elem = internal_elem.find('CALLS')
+                if calls_elem is not None:
+                    for child in calls_elem:
+                        if child.text:
+                            comp_names = child.text.split(',')
+                            for comp_name in comp_names:
+                                internal_requests.append({
+                                    'type': 'dependency',
+                                    'name': comp_name.strip(),
+                                    'category': child.tag
+                                })
+                
+                # Extract CALL_BY
+                call_by_elem = internal_elem.find('CALL_BY')
+                search_references = call_by_elem.text == 'true' if call_by_elem is not None else False
+                if search_references:
+                    internal_requests.append({
+                        'type': 'reference',
+                        'name': 'any',
+                        'category': 'REFERENCE'
+                    })
+            
+            # Extract RETRIEVAL queries
+            retrieval_elem = root.find('.//RETRIEVAL')
+            external_requests = []
+            
+            if retrieval_elem is not None:
+                query_elem = retrieval_elem.find('QUERY')
+                if query_elem is not None and query_elem.text:
+                    queries = query_elem.text.split(',')
+                    for query in queries:
+                        query = query.strip()
+                        if ':' in query:
+                            req_type, query_text = query.split(':', 1)
+                            external_requests.append({
+                                'type': req_type.strip(),
+                                'query': query_text.strip()
+                            })
+            
+            return {
+                'needs_context': needs_context,
+                'internal_requests': internal_requests,
+                'external_requests': external_requests,
+                'search_references': search_references
+            }
+        except Exception as e:
+            self.logger.error(f"Failed to parse Reader XML output: {e}")
+            return {
+                'needs_context': False,
+                'internal_requests': [],
+                'external_requests': [],
+                'search_references': False
+            }
+    
+    def _search_dependency_from_dict(self, request_dict: Dict, context: AgentContext) -> Optional[DependencyContext]:
+        """Search for dependency using dict request (converted from XML)"""
+        # Create InternalRequest-like object from dict
+        class DictRequest:
+            def __init__(self, d):
+                self.component_id = d.get('id')
+                self.component_name = d.get('name')
+                self.request_type = d.get('type')
+                self.reason = d.get('reason', '')
+                self.priority = d.get('priority', 5)
+        
+        req = DictRequest(request_dict)
+        return self._search_dependency(req, context)
+    
+    def _search_references_from_dict(self, request_dict: Dict, context: AgentContext) -> Optional[ReferenceContext]:
+        """Search for references using dict request (converted from XML)"""
+        # Create InternalRequest-like object from dict
+        class DictRequest:
+            def __init__(self, d):
+                self.component_id = d.get('id')
+                self.component_name = d.get('name')
+                self.request_type = d.get('type')
+                self.reason = d.get('reason', '')
+                self.priority = d.get('priority', 5)
+        
+        req = DictRequest(request_dict)
+        return self._search_references(req, context)
+    
+    def _search_external_from_dict(self, request_dict: Dict) -> Optional[ExternalContext]:
+        """Search for external context using dict request (converted from XML)"""
+        # Create ExternalRequest-like object from dict
+        class DictRequest:
+            def __init__(self, d):
+                self.request_type = d.get('type')
+                self.query = d.get('query')
+                self.context = d.get('context', '')
+                self.priority = d.get('priority', 5)
+        
+        req = DictRequest(request_dict)
+        return self._search_external(req)
+    
     def process(self, context: AgentContext) -> AgentResult:
         """
-        Process search requests from Reader
+        Process search requests from Reader (supports both XML and legacy ReaderOutput)
         """
         try:
             component = context.component
-            reader_output = context.get_result('reader')
+            reader_result = context.get_result('reader')
             accumulated_context = context.metadata.get('accumulated_context', {})
             
-            if not reader_output or not isinstance(reader_output, ReaderOutput):
+            # Parse reader output (XML string or ReaderOutput object)
+            if isinstance(reader_result, str):
+                # New XML format
+                parsed_data = self._parse_reader_xml_output(reader_result)
+                needs_context = parsed_data['needs_context']
+                internal_req_data = parsed_data['internal_requests']
+                external_req_data = parsed_data['external_requests']
+            elif isinstance(reader_result, ReaderOutput):
+                # Legacy format
+                internal_req_data = [{'type': req.request_type, 'name': req.component_name, 'id': req.component_id} 
+                                   for req in reader_result.internal_requests]
+                external_req_data = [{'type': req.request_type, 'query': req.query} 
+                                   for req in reader_result.external_requests]
+            else:
                 self.logger.warning("No Reader output found in context")
                 return AgentResult(
                     agent_name=self.agent_name,
@@ -131,43 +275,43 @@ class SearcherAgent(BaseAgent):
             
             self.logger.info(
                 f"Searching for context: {component.name} - "
-                f"{len(reader_output.internal_requests)} internal, "
-                f"{len(reader_output.external_requests)} external requests"
+                f"{len(internal_req_data)} internal, "
+                f"{len(external_req_data)} external requests"
             )
             
             # Skip already-found dependencies
-            already_found_ids = {item['id'] for item in accumulated_context.get('internal', [])}
-            already_found_queries = {item['query'] for item in accumulated_context.get('external', [])}
+            already_found_ids = {item['id'] for item in accumulated_context.get('internal', []) if 'id' in item}
+            already_found_queries = {item['query'] for item in accumulated_context.get('external', []) if 'query' in item}
             
             # Process internal requests
             dependency_contexts = []
             reference_contexts = []
             
-            for request in reader_output.internal_requests:
+            for request in internal_req_data:
                 # Skip if already found
-                if request.component_id in already_found_ids:
-                    self.logger.debug(f"Skipping already-found dependency: {request.component_id}")
+                if request.get('id') in already_found_ids:
+                    self.logger.debug(f"Skipping already-found dependency: {request.get('id')}")
                     continue
                 
-                if request.request_type == "dependency":
-                    dep_context = self._search_dependency(request, context)
+                if request.get('type') == "dependency":
+                    dep_context = self._search_dependency_from_dict(request, context)
                     if dep_context:
                         dependency_contexts.append(dep_context)
                 
-                elif request.request_type == "reference":
-                    ref_context = self._search_references(request, context)
+                elif request.get('type') == "reference":
+                    ref_context = self._search_references_from_dict(request, context)
                     if ref_context:
                         reference_contexts.append(ref_context)
             
             # Process external requests
             external_contexts = []
-            for request in reader_output.external_requests:
+            for request in external_req_data:
                 # Skip if already found
-                if request.query in already_found_queries:
-                    self.logger.debug(f"Skipping already-found external: {request.query}")
+                if request.get('query') in already_found_queries:
+                    self.logger.debug(f"Skipping already-found external: {request.get('query')}")
                     continue
                 
-                ext_context = self._search_external(request)
+                ext_context = self._search_external_from_dict(request)
                 if ext_context:
                     external_contexts.append(ext_context)
             
