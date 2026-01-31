@@ -193,30 +193,8 @@ class LocalLlamaClient(BaseLLMClient):
         }
 
 
-class RateLimiter:
-    """Simple token bucket rate limiter for remote API calls"""
-    
-    def __init__(self, max_requests_per_minute: int = 50):
-        self.max_requests_per_minute = max_requests_per_minute
-        self.interval = 60.0 / max_requests_per_minute
-        self.last_request_time = 0
-        self.logger = get_logger(__name__)
-    
-    def wait(self):
-        """Wait if necessary to respect rate limit"""
-        now = time.time()
-        elapsed = now - self.last_request_time
-        
-        if elapsed < self.interval:
-            wait_time = self.interval - elapsed
-            self.logger.debug(f"Rate limit: waiting {wait_time:.2f}s")
-            time.sleep(wait_time)
-        
-        self.last_request_time = time.time()
-
-
 class RemoteAPIClient(BaseLLMClient):
-    """Remote API Client for OpenRouter, OpenAI, etc. with Rate Limiting"""
+    """Remote API Client for OpenRouter, OpenAI, etc."""
 
     def __init__(self):
         self.config = get_config()
@@ -240,11 +218,6 @@ class RemoteAPIClient(BaseLLMClient):
             if not self.api_key:
                 raise ValueError(f"{self.api_key_env} not found in environment variables")
         
-        # Initialize rate limiter
-        rate_limit_config = self.providers[self.default_provider].get('rate_limits', {})
-        max_requests = rate_limit_config.get('tier_1', {}).get('requests', 50)
-        self.rate_limiter = RateLimiter(max_requests_per_minute=max_requests)
-        
         # Response cache for repeated prompts (reduces redundant LLM calls)
         self._response_cache: Dict[str, LLMResponse] = {}
         self._cache_enabled = self.config.get('system.cache.enabled', True)
@@ -257,7 +230,6 @@ class RemoteAPIClient(BaseLLMClient):
         self.total_cost = 0.0
         
         logger.info(f"Remote API Client initialized with provider: {self.default_provider}, model: {self.default_model}")
-        logger.info(f"Rate limiter: {max_requests} requests per minute")
 
     def generate(self, request: LLMRequest) -> LLMResponse:
         """Generate response from remote API with rate limiting and retry logic"""
@@ -265,8 +237,6 @@ class RemoteAPIClient(BaseLLMClient):
         base_backoff = 2
 
         for attempt in range(max_retries):
-            self.rate_limiter.wait()
-            
             try:
                 response = requests.post(
                     self.base_url,
@@ -402,9 +372,11 @@ def get_llm_client() -> BaseLLMClient:
     global _llm_client
     if _llm_client is None:
         config = get_config()
-        llm_config = config.get('llm', {})
-        providers = llm_config.get('providers', {})
+        llm_config = config.get_config('llm')  # Use get_config() to get the full llm dict
+        providers = llm_config.get('providers', {}) if llm_config else {}
         local_config = providers.get('local', {})
+        
+        logger.debug(f"LLM config loaded: {bool(llm_config)}, local enabled: {local_config.get('enabled', False)}")
         
         # Check if local provider is enabled
         if local_config.get('enabled', False):

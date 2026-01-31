@@ -1,3 +1,6 @@
 {
-    "cmake.sourceDirectory": "C:/Users/shruti/OneDrive/Desktop/codeiq/grammar/tree-sitter-c"
+    "cmake.sourceDirectory": "C:/Users/shruti/OneDrive/Desktop/codeiq/grammar/tree-sitter-c",
+    "postman.settings.dotenv-detection-notification-visibility": false
 }
+
+

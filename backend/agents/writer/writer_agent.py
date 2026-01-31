@@ -39,13 +39,13 @@ class WriterAgent(BaseAgent):
         self.include_type_hints = self.agent_config.get('include_type_hints', True)
 
     def process(self, context: AgentContext) -> AgentResult:
-        """Generate documentation for component"""
+        """Generate documentation for component (supports XML and legacy Reader outputs)"""
         try:
             component = context.component
-            reader_output = context.get_result('reader')
+            reader_result = context.get_result('reader')
             searcher_output = context.get_result('searcher')
             
-            if not reader_output:
+            if not reader_result:
                 return AgentResult(
                     agent_name=self.agent_name,
                     status=AgentStatus.FAILED,
@@ -55,15 +55,43 @@ class WriterAgent(BaseAgent):
             
             self.logger.info(f"Generating documentation for: {component.name}")
             
+            # Extract metadata from context (set by Reader Agent)
+            context_metadata = context.metadata or {}
+            complexity_assessment = context_metadata.get('complexity_assessment')
+            needs_context = context_metadata.get('needs_additional_context', False)
+            
+            # Fallback: Extract metadata from reader output (support both XML and legacy)
+            if isinstance(reader_result, str):
+                # New XML format
+                complexity_level = context_metadata.get('complexity_level', 'simple')
+                if complexity_assessment is None:
+                    complexity_assessment = {
+                        'complexity_level': complexity_level,
+                        'lines_of_code': context_metadata.get('lines_of_code', 0),
+                        'is_async': context_metadata.get('is_async', False),
+                        'has_loops': context_metadata.get('has_loops', False),
+                        'num_dependencies': context_metadata.get('num_dependencies', 0),
+                        'num_calls': context_metadata.get('num_calls', 0),
+                    }
+                # Create dict for _build_context
+                reader_output = {
+                    'complexity_assessment': complexity_assessment,
+                    'needs_additional_context': needs_context,
+                    'internal_requests': context_metadata.get('internal_requests', []),
+                    'external_requests': context_metadata.get('external_requests', []),
+                }
+            else:
+                # Legacy ReaderOutput object
+                reader_output = reader_result
+                complexity_assessment = reader_output.complexity_assessment
+            
             # Build context
             ctx = self._build_context(component, reader_output, searcher_output)
             
             # Extract code facts (complexity-aware)
-            complexity_level = reader_output.complexity_assessment.get('complexity_level', 'simple')
+            complexity_level = complexity_assessment.get('complexity_level', 'simple')
             if complexity_level in ['complex', 'moderate']:
                 code_facts = self._extract_all_code_facts(component, ctx)
-                # self._classify_component_roles(component, ctx, code_facts)
-                # self._generate_invariants(code_facts, component.source_code)
             else:
                 code_facts = self._extract_minimal_facts(component)
             
@@ -625,17 +653,30 @@ Rules: Start summary with active verb. No "This function/class". Summary=What, D
     def _build_context(
         self,
         component: CodeComponent,
-        reader_output: ReaderOutput,
+        reader_output,  # Can be ReaderOutput object or dict from XML parsing
         searcher_output: Optional[SearcherOutput]
     ) -> Dict[str, Any]:
         """Build comprehensive context"""
+        # Handle both dict (from XML parsing) and ReaderOutput object
+        if isinstance(reader_output, dict):
+            complexity = reader_output.get('complexity_assessment', {'complexity_level': 'unknown'})
+            needs_context = reader_output.get('needs_additional_context', False)
+            internal_requests = reader_output.get('internal_requests', [])
+            external_requests = reader_output.get('external_requests', [])
+        else:
+            # Legacy ReaderOutput object
+            complexity = reader_output.complexity_assessment
+            needs_context = reader_output.needs_additional_context
+            internal_requests = reader_output.internal_requests
+            external_requests = reader_output.external_requests
+        
         context = {
             'component': component,
-            'complexity': reader_output.complexity_assessment,
-            'needs_additional_context': reader_output.needs_additional_context,
-            'complexity_level': reader_output.complexity_assessment.get('complexity_level', 'unknown'),
-            'internal_requests': reader_output.internal_requests,
-            'external_requests': reader_output.external_requests,
+            'complexity': complexity,
+            'needs_additional_context': needs_context,
+            'complexity_level': complexity.get('complexity_level', 'unknown'),
+            'internal_requests': internal_requests,
+            'external_requests': external_requests,
         }
         
         if searcher_output:

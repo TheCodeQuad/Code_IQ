@@ -54,10 +54,6 @@ providers:
     default_params:
       temperature: 0.7
       max_tokens: 4000
-    rate_limits:
-      tier_1:
-        requests: 100
-        tokens: 1000000
 
   # Local inference via llama-cpp-python (no HTTP overhead, model loaded once)
   local:
@@ -88,10 +84,6 @@ providers:
     default_params:
       temperature: 0.7
       max_tokens: 4000
-    rate_limits:
-      tier_1:
-        requests: 60
-        tokens: 1000000
 
   anthropic:
     enabled: false

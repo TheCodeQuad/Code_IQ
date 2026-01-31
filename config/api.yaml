@@ -9,19 +9,12 @@ api:
     backoff_factor: 2
     max_backoff: 60
     retry_on_timeout: true
-    retry_on_rate_limit: true
   
   # Timeout settings (seconds)
   timeout:
     connect: 10
     read: 300
     write: 10
-  
-  # Rate limiting
-  rate_limit:
-    enabled: true
-    max_requests_per_minute: 50
-    max_tokens_per_minute: 100000
   
   # Cost tracking
   cost_tracking:

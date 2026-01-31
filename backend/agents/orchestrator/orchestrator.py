@@ -6,9 +6,10 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+from xml.etree import ElementTree as ET
 
 from backend.agents.base_agent import AgentContext, AgentResult, AgentStatus
-from backend.agents.reader_agent import ReaderAgent
+from backend.agents.reader_agent import ReaderAgent, InternalRequest, ExternalRequest
 from backend.agents.searcher_agent import SearcherAgent
 from backend.agents.writer.writer_agent import WriterAgent
 from backend.agents.verifier_agent import VerifierAgent
@@ -55,6 +56,90 @@ class Orchestrator:
         self._parallel_enabled = self.config.get('system.pipeline.parallel_processing', False)
         
         self.logger.info(f"Orchestrator initialized (parallel={self._parallel_enabled}, workers={self._max_workers})")
+    
+    def _parse_reader_xml_output(self, xml_string: str) -> Dict[str, Any]:
+        """
+        Parse Reader Agent's XML output format and extract information needs and requests.
+        
+        Returns:
+            Dict with keys: 'needs_context', 'internal_requests', 'external_requests'
+        """
+        try:
+            root = ET.fromstring(xml_string)
+            
+            # Extract needs_context flag
+            needs_context_elem = root.find('INFO_NEED')
+            needs_context = needs_context_elem is not None and needs_context_elem.text.lower() == 'true'
+            
+            # Parse internal requests
+            internal_requests = []
+            request_elem = root.find('REQUEST/INTERNAL')
+            if request_elem is not None:
+                # Parse CALLS
+                calls_elem = request_elem.find('CALLS')
+                if calls_elem is not None:
+                    # Get classes
+                    class_elem = calls_elem.find('CLASS')
+                    if class_elem is not None and class_elem.text:
+                        for class_name in class_elem.text.split(','):
+                            internal_requests.append(InternalRequest(
+                                request_type='dependency',
+                                component_id=class_name.strip(),
+                                component_name=class_name.strip(),
+                                reason='Referenced in component',
+                                priority=7
+                            ))
+                    
+                    # Get functions
+                    func_elem = calls_elem.find('FUNCTION')
+                    if func_elem is not None and func_elem.text:
+                        for func_name in func_elem.text.split(','):
+                            internal_requests.append(InternalRequest(
+                                request_type='dependency',
+                                component_id=func_name.strip(),
+                                component_name=func_name.strip(),
+                                reason='Referenced in component',
+                                priority=6
+                            ))
+                    
+                    # Get methods
+                    method_elem = calls_elem.find('METHOD')
+                    if method_elem is not None and method_elem.text:
+                        for method_name in method_elem.text.split(','):
+                            internal_requests.append(InternalRequest(
+                                request_type='reference',
+                                component_id=method_name.strip(),
+                                component_name=method_name.strip(),
+                                reason='Method usage context',
+                                priority=5
+                            ))
+            
+            # Parse external requests
+            external_requests = []
+            retrieval_elem = root.find('REQUEST/RETRIEVAL')
+            if retrieval_elem is not None:
+                query_elem = retrieval_elem.find('QUERY')
+                if query_elem is not None and query_elem.text:
+                    for query in query_elem.text.split(','):
+                        external_requests.append(ExternalRequest(
+                            request_type='concept',
+                            query=query.strip(),
+                            context='External concept referenced',
+                            priority=6
+                        ))
+            
+            return {
+                'needs_context': needs_context,
+                'internal_requests': internal_requests,
+                'external_requests': external_requests
+            }
+        except Exception as e:
+            self.logger.warning(f"Failed to parse Reader XML output: {e}, using defaults")
+            return {
+                'needs_context': False,
+                'internal_requests': [],
+                'external_requests': []
+            }
     
     def process_components(
         self,
@@ -217,22 +302,35 @@ class Orchestrator:
         last_external_requests = None
 
         for iteration in range(max_iterations):
-            reader_output = context.get_result('reader')
+            reader_output_xml = context.get_result('reader')
+            reader_metadata = context.metadata or {}
+            
+            # Parse XML if reader output is a string
+            if isinstance(reader_output_xml, str):
+                parsed_data = self._parse_reader_xml_output(reader_output_xml)
+                internal_requests = parsed_data['internal_requests']
+                external_requests = parsed_data['external_requests']
+                needs_context = parsed_data['needs_context']
+            else:
+                # Fallback for old format (ReaderOutput object)
+                internal_requests = reader_output_xml.internal_requests
+                external_requests = reader_output_xml.external_requests
+                needs_context = reader_output_xml.needs_additional_context
             
             # Check for convergence
-            internal_requests = [(r.request_type, r.component_id) for r in reader_output.internal_requests]
-            external_requests = [(r.request_type, r.query) for r in reader_output.external_requests]
+            internal_requests_tuple = [(r.request_type, r.component_id) for r in internal_requests]
+            external_requests_tuple = [(r.request_type, r.query) for r in external_requests]
             
-            if (internal_requests == last_internal_requests and
-                external_requests == last_external_requests):
+            if (internal_requests_tuple == last_internal_requests and
+                external_requests_tuple == last_external_requests):
                 self.logger.info("No new information requested by Reader; stopping early.")
                 break
             
-            last_internal_requests = internal_requests
-            last_external_requests = external_requests
+            last_internal_requests = internal_requests_tuple
+            last_external_requests = external_requests_tuple
 
             # If Reader doesn't need more context, stop
-            if not getattr(reader_output, "needs_additional_context", False):
+            if not needs_context:
                 self.logger.info(f"Reader satisfied after iteration {iteration + 1}")
                 break
 

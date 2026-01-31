@@ -6,6 +6,8 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 import ast
 import re
+from xml.etree import ElementTree as ET
+from xml.dom import minidom
 
 from backend.agents.base_agent import BaseAgent, AgentContext, AgentResult, AgentStatus
 from backend.models.code_component import CodeComponent, ComponentType
@@ -65,10 +67,103 @@ class ReaderAgent(BaseAgent):
         self.external_libraries = self._load_external_libraries()
         self.algorithms = self._load_known_algorithms()
     
+    def _generate_xml_output(
+        self,
+        component: CodeComponent,
+        needs_context: bool,
+        internal_requests: List[InternalRequest],
+        external_requests: List[ExternalRequest],
+        control_flow: Dict[str, Any],
+        complexity_assessment: Dict[str, Any] = None
+    ) -> str:
+        """
+        Generate XML output in the format:
+        <INFO_NEED>true/false</INFO_NEED>
+        <COMPLEXITY>simple/moderate/complex</COMPLEXITY>
+        <REQUEST>
+            <INTERNAL>
+                <CALLS>
+                    <CLASS>class1,class2</CLASS>
+                    <FUNCTION>func1,func2</FUNCTION>
+                    <METHOD>self.method1,instance.method2</METHOD>
+                </CALLS>
+                <CALL_BY>true/false</CALL_BY>
+            </INTERNAL>
+            <RETRIEVAL>
+                <QUERY>query1,query2</QUERY>
+            </RETRIEVAL>
+        </REQUEST>
+        """
+        root = ET.Element('READER_OUTPUT')
+        
+        # INFO_NEED element
+        info_need = ET.SubElement(root, 'INFO_NEED')
+        info_need.text = 'true' if needs_context else 'false'
+        
+        # COMPLEXITY element - for quick writer access
+        if complexity_assessment:
+            complexity = ET.SubElement(root, 'COMPLEXITY')
+            complexity.text = complexity_assessment.get('complexity_level', 'unknown')
+        
+        # REQUEST element
+        request = ET.SubElement(root, 'REQUEST')
+        
+        # INTERNAL element
+        internal = ET.SubElement(request, 'INTERNAL')
+        
+        # CALLS element - group by component type
+        calls = ET.SubElement(internal, 'CALLS')
+        
+        class_calls = []
+        function_calls = []
+        method_calls = []
+        
+        for req in internal_requests:
+            if req.request_type == 'dependency':
+                comp = self._extract_component_name(req.component_id)
+                # Categorize by type (simple heuristic)
+                if '.' in comp and not comp.startswith('_'):
+                    method_calls.append(comp)
+                else:
+                    function_calls.append(comp)
+        
+        if class_calls:
+            class_elem = ET.SubElement(calls, 'CLASS')
+            class_elem.text = ','.join(class_calls)
+        
+        if function_calls:
+            func_elem = ET.SubElement(calls, 'FUNCTION')
+            func_elem.text = ','.join(function_calls)
+        
+        if method_calls:
+            method_elem = ET.SubElement(calls, 'METHOD')
+            method_elem.text = ','.join(method_calls)
+        
+        # CALL_BY element - whether to search for references
+        call_by = ET.SubElement(internal, 'CALL_BY')
+        has_reference_requests = any(req.request_type == 'reference' for req in internal_requests)
+        call_by.text = 'true' if has_reference_requests else 'false'
+        
+        # RETRIEVAL element
+        retrieval = ET.SubElement(request, 'RETRIEVAL')
+        
+        # QUERY element - gather all external queries
+        if external_requests:
+            queries = [f"{req.request_type}:{req.query}" for req in external_requests]
+            query_elem = ET.SubElement(retrieval, 'QUERY')
+            query_elem.text = ','.join(queries)
+        
+        # Convert to pretty string
+        xml_str = minidom.parseString(ET.tostring(root)).toprettyxml(indent="  ")
+        # Remove XML declaration and empty lines
+        xml_str = '\n'.join([line for line in xml_str.split('\n') if line.strip() and '<?xml' not in line])
+        
+        return xml_str
+    
     def process(self, context: AgentContext) -> AgentResult:
         """
         Process component and determine information needs.
-        Uses Navigator's pre-extracted metadata instead of redundant analysis.
+        Returns XML output with custom format.
         """
         try:
             component = context.component
@@ -91,29 +186,43 @@ class ReaderAgent(BaseAgent):
             project_dag = context.metadata.get('project_dag')
             external_requests = self._generate_external_requests(component, project_dag)
             
-            # Build output
-            output = ReaderOutput(
-                component_id=component.id,
-                complexity_assessment={
-                    'complexity_level': self._get_complexity_level(component),
-                    'lines_of_code': component.lines_of_code,
-                    'is_async': control_flow.get('is_async', False),
-                    'has_loops': control_flow.get('has_loop', False),
-                    'num_dependencies': len(component.depends_on),
-                    'num_calls': len(component.calls),
-                },
-                needs_additional_context=needs_context,
-                internal_requests=internal_requests,
-                external_requests=external_requests,
-                analysis_summary="",  # Empty: not used downstream (Writer generates its own)
-                metadata={
-                    'component_type': component.type,
-                    'is_public': self._is_public(component),
-                    'has_docstring': bool(component.existing_docstring),
-                    'is_async': control_flow.get('is_async', False),
-                    'has_threading': control_flow.get('has_concurrency', False),
-                }
+            # Build complexity assessment
+            complexity_assessment = {
+                'complexity_level': self._get_complexity_level(component),
+                'lines_of_code': component.lines_of_code,
+                'is_async': control_flow.get('is_async', False),
+                'has_loops': control_flow.get('has_loop', False),
+                'num_dependencies': len(component.depends_on),
+                'num_calls': len(component.calls),
+            }
+            
+            # Generate XML output (includes complexity)
+            xml_output = self._generate_xml_output(
+                component,
+                needs_context,
+                internal_requests,
+                external_requests,
+                control_flow,
+                complexity_assessment
             )
+            
+            # Also store metadata for writer/searcher with full complexity_assessment
+            metadata = {
+                'component_id': component.id,
+                'component_type': component.type,
+                'is_public': self._is_public(component),
+                'has_docstring': bool(component.existing_docstring),
+                'is_async': control_flow.get('is_async', False),
+                'has_threading': control_flow.get('has_concurrency', False),
+                'complexity_level': complexity_assessment['complexity_level'],
+                'complexity_assessment': complexity_assessment,  # Full assessment for Writer
+                'needs_additional_context': needs_context,
+                'lines_of_code': component.lines_of_code,
+                'num_dependencies': len(component.depends_on),
+                'num_calls': len(component.calls),
+                'internal_requests': internal_requests,
+                'external_requests': external_requests,
+            }
             
             self.logger.info(
                 f"Reader complete: "
@@ -125,7 +234,8 @@ class ReaderAgent(BaseAgent):
             return AgentResult(
                 agent_name=self.agent_name,
                 status=AgentStatus.SUCCESS,
-                output=output
+                output=xml_output,
+                metadata=metadata
             )
             
         except Exception as e:
@@ -189,34 +299,36 @@ For batch analysis, evaluate each component independently and provide clear YES/
                 project_dag = contexts[i].metadata.get('project_dag')
                 external_requests = self._generate_external_requests(component, project_dag)
                 
-                # Build output
-                output = ReaderOutput(
-                    component_id=component.id,
-                    complexity_assessment={
-                        'complexity_level': self._get_complexity_level(component),
-                        'lines_of_code': component.lines_of_code,
-                        'is_async': control_flow.get('is_async', False),
-                        'has_loops': control_flow.get('has_loop', False),
-                        'num_dependencies': len(component.depends_on),
-                        'num_calls': len(component.calls),
-                    },
-                    needs_additional_context=needs_context,
-                    internal_requests=internal_requests,
-                    external_requests=external_requests,
-                    analysis_summary="",
-                    metadata={
-                        'component_type': component.type,
-                        'is_public': self._is_public(component),
-                        'has_docstring': bool(component.existing_docstring),
-                        'is_async': control_flow.get('is_async', False),
-                        'has_threading': control_flow.get('has_concurrency', False),
-                    }
+                # Generate XML output for batch processing too
+                xml_output = self._generate_xml_output(
+                    component,
+                    needs_context,
+                    internal_requests,
+                    external_requests,
+                    control_flow
                 )
+                
+                # Store metadata alongside XML
+                metadata = {
+                    'component_id': component.id,
+                    'component_type': component.type,
+                    'is_public': self._is_public(component),
+                    'has_docstring': bool(component.existing_docstring),
+                    'is_async': control_flow.get('is_async', False),
+                    'has_threading': control_flow.get('has_concurrency', False),
+                    'complexity_level': self._get_complexity_level(component),
+                    'lines_of_code': component.lines_of_code,
+                    'num_dependencies': len(component.depends_on),
+                    'num_calls': len(component.calls),
+                    'internal_requests': internal_requests,
+                    'external_requests': external_requests,
+                }
                 
                 results.append(AgentResult(
                     agent_name=self.agent_name,
                     status=AgentStatus.SUCCESS,
-                    output=output
+                    output=xml_output,
+                    metadata=metadata
                 ))
             
             self.logger.info(
