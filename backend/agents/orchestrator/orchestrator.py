@@ -9,7 +9,7 @@ import threading
 from xml.etree import ElementTree as ET
 
 from backend.agents.base_agent import AgentContext, AgentResult, AgentStatus
-from backend.agents.reader_agent import ReaderAgent, InternalRequest, ExternalRequest
+from backend.agents.reader_agent import ReaderAgent
 from backend.agents.searcher_agent import SearcherAgent
 from backend.agents.writer.writer_agent import WriterAgent
 from backend.agents.verifier_agent import VerifierAgent
@@ -18,6 +18,7 @@ from backend.models.code_component import CodeComponent
 from backend.models.documentation import Documentation
 from backend.utils.logger import get_logger
 from backend.utils.config_handler import get_config
+from backend.utils.docstring_inserter import DocstringInserter
 
 logger = get_logger(__name__)
 
@@ -55,11 +56,30 @@ class Orchestrator:
         self._max_workers = self.config.get('system.performance.max_workers', 4)
         self._parallel_enabled = self.config.get('system.pipeline.parallel_processing', False)
         
-        self.logger.info(f"Orchestrator initialized (parallel={self._parallel_enabled}, workers={self._max_workers})")
+        # Continuous docstring insertion
+        self._insert_docstrings = self.config.get('system.pipeline.insert_docstrings', True)
+        self._docstring_inserter = None
+        if self._insert_docstrings:
+            self._docstring_inserter = DocstringInserter(
+                backup=True,
+                replace_existing=self.config.get('system.pipeline.replace_existing_docstrings', False)
+            )
+        
+        # Track docstring insertion stats
+        self.docstrings_inserted = 0
+        self.docstrings_skipped = 0
+        self.docstrings_failed = 0
+        
+        self.logger.info(
+            f"Orchestrator initialized (parallel={self._parallel_enabled}, "
+            f"workers={self._max_workers}, insert_docstrings={self._insert_docstrings})"
+        )
     
     def _parse_reader_xml_output(self, xml_string: str) -> Dict[str, Any]:
         """
         Parse Reader Agent's XML output format and extract information needs and requests.
+        
+        Now works with the new XML format from refactored Reader Agent.
         
         Returns:
             Dict with keys: 'needs_context', 'internal_requests', 'external_requests'
@@ -71,7 +91,7 @@ class Orchestrator:
             needs_context_elem = root.find('INFO_NEED')
             needs_context = needs_context_elem is not None and needs_context_elem.text.lower() == 'true'
             
-            # Parse internal requests
+            # Parse internal requests (now as Dicts, not dataclasses)
             internal_requests = []
             request_elem = root.find('REQUEST/INTERNAL')
             if request_elem is not None:
@@ -82,51 +102,57 @@ class Orchestrator:
                     class_elem = calls_elem.find('CLASS')
                     if class_elem is not None and class_elem.text:
                         for class_name in class_elem.text.split(','):
-                            internal_requests.append(InternalRequest(
-                                request_type='dependency',
-                                component_id=class_name.strip(),
-                                component_name=class_name.strip(),
-                                reason='Referenced in component',
-                                priority=7
-                            ))
+                            internal_requests.append({
+                                'type': 'dependency',
+                                'name': class_name.strip(),
+                                'category': 'CLASS',
+                                'priority': 7
+                            })
                     
                     # Get functions
                     func_elem = calls_elem.find('FUNCTION')
                     if func_elem is not None and func_elem.text:
                         for func_name in func_elem.text.split(','):
-                            internal_requests.append(InternalRequest(
-                                request_type='dependency',
-                                component_id=func_name.strip(),
-                                component_name=func_name.strip(),
-                                reason='Referenced in component',
-                                priority=6
-                            ))
+                            internal_requests.append({
+                                'type': 'dependency',
+                                'name': func_name.strip(),
+                                'category': 'FUNCTION',
+                                'priority': 6
+                            })
                     
                     # Get methods
                     method_elem = calls_elem.find('METHOD')
                     if method_elem is not None and method_elem.text:
                         for method_name in method_elem.text.split(','):
-                            internal_requests.append(InternalRequest(
-                                request_type='reference',
-                                component_id=method_name.strip(),
-                                component_name=method_name.strip(),
-                                reason='Method usage context',
-                                priority=5
-                            ))
+                            internal_requests.append({
+                                'type': 'dependency',
+                                'name': method_name.strip(),
+                                'category': 'METHOD',
+                                'priority': 5
+                            })
+                
+                # Parse CALLED_BY (should we find who calls this component?)
+                called_by_elem = request_elem.find('CALLED_BY')
+                if called_by_elem is not None and called_by_elem.text == 'true':
+                    internal_requests.append({
+                        'type': 'reference',
+                        'name': 'self',
+                        'category': 'CALLED_BY',
+                        'priority': 8
+                    })
             
-            # Parse external requests
+            # Parse external requests (now as Dicts, not dataclasses)
             external_requests = []
-            retrieval_elem = root.find('REQUEST/RETRIEVAL')
-            if retrieval_elem is not None:
-                query_elem = retrieval_elem.find('QUERY')
+            external_elem = root.find('REQUEST/EXTERNAL')
+            if external_elem is not None:
+                query_elem = external_elem.find('QUERY')
                 if query_elem is not None and query_elem.text:
                     for query in query_elem.text.split(','):
-                        external_requests.append(ExternalRequest(
-                            request_type='concept',
-                            query=query.strip(),
-                            context='External concept referenced',
-                            priority=6
-                        ))
+                        external_requests.append({
+                            'type': 'novel_concept',
+                            'query': query.strip(),
+                            'priority': 7
+                        })
             
             return {
                 'needs_context': needs_context,
@@ -169,12 +195,29 @@ class Orchestrator:
         
         elapsed_time = (datetime.now() - start_time).total_seconds()
         
-        self.logger.info(
+        # Build completion message with docstring stats if enabled
+        completion_msg = (
             f"Documentation generation complete: "
             f"{self.successful_docs} succeeded, "
             f"{self.failed_docs} failed, "
             f"Time: {elapsed_time:.2f}s"
         )
+        
+        if self._insert_docstrings:
+            completion_msg += (
+                f" | Docstrings inserted: {self.docstrings_inserted}, "
+                f"failed: {self.docstrings_failed}"
+            )
+        
+        self.logger.info(completion_msg)
+        
+        # Save consolidated reader outputs
+        try:
+            consolidated_path = self.reader.save_consolidated_output()
+            if consolidated_path:
+                self.logger.info(f"Consolidated reader outputs saved to: {consolidated_path}")
+        except Exception as e:
+            self.logger.warning(f"Failed to save consolidated reader outputs: {e}")
         
         return documented_components
     
@@ -318,8 +361,17 @@ class Orchestrator:
                 needs_context = reader_output_xml.needs_additional_context
             
             # Check for convergence
-            internal_requests_tuple = [(r.request_type, r.component_id) for r in internal_requests]
-            external_requests_tuple = [(r.request_type, r.query) for r in external_requests]
+            # Handle both dict (new format) and object (old format) for backward compatibility
+            internal_requests_tuple = [
+                (r.get('type') if isinstance(r, dict) else r.request_type,
+                 r.get('name') if isinstance(r, dict) else r.component_id)
+                for r in internal_requests
+            ]
+            external_requests_tuple = [
+                (r.get('type') if isinstance(r, dict) else r.request_type,
+                 r.get('query') if isinstance(r, dict) else r.query)
+                for r in external_requests
+            ]
             
             if (internal_requests_tuple == last_internal_requests and
                 external_requests_tuple == last_external_requests):
@@ -371,6 +423,10 @@ class Orchestrator:
         
         documentation = writer_result.output
         context.add_result('writer', documentation)
+        
+        # Continuous docstring insertion - insert immediately after writer generates
+        if self._insert_docstrings and self._docstring_inserter:
+            self._insert_docstring_for_component(component, documentation)
 
         # Optional: Verifier agent
         use_verifier = self.config.get('agents.verifier.enabled', False)
@@ -382,6 +438,52 @@ class Orchestrator:
                 self.logger.info(f"Verifier passed for {component.name}")
 
         return documentation
+    
+    def _insert_docstring_for_component(
+        self,
+        component: CodeComponent,
+        documentation: Documentation
+    ) -> None:
+        """
+        Insert the generated docstring into the source file for a component.
+        Called immediately after the writer agent generates documentation.
+        
+        Args:
+            component: The code component being documented
+            documentation: The generated documentation from writer agent
+        """
+        if not self._docstring_inserter:
+            return
+        
+        try:
+            # Convert Documentation to dict format expected by inserter
+            doc_data = {
+                'docstring': documentation.docstring if hasattr(documentation, 'docstring') else str(documentation)
+            }
+            
+            # Use the component-aware insertion method
+            result = self._docstring_inserter.insert_for_component(component, doc_data)
+            
+            # Track stats (thread-safe)
+            with self._stats_lock:
+                if result.success:
+                    if result.action == 'inserted':
+                        self.docstrings_inserted += 1
+                        self.logger.debug(f"Docstring inserted for {component.name}")
+                    elif result.action == 'replaced':
+                        self.docstrings_inserted += 1
+                        self.logger.debug(f"Docstring replaced for {component.name}")
+                    elif result.action == 'skipped':
+                        self.docstrings_skipped += 1
+                        self.logger.debug(f"Docstring skipped for {component.name}: {result.message}")
+                else:
+                    self.docstrings_failed += 1
+                    self.logger.warning(f"Docstring insertion failed for {component.name}: {result.message}")
+                    
+        except Exception as e:
+            with self._stats_lock:
+                self.docstrings_failed += 1
+            self.logger.error(f"Error inserting docstring for {component.name}: {e}")
     
     def _process_parallel(
         self,
@@ -504,20 +606,41 @@ class Orchestrator:
             reader_output = reader_result.output
             context.add_result('reader', reader_output)
 
-            # Check for convergence: if requests are unchanged, break
-            internal_requests = [(r.request_type, r.component_id) for r in reader_output.internal_requests]
-            external_requests = [(r.request_type, r.query) for r in reader_output.external_requests]
+            # Parse Reader output (XML string or old ReaderOutput object)
+            if isinstance(reader_output, str):
+                # New format: XML string
+                parsed_data = self._parse_reader_xml_output(reader_output)
+                needs_context = parsed_data['needs_context']
+                internal_requests = parsed_data['internal_requests']
+                external_requests = parsed_data['external_requests']
+            else:
+                # Old format fallback: ReaderOutput object
+                internal_requests = getattr(reader_output, 'internal_requests', [])
+                external_requests = getattr(reader_output, 'external_requests', [])
+                needs_context = getattr(reader_output, 'needs_additional_context', False)
+
+            # Check for convergence: convert to tuples for comparison
+            internal_requests_tuple = [
+                (r.get('type') if isinstance(r, dict) else r.request_type,
+                 r.get('name') if isinstance(r, dict) else r.component_id)
+                for r in internal_requests
+            ]
+            external_requests_tuple = [
+                (r.get('type') if isinstance(r, dict) else r.request_type,
+                 r.get('query') if isinstance(r, dict) else r.query)
+                for r in external_requests
+            ]
             
-            if (internal_requests == last_internal_requests and
-                external_requests == last_external_requests):
+            if (internal_requests_tuple == last_internal_requests and
+                external_requests_tuple == last_external_requests):
                 self.logger.info("No new information requested by Reader; stopping early.")
                 break
             
-            last_internal_requests = internal_requests
-            last_external_requests = external_requests
+            last_internal_requests = internal_requests_tuple
+            last_external_requests = external_requests_tuple
 
             # If Reader doesn't need more context, stop
-            if not getattr(reader_output, "needs_additional_context", False):
+            if not needs_context:
                 self.logger.info(f"Reader satisfied after iteration {iteration + 1}")
                 break
 
@@ -607,6 +730,9 @@ class Orchestrator:
             else:
                 self.logger.warning(f"Verifier failed: {verifier_result.error}")
         
+        # 6. Insert docstring into source file (continuous integration)
+        self._insert_docstring_for_component(component, writer_output)
+        
         return writer_output
 
     def _create_fallback_documentation(self, component: CodeComponent) -> Documentation:
@@ -627,7 +753,7 @@ class Orchestrator:
     
     def get_statistics(self) -> Dict[str, Any]:
         """Get orchestrator statistics"""
-        return {
+        stats = {
             'total_components': self.total_components_processed,
             'successful': self.successful_docs,
             'failed': self.failed_docs,
@@ -642,3 +768,14 @@ class Orchestrator:
                 'verifier': self.verifier.get_statistics()
             }
         }
+        
+        # Include docstring insertion stats if enabled
+        if self._insert_docstrings:
+            stats['docstring_insertion'] = {
+                'enabled': True,
+                'inserted': self.docstrings_inserted,
+                'skipped': self.docstrings_skipped,
+                'failed': self.docstrings_failed
+            }
+        
+        return stats

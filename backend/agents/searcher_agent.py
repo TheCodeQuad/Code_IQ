@@ -3,16 +3,14 @@ Enhanced Searcher Agent with full repository access
 """
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
-import json
-from pathlib import Path
+import re
 from xml.etree import ElementTree as ET
 import networkx as nx
 
 from backend.agents.base_agent import BaseAgent, AgentContext, AgentResult, AgentStatus
-from backend.agents.reader_agent import ReaderOutput, InternalRequest, ExternalRequest
+from backend.agents.reader_agent import ReaderOutput
 from backend.models.code_component import CodeComponent
 from backend.utils.logger import get_logger
-from backend.utils.file_handler import FileHandler
 
 logger = get_logger(__name__)
 
@@ -58,29 +56,25 @@ class SearcherOutput:
 class SearcherAgent(BaseAgent):
     """
     Searcher Agent retrieves relevant context from:
-    1. Internal codebase (dependencies and references)
-    2. Knowledge base (cached information)
-    3. External sources (via LLM for algorithms/concepts)
+    1. Internal codebase (dependencies and references via Navigator graph)
+    2. External sources (via LLM for algorithms/concepts)
+    
+    Optimized to:
+    - Use Navigator's dependency graph directly (with NetworkX reverse)
+    - Batch external LLM queries for efficiency
+    - Avoid redundant LLM calls for local dependencies
     """
     
     def __init__(self):
         super().__init__("searcher")
-    
-        self.knowledge_base_path = Path(
-            self.config.get('system.paths.knowledge_base', 'data/knowledge_base')
-        )
-        self.file_handler = FileHandler()
-    
-        # Load knowledge base
-        self.functions_kb = self._load_knowledge_base('functions.json')
-        self.classes_kb = self._load_knowledge_base('classes.json')
-        self.modules_kb = self._load_knowledge_base('modules.json')
-    
-        # Cache for component lookup
-        self.component_cache = {}
-    
-        # FIX 3: Add summary cache
-        self.summary_cache = {}
+        
+        # Cache for dependency summaries (avoids repeated LLM calls)
+        self.summary_cache: Dict[str, str] = {}
+        
+        # Repository data (set via set_repository_data)
+        self.component_map: Dict[str, CodeComponent] = {}
+        self.dependency_graph: Optional[nx.DiGraph] = None
+        self.reverse_graph: Optional[nx.DiGraph] = None
 
     def set_repository_data(
         self,
@@ -88,36 +82,38 @@ class SearcherAgent(BaseAgent):
         dependency_graph: Optional[nx.DiGraph] = None
     ):
         """
-        Set full repository data for searching
+        Set full repository data for searching.
+        Uses Navigator's graph directly with NetworkX reverse for efficiency.
         
         Args:
             all_components: All components from Navigator
-            dependency_graph: Dependency graph from Navigator
+            dependency_graph: Dependency graph from Navigator (nx.DiGraph)
         """
-        self.all_components = all_components
         self.component_map = {comp.id: comp for comp in all_components}
         self.dependency_graph = dependency_graph
         
-        # Build reverse call graph (who calls this component)
-        self.reverse_call_graph = {}
-        for component in all_components:
-            for called_id in component.calls:
-                if called_id not in self.reverse_call_graph:
-                    self.reverse_call_graph[called_id] = []
-                self.reverse_call_graph[called_id].append(component.id)
+        # Use NetworkX's efficient reverse() instead of manual building
+        if dependency_graph is not None:
+            self.reverse_graph = dependency_graph.reverse(copy=False)
+            edge_count = dependency_graph.number_of_edges()
+        else:
+            self.reverse_graph = None
+            edge_count = 0
         
         self.logger.info(
             f"Repository data loaded: {len(all_components)} components, "
-            f"{len(self.reverse_call_graph)} call relationships"
+            f"{edge_count} dependency edges"
         )
 
     
     def _parse_reader_xml_output(self, xml_output: str) -> Dict[str, Any]:
         """
         Parse Reader's XML output into structured data.
-        Expected format:
+        
+        Expected format (from refactored Reader Agent):
         <READER_OUTPUT>
             <INFO_NEED>true/false</INFO_NEED>
+            <COMPLEXITY>simple/moderate/complex</COMPLEXITY>
             <REQUEST>
                 <INTERNAL>
                     <CALLS>
@@ -125,11 +121,11 @@ class SearcherAgent(BaseAgent):
                         <FUNCTION>func1,func2</FUNCTION>
                         <METHOD>method1,method2</METHOD>
                     </CALLS>
-                    <CALL_BY>true/false</CALL_BY>
+                    <CALLED_BY>true/false</CALLED_BY>
                 </INTERNAL>
-                <RETRIEVAL>
+                <EXTERNAL>
                     <QUERY>query1,query2</QUERY>
-                </RETRIEVAL>
+                </EXTERNAL>
             </REQUEST>
         </READER_OUTPUT>
         """
@@ -140,13 +136,17 @@ class SearcherAgent(BaseAgent):
             info_need_elem = root.find('INFO_NEED')
             needs_context = info_need_elem.text == 'true' if info_need_elem is not None else False
             
+            # Extract COMPLEXITY (optional, for downstream use)
+            complexity_elem = root.find('COMPLEXITY')
+            complexity_level = complexity_elem.text if complexity_elem is not None else 'unknown'
+            
             # Extract INTERNAL requests
             internal_elem = root.find('.//INTERNAL')
             internal_requests = []
             search_references = False
             
             if internal_elem is not None:
-                # Extract CALLS
+                # Extract CALLS (what this component calls)
                 calls_elem = internal_elem.find('CALLS')
                 if calls_elem is not None:
                     for child in calls_elem:
@@ -156,38 +156,38 @@ class SearcherAgent(BaseAgent):
                                 internal_requests.append({
                                     'type': 'dependency',
                                     'name': comp_name.strip(),
-                                    'category': child.tag
+                                    'category': child.tag  # CLASS, FUNCTION, METHOD
                                 })
                 
-                # Extract CALL_BY
-                call_by_elem = internal_elem.find('CALL_BY')
-                search_references = call_by_elem.text == 'true' if call_by_elem is not None else False
+                # Extract CALLED_BY (should we find who calls this component?)
+                called_by_elem = internal_elem.find('CALLED_BY')
+                search_references = called_by_elem.text == 'true' if called_by_elem is not None else False
                 if search_references:
                     internal_requests.append({
                         'type': 'reference',
-                        'name': 'any',
-                        'category': 'REFERENCE'
+                        'name': 'self',  # Search for references to current component
+                        'category': 'CALLED_BY'
                     })
             
-            # Extract RETRIEVAL queries
-            retrieval_elem = root.find('.//RETRIEVAL')
+            # Extract EXTERNAL queries (novel algorithms only)
+            external_elem = root.find('.//EXTERNAL')
             external_requests = []
             
-            if retrieval_elem is not None:
-                query_elem = retrieval_elem.find('QUERY')
+            if external_elem is not None:
+                query_elem = external_elem.find('QUERY')
                 if query_elem is not None and query_elem.text:
                     queries = query_elem.text.split(',')
                     for query in queries:
                         query = query.strip()
-                        if ':' in query:
-                            req_type, query_text = query.split(':', 1)
+                        if query:
                             external_requests.append({
-                                'type': req_type.strip(),
-                                'query': query_text.strip()
+                                'type': 'novel_concept',
+                                'query': query
                             })
             
             return {
                 'needs_context': needs_context,
+                'complexity_level': complexity_level,
                 'internal_requests': internal_requests,
                 'external_requests': external_requests,
                 'search_references': search_references
@@ -196,6 +196,7 @@ class SearcherAgent(BaseAgent):
             self.logger.error(f"Failed to parse Reader XML output: {e}")
             return {
                 'needs_context': False,
+                'complexity_level': 'unknown',
                 'internal_requests': [],
                 'external_requests': [],
                 'search_references': False
@@ -204,10 +205,12 @@ class SearcherAgent(BaseAgent):
     def _search_dependency_from_dict(self, request_dict: Dict, context: AgentContext) -> Optional[DependencyContext]:
         """Search for dependency using dict request (converted from XML)"""
         # Create InternalRequest-like object from dict
+        # FIXED: Use 'name' as both id and name since XML only provides name
         class DictRequest:
             def __init__(self, d):
-                self.component_id = d.get('id')
-                self.component_name = d.get('name')
+                # Use name for lookup since XML doesn't provide full component ID
+                self.component_name = d.get('name', '')
+                self.component_id = d.get('id') or d.get('name', '')  # Fallback to name
                 self.request_type = d.get('type')
                 self.reason = d.get('reason', '')
                 self.priority = d.get('priority', 5)
@@ -218,10 +221,11 @@ class SearcherAgent(BaseAgent):
     def _search_references_from_dict(self, request_dict: Dict, context: AgentContext) -> Optional[ReferenceContext]:
         """Search for references using dict request (converted from XML)"""
         # Create InternalRequest-like object from dict
+        # FIXED: Use 'name' as both id and name since XML only provides name
         class DictRequest:
             def __init__(self, d):
-                self.component_id = d.get('id')
-                self.component_name = d.get('name')
+                self.component_name = d.get('name', '')
+                self.component_id = d.get('id') or d.get('name', '')  # Fallback to name
                 self.request_type = d.get('type')
                 self.reason = d.get('reason', '')
                 self.priority = d.get('priority', 5)
@@ -303,17 +307,16 @@ class SearcherAgent(BaseAgent):
                     if ref_context:
                         reference_contexts.append(ref_context)
             
-            # Process external requests
-            external_contexts = []
-            for request in external_req_data:
-                # Skip if already found
-                if request.get('query') in already_found_queries:
-                    self.logger.debug(f"Skipping already-found external: {request.get('query')}")
-                    continue
-                
-                ext_context = self._search_external_from_dict(request)
-                if ext_context:
-                    external_contexts.append(ext_context)
+            # Process external requests in batch for efficiency
+            pending_external = [
+                req for req in external_req_data 
+                if req.get('query') not in already_found_queries
+            ]
+            
+            if pending_external:
+                external_contexts = self._batch_search_external(pending_external)
+            else:
+                external_contexts = []
             
             # Create search summary
             summary = self._create_search_summary(
@@ -360,18 +363,31 @@ class SearcherAgent(BaseAgent):
     
     def _search_dependency(
         self,
-        request: InternalRequest,
+        request,
         context: AgentContext
     ) -> Optional[DependencyContext]:
-        """Search for dependency information"""
+        """
+        Search for dependency information.
+        
+        Args:
+            request: DictRequest object with component_name, request_type attributes
+            context: Agent context
+            
+        Returns:
+            DependencyContext or None
+        """
         try:
-            component = self._find_component(request.component_id, context)
+            # Get component name from request (use attribute access for DictRequest objects)
+            comp_name = request.component_name if hasattr(request, 'component_name') else request.get('name', '')
+            
+            # Try to find component by name
+            component = self._find_component(comp_name, context)
             
             if not component:
-                self.logger.warning(f"Dependency not found: {request.component_id}")
+                self.logger.debug(f"Dependency not found: {comp_name}")
                 return None
             
-            # FIX: Use existing docstring or signature instead of LLM call
+            # Use existing docstring or signature instead of LLM call
             # Local dependencies don't need LLM processing
             if component.existing_docstring:
                 summary = component.existing_docstring[:200]
@@ -394,14 +410,14 @@ class SearcherAgent(BaseAgent):
     
     def _search_references(
         self,
-        request: InternalRequest,
+        request,
         context: AgentContext
     ) -> Optional[ReferenceContext]:
         """
-        Search for usage references
+        Search for usage references (who calls this component).
         
         Args:
-            request: Internal reference request
+            request: DictRequest object with component_name, request_type attributes
             context: Agent context
             
         Returns:
@@ -440,34 +456,37 @@ class SearcherAgent(BaseAgent):
     
     def _search_external(
         self,
-        request: ExternalRequest
+        request: Dict[str, Any]
     ) -> Optional[ExternalContext]:
         """
-        Search for external knowledge
+        Search for external knowledge (novel algorithms/concepts).
         
         Args:
-            request: External knowledge request
+            request: Dict with 'type' and 'query' keys
             
         Returns:
             ExternalContext or None
         """
         try:
+            query = request.get('query', '')
+            req_type = request.get('type', 'novel_concept')
+            
             # Generate explanation using LLM
-            prompt = self._create_external_search_prompt(request)
+            prompt = self._create_external_search_prompt(query, req_type)
             
             response = self.generate_with_llm(
                 prompt=prompt,
-                system_prompt="You are a technical knowledge expert. Provide clear, concise explanations.",
+                system_prompt="You are a technical knowledge expert. Provide clear, concise explanations for novel algorithms and techniques.",
                 temperature=0.5,
-                max_tokens=1000
+                max_tokens=500
             )
             
             # Parse response
             summary, details = self._parse_external_response(response)
             
             return ExternalContext(
-                query=request.query,
-                knowledge_type=request.request_type,
+                query=query,
+                knowledge_type=req_type,
                 summary=summary,
                 details=details,
                 references=[]
@@ -477,87 +496,146 @@ class SearcherAgent(BaseAgent):
             self.logger.error(f"Error searching external: {e}")
             return None
     
-    def _generate_dependency_summary(self, component: CodeComponent) -> str:
-        """Generate summary of a dependency (with caching)"""
-        cache_key = f"dep_summary:{component.id}"
-        
-        # Check cache first
-        if cache_key in self.summary_cache:
-            self.logger.debug(f"Using cached summary for {component.name}")
-            return self.summary_cache[cache_key]
-        
-        # Use existing docstring if available
-        if component.existing_docstring:
-            summary = component.existing_docstring[:200]
-            self.summary_cache[cache_key] = summary
-            return summary
-        
-        # Only call LLM if no docstring and not cached
-        prompt = f"""Provide a brief summary of what this code component does:
-
-Component: {component.name}
-Type: {component.type.value}
-Signature: {component.signature}
-
-Code:
-```{component.language}
-{component.source_code[:300]}...
-```
-
-Provide a 1-2 sentence summary focusing on its purpose and main functionality."""
-        
-        try:
-            summary = self.generate_with_llm(
-                prompt=prompt,
-                temperature=0.3,
-                max_tokens=200
-            )
-            summary = summary.strip()
-            self.summary_cache[cache_key] = summary
-            return summary
-        except Exception as e:
-            self.logger.warning(f"Failed to generate dependency summary: {e}")
-            fallback = f"{component.name}: {component.signature}"
-            self.summary_cache[cache_key] = fallback
-            return fallback
-    
-    def _generate_usage_summary(
+    def _batch_search_external(
         self,
-        component: CodeComponent,
-        usage_examples: List[str],
-        call_sites: List[Dict[str, Any]]
-    ) -> str:
-        """Generate summary of how component is used"""
-        prompt = f"""Analyze how this component is used and provide a summary:
-
-Component: {component.name}
-Type: {component.type.value}
-
-Usage Examples:
-{chr(10).join(f"- {ex[:100]}..." for ex in usage_examples[:3])}
-
-Call Sites Found: {len(call_sites)}
-
-Provide a 2-3 sentence summary explaining:
-1. Common usage patterns
-2. Typical contexts where it's called
-3. What it helps accomplish"""
+        requests: List[Dict]
+    ) -> List[ExternalContext]:
+        """
+        Batch search for external knowledge - reduces LLM calls.
+        Combines multiple queries into a single prompt when possible.
         
+        Args:
+            requests: List of external request dicts
+            
+        Returns:
+            List of ExternalContext objects
+        """
+        if not requests:
+            return []
+        
+        # For single request, use direct method
+        if len(requests) == 1:
+            result = self._search_external_from_dict(requests[0])
+            return [result] if result else []
+        
+        # Batch multiple requests into one LLM call
         try:
-            summary = self.generate_with_llm(
-                prompt=prompt,
-                temperature=0.4,
-                max_tokens=300
+            batch_prompt = self._create_batch_external_prompt(requests)
+            
+            response = self.generate_with_llm(
+                prompt=batch_prompt,
+                system_prompt="You are a technical knowledge expert. Provide clear, concise explanations for each query.",
+                temperature=0.5,
+                max_tokens=2000
             )
-            return summary.strip()
+            
+            # Parse batch response
+            return self._parse_batch_external_response(response, requests)
+            
         except Exception as e:
-            self.logger.warning(f"Failed to generate usage summary: {e}")
-            return f"Used in {len(call_sites)} locations throughout the codebase."
+            self.logger.warning(f"Batch external search failed: {e}, falling back to individual calls")
+            # Fallback to individual calls
+            results = []
+            for req in requests:
+                result = self._search_external_from_dict(req)
+                if result:
+                    results.append(result)
+            return results
     
-    def _create_external_search_prompt(self, request: ExternalRequest) -> str:
-        """Create prompt for external knowledge search"""
+    def _create_batch_external_prompt(self, requests: List[Dict]) -> str:
+        """Create a batch prompt for multiple external queries"""
+        queries = []
+        for i, req in enumerate(requests, 1):
+            query_type = req.get('type', 'concept')
+            query = req.get('query', '')
+            queries.append(f"{i}. [{query_type.upper()}] {query}")
+        
+        return f"""Please provide brief explanations for the following technical queries.
+For each query, provide:
+- A 2-3 sentence summary
+- Key details relevant to the context
+
+Format your response as:
+[1] Summary: ...
+Details: ...
+
+[2] Summary: ...
+Details: ...
+
+Queries:
+{chr(10).join(queries)}"""
+    
+    def _parse_batch_external_response(
+        self,
+        response: str,
+        requests: List[Dict]
+    ) -> List[ExternalContext]:
+        """Parse batch response into individual ExternalContext objects"""
+        contexts = []
+        
+        # Split by numbered sections
+        sections = re.split(r'\[(\d+)\]', response)
+        
+        # Build mapping of index to content
+        parsed_sections = {}
+        for i in range(1, len(sections), 2):
+            if i + 1 < len(sections):
+                idx = int(sections[i])
+                content = sections[i + 1].strip()
+                parsed_sections[idx] = content
+        
+        # Create ExternalContext for each request
+        for i, req in enumerate(requests, 1):
+            content = parsed_sections.get(i, "")
+            
+            # Extract summary and details
+            summary = ""
+            details = ""
+            
+            if "Summary:" in content:
+                parts = content.split("Details:", 1)
+                summary = parts[0].replace("Summary:", "").strip()
+                if len(parts) > 1:
+                    details = parts[1].strip()
+            else:
+                # First line is summary
+                lines = content.split('\n', 1)
+                summary = lines[0].strip()
+                details = lines[1].strip() if len(lines) > 1 else ""
+            
+            contexts.append(ExternalContext(
+                query=req.get('query', ''),
+                knowledge_type=req.get('type', 'concept'),
+                summary=summary,
+                details=details,
+                references=[]
+            ))
+        
+        return contexts
+    
+    def _create_external_search_prompt(self, query: str, req_type: str = 'novel_concept') -> str:
+        """
+        Create prompt for external knowledge search.
+        
+        Args:
+            query: The query/concept to explain
+            req_type: Type of request (novel_concept, algorithm, etc.)
+            
+        Returns:
+            Formatted prompt string
+        """
+        # For novel concepts from Reader Agent
+        if req_type == 'novel_concept':
+            return f"""Explain this novel/state-of-the-art concept: {query}
+
+Provide:
+1. A clear explanation (2-3 sentences)
+2. Why this is considered novel or state-of-the-art
+3. Key implementation considerations
+4. Common use cases or applications"""
+        
         prompts = {
-            'algorithm': f"""Explain the {request.query} in the context of: {request.context}
+            'algorithm': f"""Explain the algorithm: {query}
 
 Provide:
 1. A brief explanation (2-3 sentences)
@@ -565,38 +643,16 @@ Provide:
 3. When it's commonly used
 4. Key considerations for implementation""",
             
-            'library': f"""Explain the library/framework: {request.query}
-
-Context: {request.context}
-
-Provide:
-1. What the library is for (2 sentences)
-2. Key features relevant to this usage
-3. Common use cases
-4. Basic usage pattern""",
-            
-            'concept': f"""Explain the concept: {request.query}
-
-Context: {request.context}
+            'concept': f"""Explain the concept: {query}
 
 Provide:
 1. Clear definition (2-3 sentences)
 2. Why it's important
 3. How it's typically implemented
 4. Common patterns or best practices""",
-            
-            'domain': f"""Explain the domain-specific knowledge: {request.query}
-
-Context: {request.context}
-
-Provide:
-1. What it means in this domain (2-3 sentences)
-2. Key principles
-3. Common applications
-4. Important considerations"""
         }
         
-        return prompts.get(request.request_type, prompts['concept'])
+        return prompts.get(req_type, prompts['concept'])
     
     def _parse_external_response(self, response: str) -> tuple:
         """Parse external knowledge response into summary and details"""
@@ -643,33 +699,52 @@ Provide:
     
     # Helper methods
     
-    def _load_knowledge_base(self, filename: str) -> Dict[str, Any]:
-        """Load knowledge base file"""
-        kb_file = self.knowledge_base_path / filename
-        
-        if kb_file.exists():
-            try:
-                return self.file_handler.read_json(kb_file)
-            except Exception as e:
-                self.logger.warning(f"Failed to load KB {filename}: {e}")
-        
-        return {}
-    
     def _find_component(
         self,
         component_id: str,
         context: AgentContext
     ) -> Optional[CodeComponent]:
-        """Find component by ID"""
-        # Check cache first
-        if component_id in self.component_cache:
-            return self.component_cache[component_id]
+        """
+        Find component by ID or name from component map.
         
-        # Try to find in component map (from repository data)
-        if hasattr(self, 'component_map') and component_id in self.component_map:
-            component = self.component_map[component_id]
-            self.component_cache[component_id] = component
-            return component
+        Supports:
+        1. Exact match by full ID (e.g., 'main.keyInfo')
+        2. Match by component name only (e.g., 'keyInfo')
+        3. Match with common module prefixes stripped
+        
+        Args:
+            component_id: Component identifier (full ID or just name)
+            context: Agent context (unused but kept for interface compatibility)
+            
+        Returns:
+            CodeComponent if found, None otherwise
+        """
+        if not component_id:
+            return None
+        
+        # 1. Try exact match first
+        if component_id in self.component_map:
+            return self.component_map.get(component_id)
+        
+        # 2. Try matching by name only (component_id might be just the function name)
+        for comp_id, comp in self.component_map.items():
+            if comp.name == component_id:
+                return comp
+        
+        # 3. Try with common module prefix patterns
+        # e.g., 'keyInfo' -> 'main.keyInfo' or 'module.keyInfo'
+        for comp_id, comp in self.component_map.items():
+            # Extract the name part from full ID (e.g., 'main.keyInfo' -> 'keyInfo')
+            if comp_id.endswith('.' + component_id):
+                return comp
+        
+        # 4. Try fuzzy match - component_id might have module prefix we need to strip
+        # e.g., 'main._now' -> search for '_now' in all components
+        if '.' in component_id:
+            name_part = component_id.split('.')[-1]
+            for comp_id, comp in self.component_map.items():
+                if comp.name == name_part:
+                    return comp
         
         return None
     
@@ -690,15 +765,15 @@ Provide:
         component: CodeComponent,
         context: AgentContext
     ) -> List[Dict[str, Any]]:
-        """Find actual call sites using reverse call graph"""
+        """Find actual call sites using NetworkX reverse graph"""
         call_sites = []
         
-        # Use searcher's reverse_call_graph (built from component.calls)
-        if not hasattr(self, 'reverse_call_graph'):
+        # Use NetworkX reverse graph for efficient lookup
+        if self.reverse_graph is None or component.id not in self.reverse_graph:
             return []
         
-        # Get all components that call this one
-        calling_components = self.reverse_call_graph.get(component.id, [])
+        # Get all components that call this one (predecessors in reverse = successors in original)
+        calling_components = list(self.reverse_graph.successors(component.id))
         
         for caller_id in calling_components:
             caller = self.component_map.get(caller_id)
@@ -733,14 +808,14 @@ Provide:
         component: CodeComponent,
         context: AgentContext
     ) -> List[str]:
-        """Find actual usage examples from codebase"""
+        """Find actual usage examples from codebase using reverse graph"""
         examples = []
         
-        if not hasattr(self, 'reverse_call_graph'):
+        if self.reverse_graph is None or component.id not in self.reverse_graph:
             return []
         
-        # Get callers
-        calling_components = self.reverse_call_graph.get(component.id, [])
+        # Get callers from NetworkX reverse graph
+        calling_components = list(self.reverse_graph.successors(component.id))
         
         for caller_id in calling_components[:3]:  # Top 3 callers
             caller = self.component_map.get(caller_id)
@@ -751,7 +826,6 @@ Provide:
             for line in caller.source_code.split('\n'):
                 if component.name in line and '(' in line:
                     # Extract just the function call
-                    import re
                     match = re.search(rf'{re.escape(component.name)}\([^)]*\)', line)
                     if match:
                         examples.append(match.group(0))
