@@ -115,4 +115,9 @@ frontend:
 cd frontend
 npm run dev
 
+
+
+conda install -c conda-forge llama-cpp-python -y
+
 <!-- D:\BIA6\Code_IQ -->
+

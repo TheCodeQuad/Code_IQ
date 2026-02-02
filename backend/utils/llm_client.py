@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from abc import ABC, abstractmethod
 import time
 from functools import lru_cache
+from pathlib import Path
 from backend.utils.logger import get_logger
 from backend.utils.config_handler import get_config
 import psutil
@@ -90,6 +91,19 @@ class LocalLlamaClient(BaseLLMClient):
         logger.info(f"Loading local model from {model_path}...")
         start = time.time()
         
+        # Check if CUDA is available (optional - llama-cpp-python handles it)
+        try:
+            import torch
+            cuda_available = torch.cuda.is_available()
+            if cuda_available:
+                gpu_name = torch.cuda.get_device_name(0)
+                gpu_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                logger.info(f"CUDA GPU detected: {gpu_name} ({gpu_memory:.2f} GB)")
+            else:
+                logger.warning("CUDA not detected - model may run on CPU")
+        except (ImportError, OSError) as e:
+            logger.debug(f"PyTorch GPU detection skipped: {e}")
+        
         self.llm = Llama(
             model_path=model_path,
             n_ctx=n_ctx,
@@ -100,7 +114,21 @@ class LocalLlamaClient(BaseLLMClient):
         
         load_time = time.time() - start
         logger.info(f"Model loaded successfully in {load_time:.2f}s")
-        logger.info(f"Context size: {n_ctx}, GPU layers: {n_gpu_layers}")
+        logger.info(f"Context size: {n_ctx}, GPU layers: {n_gpu_layers} (-1 = all layers on GPU)")
+        
+        # Log actual GPU usage after loading
+        try:
+            # Try to get metadata about how model was loaded
+            # This is model-specific but we can at least log the config used
+            if n_gpu_layers == -1:
+                logger.info("GPU layer configuration: Using ALL layers on GPU (maximum acceleration)")
+            elif n_gpu_layers > 0:
+                logger.info(f"GPU layer configuration: Using {n_gpu_layers} layers on GPU")
+            else:
+                logger.warning("GPU layer configuration: CPU only (no GPU acceleration)")
+                logger.warning("⚠ To use GPU, set n_gpu_layers=-1 in config/llm.yaml")
+        except Exception as e:
+            logger.debug(f"Could not verify GPU layer info: {e}")
         
         self.model_path = model_path
         self.model_name = os.path.basename(model_path)
@@ -384,12 +412,17 @@ def get_llm_client() -> BaseLLMClient:
             
             if mode == 'llama_cpp':
                 # Use direct llama-cpp-python inference
-                model_path = local_config.get('model_path', 'models/DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf')
+                model_path = local_config.get('model_path', 'd:\\Projects\\Code_IQ\\models\\DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf')
+                
+                # Convert relative paths to absolute
+                model_path = str(Path(model_path).resolve())
+                
                 n_ctx = local_config.get('n_ctx', 8192)
                 n_gpu_layers = local_config.get('n_gpu_layers', -1)
                 n_threads = local_config.get('n_threads', None)
                 
-                logger.info("Initializing LocalLlamaClient for direct inference...")
+                logger.info(f"Initializing LocalLlamaClient for direct inference...")
+                logger.info(f"Model path resolved to: {model_path}")
                 _llm_client = LocalLlamaClient(
                     model_path=model_path,
                     n_ctx=n_ctx,
