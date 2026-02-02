@@ -1,241 +1,129 @@
 """
 Reader Agent
-Analyzes code components and determines information needs
+Analyzes code components and determines information needs (Language-Agnostic)
+
+Process:
+    Step 1: Code Analysis
+        - What does this code DO?
+        - What does it CALL? (internal dependencies)
+        - What CALLS it? (usage patterns - for public components)
+
+    Step 2: Context Sufficiency Check
+        - Is current context ENOUGH?
+            - Simple/obvious code → NO CONTEXT NEEDED
+            - Complex/unclear code → NEED CONTEXT
+        - What TYPE of context is missing?
+            - INTERNAL: Related code in same repo
+            - EXTERNAL: Novel algorithms, new techniques (EXPENSIVE - use sparingly)
+
+    Step 3: Generate Structured XML Request
+        - Output clean XML with specific needs for Searcher Agent
 """
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
-import ast
-import re
+from datetime import datetime
 from xml.etree import ElementTree as ET
 from xml.dom import minidom
+from pathlib import Path
 
 from backend.agents.base_agent import BaseAgent, AgentContext, AgentResult, AgentStatus
 from backend.models.code_component import CodeComponent, ComponentType
 from backend.utils.logger import get_logger
+from backend.utils.file_handler import FileHandler
 
 logger = get_logger(__name__)
 
-@dataclass
-class InternalRequest:
-    """Request for internal code information"""
-    request_type: str  # "dependency" or "reference"
-    component_id: str
-    component_name: str
-    reason: str
-    priority: int = 5  # 1-10, higher = more important
-
-@dataclass
-class ExternalRequest:
-    """Request for external knowledge"""
-    request_type: str  # "algorithm", "library", "concept", "domain"
-    query: str
-    context: str
-    priority: int = 5
 
 @dataclass
 class ReaderOutput:
-    """Output from Reader Agent"""
+    """
+    Minimal output from Reader Agent.
+    Just the XML string - Searcher Agent will parse what it needs.
+    """
     component_id: str
-    complexity_assessment: Dict[str, Any]
-    needs_additional_context: bool
-    internal_requests: List[InternalRequest] = field(default_factory=list)
-    external_requests: List[ExternalRequest] = field(default_factory=list)
-    analysis_summary: str = ""
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    xml_output: str
+    needs_context: bool = False
+
 
 class ReaderAgent(BaseAgent):
     """
-    Reader Agent analyzes code components and determines information needs
+    Reader Agent: Analyzes code components and determines information needs.
     
-    Process:
-    1. Analyze component complexity
-    2. Assess visibility (public/private)
-    3. Identify dependencies that need context
-    4. Identify references (usage examples)
-    5. Detect external concepts/algorithms
-    6. Generate structured information requests
+    Language-agnostic design:
+        - Uses CodeComponent abstraction (already parsed by Navigator)
+        - No language-specific parsing or syntax checks
+        - Relies on Navigator's extracted metadata (calls, depends_on, complexity)
+    
+    Output:
+        Clean XML response for Searcher Agent with:
+        - INFO_NEED: true/false
+        - COMPLEXITY: simple/moderate/complex
+        - REQUEST:
+            - INTERNAL: CALLS (what this component calls) + CALLED_BY (who calls this)
+            - EXTERNAL: QUERY (only for novel/SOTA algorithms)
     """
+    
+    # Complexity scoring thresholds
+    SIMPLE_THRESHOLD = 5
+    COMPLEX_THRESHOLD = 15
     
     def __init__(self):
         super().__init__("reader")
-        
-        # Complexity thresholds
-        self.simple_complexity_threshold = 3
-        self.complex_complexity_threshold = 20
-        
-        # Known libraries/frameworks that need explanation
-        self.external_libraries = self._load_external_libraries()
-        self.algorithms = self._load_known_algorithms()
-    
-    def _generate_xml_output(
-        self,
-        component: CodeComponent,
-        needs_context: bool,
-        internal_requests: List[InternalRequest],
-        external_requests: List[ExternalRequest],
-        control_flow: Dict[str, Any],
-        complexity_assessment: Dict[str, Any] = None
-    ) -> str:
-        """
-        Generate XML output in the format:
-        <INFO_NEED>true/false</INFO_NEED>
-        <COMPLEXITY>simple/moderate/complex</COMPLEXITY>
-        <REQUEST>
-            <INTERNAL>
-                <CALLS>
-                    <CLASS>class1,class2</CLASS>
-                    <FUNCTION>func1,func2</FUNCTION>
-                    <METHOD>self.method1,instance.method2</METHOD>
-                </CALLS>
-                <CALL_BY>true/false</CALL_BY>
-            </INTERNAL>
-            <RETRIEVAL>
-                <QUERY>query1,query2</QUERY>
-            </RETRIEVAL>
-        </REQUEST>
-        """
-        root = ET.Element('READER_OUTPUT')
-        
-        # INFO_NEED element
-        info_need = ET.SubElement(root, 'INFO_NEED')
-        info_need.text = 'true' if needs_context else 'false'
-        
-        # COMPLEXITY element - for quick writer access
-        if complexity_assessment:
-            complexity = ET.SubElement(root, 'COMPLEXITY')
-            complexity.text = complexity_assessment.get('complexity_level', 'unknown')
-        
-        # REQUEST element
-        request = ET.SubElement(root, 'REQUEST')
-        
-        # INTERNAL element
-        internal = ET.SubElement(request, 'INTERNAL')
-        
-        # CALLS element - group by component type
-        calls = ET.SubElement(internal, 'CALLS')
-        
-        class_calls = []
-        function_calls = []
-        method_calls = []
-        
-        for req in internal_requests:
-            if req.request_type == 'dependency':
-                comp = self._extract_component_name(req.component_id)
-                # Categorize by type (simple heuristic)
-                if '.' in comp and not comp.startswith('_'):
-                    method_calls.append(comp)
-                else:
-                    function_calls.append(comp)
-        
-        if class_calls:
-            class_elem = ET.SubElement(calls, 'CLASS')
-            class_elem.text = ','.join(class_calls)
-        
-        if function_calls:
-            func_elem = ET.SubElement(calls, 'FUNCTION')
-            func_elem.text = ','.join(function_calls)
-        
-        if method_calls:
-            method_elem = ET.SubElement(calls, 'METHOD')
-            method_elem.text = ','.join(method_calls)
-        
-        # CALL_BY element - whether to search for references
-        call_by = ET.SubElement(internal, 'CALL_BY')
-        has_reference_requests = any(req.request_type == 'reference' for req in internal_requests)
-        call_by.text = 'true' if has_reference_requests else 'false'
-        
-        # RETRIEVAL element
-        retrieval = ET.SubElement(request, 'RETRIEVAL')
-        
-        # QUERY element - gather all external queries
-        if external_requests:
-            queries = [f"{req.request_type}:{req.query}" for req in external_requests]
-            query_elem = ET.SubElement(retrieval, 'QUERY')
-            query_elem.text = ','.join(queries)
-        
-        # Convert to pretty string
-        xml_str = minidom.parseString(ET.tostring(root)).toprettyxml(indent="  ")
-        # Remove XML declaration and empty lines
-        xml_str = '\n'.join([line for line in xml_str.split('\n') if line.strip() and '<?xml' not in line])
-        
-        return xml_str
+        # Initialize output directory for XML persistence
+        self.output_dir = Path("data/intermediate/agent_output/reader")
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        # Consolidated XML output tracking
+        self.consolidated_outputs = []  # List of (component_id, xml_output) tuples
     
     def process(self, context: AgentContext) -> AgentResult:
         """
-        Process component and determine information needs.
-        Returns XML output with custom format.
+        Process a single component and determine information needs.
+        
+        Args:
+            context: AgentContext containing CodeComponent
+            
+        Returns:
+            AgentResult with XML output string
         """
         try:
             component = context.component
+            self.logger.info(f"Reader analyzing: {component.name} ({component.type.value})")
             
-            self.logger.info(f"Reader analyzing: {component.name}")
+            # Step 1: Analyze code structure (from Navigator's data)
+            analysis = self._analyze_component(component)
             
-            # Get Navigator's extracted control flow and metadata
-            control_flow = component.metadata.get('control_flow', {})
+            # Step 2: Determine if context is needed (LLM decision with unified response)
+            assessment = self._assess_context_sufficiency(component, analysis)
+            needs_context = assessment['needs_context']
             
-            # Assess if additional context is needed
-            needs_context = self._assess_information_needs(component, control_flow)
+            # Step 3: Generate structured XML request with external classification
+            xml_output = self._generate_xml_output(component, analysis, assessment)
             
-            # Generate requests based on identified needs
-            internal_requests = []
-            external_requests = []
+            # Save XML output for debugging/analysis
+            self._save_xml_output(component.id, xml_output)
             
-            if needs_context:
-                internal_requests = self._generate_internal_requests(component)
-            
-            project_dag = context.metadata.get('project_dag')
-            external_requests = self._generate_external_requests(component, project_dag)
-            
-            # Build complexity assessment
-            complexity_assessment = {
-                'complexity_level': self._get_complexity_level(component),
-                'lines_of_code': component.lines_of_code,
-                'is_async': control_flow.get('is_async', False),
-                'has_loops': control_flow.get('has_loop', False),
-                'num_dependencies': len(component.depends_on),
-                'num_calls': len(component.calls),
-            }
-            
-            # Generate XML output (includes complexity)
-            xml_output = self._generate_xml_output(
-                component,
-                needs_context,
-                internal_requests,
-                external_requests,
-                control_flow,
-                complexity_assessment
-            )
-            
-            # Also store metadata for writer/searcher with full complexity_assessment
-            metadata = {
-                'component_id': component.id,
-                'component_type': component.type,
-                'is_public': self._is_public(component),
-                'has_docstring': bool(component.existing_docstring),
-                'is_async': control_flow.get('is_async', False),
-                'has_threading': control_flow.get('has_concurrency', False),
-                'complexity_level': complexity_assessment['complexity_level'],
-                'complexity_assessment': complexity_assessment,  # Full assessment for Writer
-                'needs_additional_context': needs_context,
-                'lines_of_code': component.lines_of_code,
-                'num_dependencies': len(component.depends_on),
-                'num_calls': len(component.calls),
-                'internal_requests': internal_requests,
-                'external_requests': external_requests,
-            }
+            # Track for consolidated output
+            self.consolidated_outputs.append((component.id, xml_output))
             
             self.logger.info(
-                f"Reader complete: "
-                f"Needs context: {needs_context}, "
-                f"Internal requests: {len(internal_requests)}, "
-                f"External requests: {len(external_requests)}"
+                f"Reader complete: {component.name} | "
+                f"Needs context: {needs_context} | "
+                f"External: {assessment['external_classification']} | "
+                f"Calls: {len(analysis['calls']['FUNCTION']) + len(analysis['calls']['CLASS']) + len(analysis['calls']['METHOD'])} | "
+                f"Complexity: {analysis['complexity_level']}"
             )
             
             return AgentResult(
                 agent_name=self.agent_name,
                 status=AgentStatus.SUCCESS,
                 output=xml_output,
-                metadata=metadata
+                metadata={
+                    'component_id': component.id,
+                    'needs_context': needs_context,
+                    'external_classification': assessment['external_classification'],
+                    'external_query': assessment['external_query'],
+                    'complexity_level': analysis['complexity_level']
+                }
             )
             
         except Exception as e:
@@ -249,14 +137,13 @@ class ReaderAgent(BaseAgent):
     
     def process_batch(self, contexts: List[AgentContext]) -> List[AgentResult]:
         """
-        Process multiple components in a single LLM call (batch processing).
-        Reduces token usage and latency by ~80%.
+        Process multiple components in a single LLM call (batch mode).
         
         Args:
-            contexts: List of AgentContext objects (typically 5 per batch)
+            contexts: List of AgentContext objects
             
         Returns:
-            List of AgentResults with individual ReaderOutputs
+            List of AgentResult objects
         """
         try:
             components = [ctx.component for ctx in contexts]
@@ -264,83 +151,49 @@ class ReaderAgent(BaseAgent):
             
             self.logger.info(f"Reader batch analyzing: {batch_size} components")
             
-            # Create compact batch prompt
-            prompt = self._create_batch_prompt(components)
+            # Step 1: Analyze all components
+            analyses = [self._analyze_component(comp) for comp in components]
             
-            system_prompt = """You are a Reader Agent responsible for determining if additional context is needed to generate high-quality docstrings for code components.
-
-For batch analysis, evaluate each component independently and provide clear YES/NO decisions."""
+            # Step 2: Assess context for all components in a single LLM call (true batch)
+            # This reduces LLM calls from N (one per component) to 1
+            assessments = self._batch_assess_context_sufficiency(components, analyses)
             
-            # Single LLM call for entire batch
-            response = self.generate_with_llm(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                temperature=0.1,
-                max_tokens=500
-            )
-            
-            # Parse response to extract decisions for each component
-            decisions = self._parse_batch_response(response, components)
-            
-            # Build individual AgentResults for each component
+            # Step 3: Generate XML for each component with unified assessment
             results = []
-            for i, component in enumerate(components):
-                control_flow = component.metadata.get('control_flow', {})
-                needs_context = decisions[i]['needs_context']
-                reason = decisions[i]['reason']
+            for i, (component, analysis, assessment) in enumerate(zip(components, analyses, assessments)):
+                xml_output = self._generate_xml_output(component, analysis, assessment)
                 
-                self.logger.info(f"Batch decision for {component.name}: {reason}")
+                # Save XML output for debugging/analysis
+                self._save_xml_output(component.id, xml_output)
                 
-                # Generate requests based on decision
-                internal_requests = []
-                if needs_context:
-                    internal_requests = self._generate_internal_requests(component)
-                
-                project_dag = contexts[i].metadata.get('project_dag')
-                external_requests = self._generate_external_requests(component, project_dag)
-                
-                # Generate XML output for batch processing too
-                xml_output = self._generate_xml_output(
-                    component,
-                    needs_context,
-                    internal_requests,
-                    external_requests,
-                    control_flow
-                )
-                
-                # Store metadata alongside XML
-                metadata = {
-                    'component_id': component.id,
-                    'component_type': component.type,
-                    'is_public': self._is_public(component),
-                    'has_docstring': bool(component.existing_docstring),
-                    'is_async': control_flow.get('is_async', False),
-                    'has_threading': control_flow.get('has_concurrency', False),
-                    'complexity_level': self._get_complexity_level(component),
-                    'lines_of_code': component.lines_of_code,
-                    'num_dependencies': len(component.depends_on),
-                    'num_calls': len(component.calls),
-                    'internal_requests': internal_requests,
-                    'external_requests': external_requests,
-                }
+                # Track for consolidated output
+                self.consolidated_outputs.append((component.id, xml_output))
                 
                 results.append(AgentResult(
                     agent_name=self.agent_name,
                     status=AgentStatus.SUCCESS,
                     output=xml_output,
-                    metadata=metadata
+                    metadata={
+                        'component_id': component.id,
+                        'needs_context': assessment['needs_context'],
+                        'external_classification': assessment['external_classification'],
+                        'external_query': assessment['external_query'],
+                        'complexity_level': analysis['complexity_level']
+                    }
                 ))
             
+            context_needed_count = sum(1 for a in assessments if a['needs_context'])
+            novel_count = sum(1 for a in assessments if a['external_classification'] in ['novel_algorithm', 'novel_technique'])
             self.logger.info(
-                f"Reader batch complete: {batch_size} components processed, "
-                f"Context needed: {sum(1 for d in decisions if d['needs_context'])}"
+                f"Reader batch complete: {batch_size} components | "
+                f"Context needed: {context_needed_count} | "
+                f"Novel concepts: {novel_count}"
             )
             
             return results
             
         except Exception as e:
             self.logger.error(f"Reader batch error: {e}", exc_info=True)
-            # Return failed results for entire batch
             return [
                 AgentResult(
                     agent_name=self.agent_name,
@@ -351,545 +204,907 @@ For batch analysis, evaluate each component independently and provide clear YES/
                 for _ in contexts
             ]
     
-    def _get_complexity_level(self, component: CodeComponent) -> str:
-        """Determine complexity level based on Navigator's metadata."""
-        # Use Navigator's complexity if available, otherwise estimate
-        cyclomatic = component.complexity or 1
-        dependencies = len(component.depends_on)
-        loc = component.lines_of_code
-        params = len(component.parameters) if component.parameters else 0
+    # =========================================================================
+    # STEP 1: Code Analysis (Language-Agnostic)
+    # =========================================================================
+    
+    def _analyze_component(self, component: CodeComponent) -> Dict[str, Any]:
+        """
+        Analyze component structure using Navigator's extracted data.
+        No language-specific parsing - uses CodeComponent abstraction.
         
-        # Simple scoring based on Navigator's facts
-        score = cyclomatic + min(dependencies, 5) + min(params, 3) + (loc // 15)
+        Returns:
+            Dict with: calls, complexity_level, is_public, control_flow
+        """
+        # Extract what this component CALLS (internal dependencies)
+        calls = self._extract_calls(component)
         
-        if score <= self.simple_complexity_threshold:
+        # Determine complexity level
+        complexity_level = self._calculate_complexity_level(component)
+        
+        # Check visibility (language-agnostic via CodeComponent)
+        is_public = self._is_public(component)
+        
+        # Get control flow characteristics (from Navigator)
+        control_flow = component.metadata.get('control_flow', {})
+        
+        return {
+            'calls': calls,
+            'complexity_level': complexity_level,
+            'is_public': is_public,
+            'control_flow': control_flow,
+            'has_existing_docs': bool(component.existing_docstring),
+        }
+    
+    def _extract_calls(self, component: CodeComponent) -> Dict[str, List[str]]:
+        """
+        Extract what this component calls, categorized by type.
+        Uses Navigator's extracted data (component.calls, component.depends_on).
+        
+        Returns:
+            Dict with keys: CLASS, FUNCTION, METHOD
+        """
+        class_calls = []
+        function_calls = []
+        method_calls = []
+        
+        # 1. From component.calls (actual invocations in source)
+        for dep_id in (component.depends_on or []):
+            call_name = self._extract_name_from_id(dep_id)
+            # Method call pattern: contains '.' (e.g., self.method, obj.method)
+            if '.' in call_name:
+                method_calls.append(call_name)
+            # Class instantiation pattern: starts with uppercase
+            elif call_name and call_name[0].isupper():
+                class_calls.append(call_name)
+            # Function call
+            else:
+                function_calls.append(call_name)
+        
+        # 2. From component.depends_on (resolved dependency IDs)
+        for dep_id in (component.depends_on or []):
+            dep_name = self._extract_name_from_id(dep_id)
+            
+            # Avoid duplicates
+            if dep_name in class_calls or dep_name in function_calls or dep_name in method_calls:
+                continue
+            
+            # Categorize
+            if dep_name and dep_name[0].isupper():
+                class_calls.append(dep_name)
+            else:
+                function_calls.append(dep_name)
+        
+        return {
+            'CLASS': list(set(class_calls)),
+            'FUNCTION': list(set(function_calls)),
+            'METHOD': list(set(method_calls)),
+        }
+    
+    def _calculate_complexity_level(self, component: CodeComponent) -> str:
+        """
+        Calculate complexity using HYBRID APPROACH for precision:
+        - Method 1: Cognitive Complexity (nested control flow)
+        - Method 2: Nesting Depth Analysis (max nesting level)
+        - Method 3: Coupling Metrics (dependencies + dependents)
+        
+        Returns:
+            'simple', 'moderate', or 'complex'
+        """
+        # Method 1: Cognitive Complexity (weighted most heavily)
+        cognitive_score = self._calculate_cognitive_complexity(component)
+        
+        # Method 2: Nesting Depth (max nesting level)
+        max_nesting = self._extract_max_nesting_depth(component)
+        
+        # Method 3: Coupling (dependencies + dependents)
+        coupling_score = self._calculate_coupling_score(component)
+        
+        # Weighted combination for precision
+        total_score = (
+            cognitive_score * 0.5 +      # Most important: readability
+            max_nesting * 2.0 +          # Critical: nesting multiplier
+            coupling_score * 0.3         # Supporting: maintainability
+        )
+        
+        if total_score <= self.SIMPLE_THRESHOLD:
             return 'simple'
-        elif score <= self.complex_complexity_threshold:
+        elif total_score <= self.COMPLEX_THRESHOLD:
             return 'moderate'
         else:
             return 'complex'
     
-    def _assess_information_needs(
-        self,
-        component: CodeComponent,
-        control_flow: Dict[str, Any]
-    ) -> bool:
+    def _calculate_cognitive_complexity(self, component: CodeComponent) -> float:
         """
-        Use LLM to determine if component needs additional context for documentation.
-        
-        The LLM evaluates:
-        - Code complexity and algorithmic patterns (recursion, complex control flow)
-        - Dependencies and their criticality
-        - Concurrency/threading patterns (explicit or implicit)
-        - Exception handling complexity
-        - Domain-specific knowledge requirements
-        - Whether the code is self-explanatory or needs external context
+        Calculate Cognitive Complexity (focus on human understanding).
+        Higher for nested control structures and complex branching.
         
         Returns:
-            bool: True if additional context needed, False otherwise
+            Float score (0-100)
         """
-        complexity_level = self._get_complexity_level(component)
+        control_flow = component.metadata.get('control_flow', {})
         
-        prompt = f"""Analyze this code component and determine if additional context is needed to generate comprehensive documentation.
-
-## Component Information
-- **Name:** {component.name}
-- **Type:** {component.type.value}
-- **Visibility:** {"Public" if self._is_public(component) else "Private"}
-- **Complexity Level:** {complexity_level}
-- **Lines of Code:** {component.lines_of_code}
-- **Dependencies:** {len(component.depends_on)} ({', '.join(component.depends_on[:5])}{'...' if len(component.depends_on) > 5 else ''})
-- **Calls:** {len(component.calls)} functions/methods
-- **Parameters:** {len(component.parameters) if component.parameters else 0}
-
-## Control Flow Characteristics
-- Is Async: {control_flow.get('is_async', False)}
-- Has Loops: {control_flow.get('has_loop', False)}
-- Has Infinite Loop: {control_flow.get('has_infinite_loop', False)}
-- Has Concurrency/Threading: {control_flow.get('has_concurrency', False)}
-- Has Try/Except: {control_flow.get('has_try_except', False)}
-- Number of Branches: {control_flow.get('num_branches', 0)}
-
-## Existing Documentation
-{f'Has docstring: {component.existing_docstring[:200]}...' if component.existing_docstring else 'No existing docstring'}
-
-## Source Code
-```{component.language}
-{component.source_code}
-```
-
-## Decision Criteria
-Answer YES if ANY of these apply:
-1. **Algorithmic complexity**: Uses recursion, complex branching, or non-obvious algorithms
-2. **Concurrency patterns**: Uses locks, mutexes, threading, async/await, or has race condition risks
-3. **Critical dependencies**: Depends on components whose behavior significantly affects this component
-4. **Exception handling**: Has complex error handling that needs explanation
-5. **Domain knowledge**: Requires understanding of external APIs, protocols, or domain-specific concepts
-6. **State management**: Manages or coordinates shared state
-7. **Non-obvious behavior**: The code does something that isn't immediately clear from reading it
-
-Answer NO if ALL of these apply:
-1. The code is straightforward and self-explanatory
-2. No complex algorithms or patterns
-3. Dependencies are simple/obvious (like basic utilities)
-4. A developer can understand it completely just by reading the code
-
-## Your Response
-Respond with ONLY one of these exact formats:
-- "YES: <brief reason>" if additional context is needed
-- "NO: <brief reason>" if the code is self-explanatory"""
-
-        system_prompt = """You are a Reader Agent responsible for determining if additional context is needed to generate high-quality docstrings for code components.
-
-## Your Role
-You analyze code components and make critical decisions about whether to gather external context (dependencies, usage examples, external APIs, algorithms) before documentation generation. Your goal is to ensure comprehensive, accurate documentation.
-
-## Responsibilities
-1. **Assess Complexity**: Evaluate the true complexity of the code, including hidden patterns (recursion, state management, concurrency)
-2. **Identify Context Gaps**: Determine what information is missing that would help document the code better
-3. **Make Binary Decisions**: Clearly decide YES or NO based on whether additional context is needed
-4. **Provide Reasoning**: Explain your decision briefly so the system understands your logic
-
-## Decision Framework
-You should recommend YES (need additional context) when:
-- The code uses non-obvious algorithms or patterns (recursion, dynamic programming, graph algorithms)
-- There are hidden concurrency/threading patterns that aren't explicit
-- The component depends on critical internal dependencies whose behavior affects documentation
-- Complex exception handling requires explaining error scenarios
-- External APIs or frameworks are used that need explanation
-- The code manages shared state or coordinates across multiple components
-- The behavior isn't immediately obvious from reading the source code
-- Documentation requires usage examples to clarify behavior
-
-You should recommend NO (self-explanatory) only when:
-- The code is straightforward and does exactly what the name suggests
-- All dependencies are obvious (built-in functions, simple utilities)
-- No hidden complexity or non-obvious patterns exist
-- A skilled developer can fully understand the code just by reading it
-- The existing docstring (if any) already covers what needs explaining
-
-## Important Guidelines
-- **Err on the side of caution**: If unsure, recommend YES to ensure better documentation
-- **Be practical**: Don't request context for genuinely simple utility functions
-- **Look for hidden complexity**: Recursion, locks, async patterns, complex branching
-- **Consider the reader**: Would someone unfamiliar with the codebase understand this component?
-- **Focus on documentation quality**: The goal is comprehensive, maintainable documentation"""
-
-        try:
-            response = self.generate_with_llm(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                temperature=0.1,  # Low temperature for consistent decisions
-                max_tokens=100
-            )
-            
-            response_upper = response.strip().upper()
-            needs_context = response_upper.startswith("YES")
-            
-            # Log the decision for debugging
-            self.logger.info(f"LLM context decision for {component.name}: {response.strip()}")
-            
-            return needs_context
-            
-        except Exception as e:
-            self.logger.warning(f"LLM assessment failed for {component.name}: {e}")
-            # Fallback: err on the side of getting context for non-simple components
-            return complexity_level != 'simple'
+        # Base score from cyclomatic complexity
+        cyclomatic = component.complexity or 1
+        score = cyclomatic * 1.5
+        
+        # Penalty for nested constructs (exponential)
+        num_branches = control_flow.get('num_branches', 0)
+        has_loops = control_flow.get('has_loop', False)
+        has_try_except = control_flow.get('has_try_except', False)
+        
+        # Nested branches compound complexity (not linear)
+        if num_branches > 0:
+            score += num_branches * 2
+        
+        # Loops in combination with branches = harder
+        if has_loops and num_branches > 0:
+            score += 5  # Extra penalty for complexity interaction
+        elif has_loops:
+            score += 2
+        
+        # Exception handling adds cognitive load
+        if has_try_except:
+            score += 3
+        
+        # Async operations harder to reason about
+        if control_flow.get('has_async_operations', False):
+            score += 4
+        
+        # Infinite loops are anti-pattern (high cognitive cost)
+        if control_flow.get('has_infinite_loop', False):
+            score += 8
+        
+        return min(score, 100)  # Cap at 100
     
-    def _generate_internal_requests(
-        self,
-        component: CodeComponent
-    ) -> List[InternalRequest]:
+    def _extract_max_nesting_depth(self, component: CodeComponent) -> int:
         """
-        Generate requests for internal code information
+        Calculate maximum nesting depth from source code.
+        Scans source for indentation levels (language-agnostic).
         
-        Args:
-            component: Code component
-            
         Returns:
-            List of internal requests
+            Integer: max nesting depth (0-10+)
         """
-        requests = []
+        source = component.source_code or ""
+        if not source:
+            return 0
         
-        # 1. Dependency requests
-        # Request context for components that this component calls
-        dependency_requests = self._generate_dependency_requests(component)
-        requests.extend(dependency_requests)
+        lines = source.split('\n')
+        max_depth = 0
         
-        # 2. Reference requests
-        # Request usage examples (where this component is called)
-        reference_requests = self._generate_reference_requests(component)
-        requests.extend(reference_requests)
-        
-        return requests
-    
-    def _generate_dependency_requests(
-        self,
-        component: CodeComponent
-    ) -> List[InternalRequest]:
-        """
-        Generate requests for dependency information
-        
-        Args:
-            component: Code component
-            
-        Returns:
-            List of dependency requests
-        """
-        requests = []
-        
-        # Analyze each dependency
-        for dep_id in component.depends_on:
-            # Determine if this dependency needs context
-            priority = self._calculate_dependency_priority(component, dep_id)
-            
-            if priority >= 3:  # Only request if priority is 3 or higher
-                reason = self._explain_dependency_need(component, dep_id)
-                
-                requests.append(InternalRequest(
-                    request_type="dependency",
-                    component_id=dep_id,
-                    component_name=self._extract_component_name(dep_id),
-                    reason=reason,
-                    priority=priority
-                ))
-        
-        return requests
-    
-    def _generate_reference_requests(
-        self,
-        component: CodeComponent
-    ) -> List[InternalRequest]:
-        """Generate requests for reference/usage information"""
-        requests = []
-        
-        # Only request usage examples for PUBLIC + COMPLEX or PUBLIC + AMBIGUOUS components
-        if self._is_public(component) and component.type in [ComponentType.FUNCTION, ComponentType.METHOD, ComponentType.CLASS]:
-            # Skip if already has good docstring
-            if component.existing_docstring and len(component.existing_docstring) > 50:
-                self.logger.debug(f"Skipping reference request for {component.name} - has good docstring")
-                return requests
-            
-            # Skip if it's simple and self-contained
-            if (len(component.parameters) <= 2 and 
-                len(component.calls) <= 1 and 
-                component.lines_of_code <= 10):
-                self.logger.debug(f"Skipping reference request for {component.name} - simple and self-contained")
-                return requests
-            
-            # Only request for actually complex or ambiguous functions
-            reason = (
-                f"This is a public {component.type.value}. "
-                f"Usage examples will help clarify its behavior."
-            )
-            
-            priority = 8 if component.type == ComponentType.FUNCTION else 7
-            
-            requests.append(InternalRequest(
-                request_type="reference",
-                component_id=component.id,
-                component_name=component.name,
-                reason=reason,
-                priority=priority
-            ))
-        
-        return requests
-    
-    def _generate_external_requests(
-        self,
-        component: CodeComponent,
-        project_dag=None
-    ) -> List[ExternalRequest]:
-        """
-        Generate external knowledge requests for a component.
-        Only create ExternalRequest if:
-        - concept is not in project DAG
-        - concept is explicitly referenced by API/annotation/DSL
-        - concept affects runtime behavior non-obviously
-        """
-        requests = []
-        
-        # Get project DAG from parameter or use empty set as fallback
-        dag_ids = set(project_dag) if project_dag else set()
-
-        # Known APIs/annotations/DSLs with non-obvious effects
-        NON_OBVIOUS_APIS = {
-            "javax.persistence.Entity",
-            "javax.persistence.Column",
-            "lombok.Data",
-            "lombok.Getter",
-            "lombok.Setter",
-            "spring.transactional",
-            "spring.component",
-            "spring.service",
-            "spring.repository",
-            "spring.controller"
-        }
-
-        # Check imports, decorators, or other explicit references
-        explicit_refs = set(getattr(component, "imports", [])) | set(getattr(component, "decorators", []))
-
-        for concept in explicit_refs:
-            # 1. Not in project DAG
-            if concept in dag_ids:
+        for line in lines:
+            if not line.strip():  # Skip empty lines
                 continue
             
-            # 2. Check if it's in the whitelist
-            if concept not in NON_OBVIOUS_APIS:
-                continue
-
-            # If all checks pass, create the request
-            requests.append(ExternalRequest(
-                request_type="concept",
-                query=concept,
-                context=f"Referenced in {component.name}",
-                priority=6
-            ))
+            # Count leading whitespace as proxy for nesting
+            # Each indent level (4 spaces or 1 tab) = 1 nesting level
+            indent_length = len(line) - len(line.lstrip())
+            indent_str = line[:indent_length]
+            
+            # Handle tabs (1 tab = 1 level)
+            if '\t' in indent_str:
+                depth = indent_str.count('\t')
+            else:
+                # Convert spaces to indent levels (assume 4 spaces = 1 level)
+                depth = indent_length // 4
+            
+            max_depth = max(max_depth, depth)
         
-        return requests
+        # Normalize: depths > 6 are extremely rare and problematic
+        # Use square root to compress very deep nesting
+        if max_depth > 6:
+            return int((max_depth ** 0.7) * 2)  # Penalize deep nesting
+        
+        return max_depth
     
+    def _calculate_coupling_score(self, component: CodeComponent) -> float:
+        """
+        Calculate coupling complexity (how much this depends on others).
+        Higher coupling = harder to understand in isolation.
+        
+        Returns:
+            Float score (0-20)
+        """
+        # Count what this component depends on (efferent coupling)
+        dependencies = len(component.depends_on or [])
+        
+        # Multiple parameters also indicate high coupling
+        params = len(component.parameters or [])
+        
+        # Combine: dependencies are more critical than params
+        score = (
+            min(dependencies, 10) * 1.2 +  # Weight external deps
+            min(params, 8) * 0.8             # Weight parameters
+        )
+        
+        return min(score, 20)  # Cap at 20 for weighting balance
     
     def _is_public(self, component: CodeComponent) -> bool:
-        """Check if component is public"""
-        # In Python, names starting with _ are private
-        if component.language == "python":
-            return not component.name.startswith('_')
+        """
+        Check if component is public (language-agnostic).
+        Uses CodeComponent.is_public if available, otherwise heuristics.
+        """
+        # Use Navigator's extracted visibility if available
+        if hasattr(component, 'is_public') and component.is_public is not None:
+            return component.is_public
         
-        # For other languages, check for public modifiers
+        # Fallback: check name patterns (works for Python, JS, etc.)
+        name = component.name or ''
+        
+        # Common private patterns: _name, __name, #name (JS private)
+        if name.startswith('_') or name.startswith('#'):
+            return False
+        
         return True
     
-    def _calculate_dependency_priority(
-        self,
-        component: CodeComponent,
-        dep_id: str
-    ) -> int:
-        """
-        Calculate priority for a dependency request
-        
-        Returns:
-            Priority score 1-10
-        """
-        # Base priority
-        priority = 5
-        
-        # Higher priority if component is complex
-        if component.complexity and component.complexity > self.complex_complexity_threshold:
-            priority += 2
-        
-        # Higher priority if dependency appears multiple times
-        call_count = component.calls.count(dep_id)
-        if call_count > 3:
-            priority += 2
-        elif call_count > 1:
-            priority += 1
-        
-        return min(priority, 10)
-    
-    def _explain_dependency_need(
-        self,
-        component: CodeComponent,
-        dep_id: str
-    ) -> str:
-        """Explain why dependency context is needed"""
-        dep_name = self._extract_component_name(dep_id)
-        
-        return (
-            f"The component '{component.name}' depends on '{dep_name}' "
-            f"to maintain coordinated state. This dependency participates in "
-            f"lifecycle transitions or availability guarantees."
-        )
-
-    
-    def _extract_component_name(self, component_id: str) -> str:
-        """Extract component name from ID"""
-        # Format: file_path:component_name
+    def _extract_name_from_id(self, component_id: str) -> str:
+        """Extract component name from ID (format: file_path:component_name)"""
         if ':' in component_id:
             return component_id.split(':')[-1]
         return component_id
     
-    # def _identify_library(self, import_statement: str) -> Optional[str]:
-    #     """Identify library from import statement"""
-    #     # Extract library name from import
-    #     # e.g., "import numpy as np" -> "numpy"
-    #     # e.g., "from sklearn.model_selection import train_test_split" -> "sklearn"
-        
-    #     patterns = [
-    #         r'import\s+(\w+)',
-    #         r'from\s+(\w+)',
-    #         r'require\(["\'](\w+)["\']\)',
-    #     ]
-        
-    #     for pattern in patterns:
-    #         match = re.search(pattern, import_statement)
-    #         if match:
-    #             return match.group(1)
-        
-    #     return None
+    # =========================================================================
+    # STEP 2: Context Sufficiency Check (LLM-based)
+    # =========================================================================
     
-    def _load_external_libraries(self) -> List[str]:
-        """Load list of external libraries that need explanation"""
-        return [
-            'numpy', 'pandas', 'matplotlib', 'seaborn', 'scipy',
-            'sklearn', 'tensorflow', 'torch', 'keras',
-            'requests', 'flask', 'django', 'fastapi',
-            'sqlalchemy', 'redis', 'celery',
-            'opencv', 'pillow', 'beautifulsoup',
-        ]
-    
-    def _load_known_algorithms(self) -> List[str]:
-        """Load list of known algorithms"""
-        return [
-            'binary search', 'quicksort', 'mergesort', 'heapsort',
-            'depth-first search', 'breadth-first search',
-            'dijkstra', 'bellman-ford', 'floyd-warshall',
-            'kruskal', 'prim', 'knuth-morris-pratt',
-            'rabin-karp', 'boyer-moore', 'dynamic programming',
-            'greedy', 'backtracking', 'divide and conquer',
-        ]
-    
-    def _create_batch_prompt(self, components: List[CodeComponent]) -> str:
+    def _assess_context_sufficiency(
+        self,
+        component: CodeComponent,
+        analysis: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
-        Create a compact prompt for batch processing multiple components.
+        Use LLM to determine if additional context is needed.
+        Returns unified result with both internal and external needs.
+        
+        Decision criteria:
+            YES (need context) when:
+                - Complex/non-obvious algorithms
+                - Concurrency/threading patterns
+                - Critical dependencies affecting behavior
+                - Domain-specific knowledge required
+                
+            NO (self-explanatory) when:
+                - Code is straightforward
+                - Name describes behavior clearly
+                - Dependencies are simple utilities
+        
+        Returns:
+            Dict with:
+                - needs_context: bool
+                - llm_response: str (raw LLM output)
+                - external_classification: str
+                - external_query: str (empty if not needed)
+        """
+        # Quick skip for truly simple components
+        if analysis['complexity_level'] == 'simple' and not analysis['calls']['FUNCTION']:
+            self.logger.debug(f"Skipping LLM for simple component: {component.name}")
+            return {
+                'needs_context': False,
+                'llm_response': '',
+                'external_classification': 'standard_pattern',
+                'external_query': ''
+            }
+        
+        prompt = self._build_context_assessment_prompt(component, analysis)
+        system_prompt = self._get_context_assessment_system_prompt()
+        
+        try:
+            response = self.generate_with_llm(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.1,
+                max_tokens=500  # Increased for structured XML response
+            )
+            
+            # Parse structured response
+            result = self._parse_unified_llm_response(response, component.name)
+            self.logger.debug(f"LLM decision for {component.name}: needs_context={result['needs_context']}, external={result['external_classification']}")
+            return result
+            
+        except Exception as e:
+            self.logger.warning(f"LLM assessment failed for {component.name}: {e}")
+            # Fallback: request context for non-simple components
+            return {
+                'needs_context': analysis['complexity_level'] != 'simple',
+                'llm_response': '',
+                'external_classification': 'standard_pattern',
+                'external_query': ''
+            }
+    
+    def _parse_unified_llm_response(self, response: str, component_name: str) -> Dict[str, Any]:
+        """
+        Parse unified LLM response containing INFO_NEED, COMPLEXITY, and REQUEST sections.
         
         Args:
-            components: List of CodeComponent objects (typically 5)
+            response: Raw LLM response text
+            component_name: For logging
             
         Returns:
-            Formatted prompt for batch LLM analysis
+            Dict with parsed fields
         """
-        prompt = "Analyze these code components and determine if each needs additional context for documentation.\n\n"
+        result = {
+            'needs_context': False,
+            'llm_response': response,
+            'external_classification': 'standard_pattern',
+            'external_query': ''
+        }
         
-        for i, comp in enumerate(components, 1):
-            complexity = self._get_complexity_level(comp)
-            control_flow = comp.metadata.get('control_flow', {})
+        try:
+            # Parse INFO_NEED
+            if '<INFO_NEED>true</INFO_NEED>' in response.lower():
+                result['needs_context'] = True
+            elif '<INFO_NEED>false</INFO_NEED>' in response.lower():
+                result['needs_context'] = False
+            else:
+                # Fallback: check for YES/NO pattern
+                if response.strip().upper().startswith('YES'):
+                    result['needs_context'] = True
             
-            # Compact component summary
+            # Parse EXTERNAL CLASSIFICATION
+            classification_patterns = [
+                'novel_algorithm', 'novel_technique', 
+                'standard_library', 'standard_pattern'
+            ]
+            for pattern in classification_patterns:
+                if f'<CLASSIFICATION>{pattern}</CLASSIFICATION>' in response.lower():
+                    result['external_classification'] = pattern
+                    break
+            
+            # Parse EXTERNAL QUERY (only if novel)
+            if result['external_classification'] in ['novel_algorithm', 'novel_technique']:
+                import re
+                query_match = re.search(r'<QUERY>([^<]+)</QUERY>', response, re.IGNORECASE)
+                if query_match:
+                    query = query_match.group(1).strip()
+                    if query and query.lower() not in ['', 'none', 'empty']:
+                        result['external_query'] = query
+            
+            return result
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to parse LLM response for {component_name}: {e}")
+            return result
+    
+    def _batch_assess_context_sufficiency(
+        self,
+        components: List[CodeComponent],
+        analyses: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Batch LLM call to assess context sufficiency for multiple components.
+        This makes a SINGLE LLM call for all components instead of N calls.
+        
+        Returns:
+            List of assessment dicts with: needs_context, llm_response, external_classification, external_query
+        """
+        # Quick skip for simple components that don't need LLM
+        assessments = []
+        components_needing_llm = []
+        component_indices = []  # Track which components need LLM
+        
+        for idx, (comp, analysis) in enumerate(zip(components, analyses)):
+            # Simple components without function calls can skip LLM
+            if analysis['complexity_level'] == 'simple' and not analysis['calls']['FUNCTION']:
+                self.logger.debug(f"Skipping LLM for simple component: {comp.name}")
+                assessments.append({
+                    'needs_context': False,
+                    'llm_response': '',
+                    'external_classification': 'standard_pattern',
+                    'external_query': ''
+                })
+            else:
+                components_needing_llm.append(comp)
+                component_indices.append(idx)
+                # Placeholder to be filled later
+                assessments.append(None)
+        
+        # If no components need LLM, return early
+        if not components_needing_llm:
+            return assessments
+        
+        # Build batch prompt for components that need LLM
+        prompt = self._build_batch_context_prompt(components_needing_llm, [analyses[i] for i in component_indices])
+        system_prompt = self._get_context_assessment_system_prompt()
+        
+        try:
+            response = self.generate_with_llm(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.1,
+                max_tokens=100 * len(components_needing_llm)  # More tokens for batch
+            )
+            
+            # Parse response and fill in the LLM-based assessments
+            llm_decisions = self._parse_batch_decisions_with_assessments(
+                response, components_needing_llm, [analyses[i] for i in component_indices]
+            )
+            
+            # Put the LLM decisions back in the right places
+            for llm_idx, original_idx in enumerate(component_indices):
+                assessments[original_idx] = llm_decisions[llm_idx]
+            
+            self.logger.info(f"Batch assessment: {len(components_needing_llm)}/{len(components)} components analyzed by LLM")
+            return assessments
+            
+        except Exception as e:
+            self.logger.warning(f"Batch LLM assessment failed: {e}")
+            # Fallback: fill in remaining assessments based on complexity
+            for idx, original_idx in enumerate(component_indices):
+                assessments[original_idx] = {
+                    'needs_context': analyses[original_idx]['complexity_level'] != 'simple',
+                    'llm_response': '',
+                    'external_classification': 'standard_pattern',
+                    'external_query': ''
+                }
+            return assessments
+    
+    def _build_context_assessment_prompt(
+        self,
+        component: CodeComponent,
+        analysis: Dict[str, Any]
+    ) -> str:
+        """Build prompt for single component context assessment with unified internal/external handling."""
+        control_flow = analysis['control_flow']
+        calls = analysis['calls']
+        
+        # Format calls for display
+        calls_summary = []
+        if calls['CLASS']:
+            calls_summary.append(f"Classes: {', '.join(calls['CLASS'][:5])}")
+        if calls['FUNCTION']:
+            calls_summary.append(f"Functions: {', '.join(calls['FUNCTION'][:5])}")
+        if calls['METHOD']:
+            calls_summary.append(f"Methods: {', '.join(calls['METHOD'][:5])}")
+        calls_str = '\n    '.join(calls_summary) if calls_summary else 'None'
+        
+        return f"""Analyze this code component and determine what additional context is needed.
+
+## Component Information
+- **Name:** {component.name}
+- **Type:** {component.type.value}
+- **Visibility:** {"Public" if analysis['is_public'] else "Private"}
+- **Estimated Complexity:** {analysis['complexity_level']}
+- **Lines of Code:** {component.lines_of_code or 0}
+
+## Detected Calls
+    {calls_str}
+
+## Control Flow Characteristics
+- Async Operations: {control_flow.get('is_async', False)}
+- Contains Loops: {control_flow.get('has_loop', False)}
+- Concurrency Patterns: {control_flow.get('has_concurrency', False)}
+- Number of Branches: {control_flow.get('num_branches', 0)}
+- Exception Handling: {control_flow.get('has_try_except', False)}
+
+## Source Code
+```
+{component.source_code}
+```
+
+Analyze and respond with:
+1. Brief analysis (1-2 sentences)
+2. What additional information is needed (if any)
+3. Structured XML response with INFO_NEED, COMPLEXITY, and REQUEST sections
+
+Remember:
+- EXTERNAL queries are EXPENSIVE - only for novel algorithms/techniques
+- Most standard library code needs NO external retrieval
+- Focus on what's truly needed for documentation"""
+    
+    def _build_batch_context_prompt(
+        self,
+        components: List[CodeComponent],
+        analyses: List[Dict[str, Any]]
+    ) -> str:
+        """Build prompt for batch context assessment."""
+        prompt = "Analyze these components and determine if each needs additional context.\n\n"
+        
+        for i, (comp, analysis) in enumerate(zip(components, analyses), 1):
             prompt += f"""=== COMPONENT {i}: {comp.name} ===
-Type: {comp.type.value}
-Visibility: {"Public" if self._is_public(comp) else "Private"}
-Complexity: {complexity}
-Lines: {comp.lines_of_code}
-Dependencies: {len(comp.depends_on)}
-Async: {control_flow.get('is_async', False)}
-Has Loops: {control_flow.get('has_loop', False)}
-Has Try/Except: {control_flow.get('has_try_except', False)}
+Type: {comp.type.value} | Complexity: {analysis['complexity_level']} | Lines: {comp.lines_of_code or 0}
+Calls: {len(comp.calls or [])} | Async: {analysis['control_flow'].get('is_async', False)}
 Code:
-```{comp.language}
-{comp.source_code[:250]}{'...' if len(comp.source_code) > 250 else ''}
+```
+{comp.source_code[:300]}{'...' if len(comp.source_code or '') > 300 else ''}
 ```
 
 """
         
-        prompt += """For each component, provide:
-- YES: if additional context (dependencies, APIs, usage examples) is needed
-- NO: if the code is self-explanatory and needs no context
-
-Respond EXACTLY in this format (one line per component):
-COMPONENT 1: YES/NO - brief reason
-COMPONENT 2: YES/NO - brief reason
-COMPONENT 3: YES/NO - brief reason
-[continue for all components]
-
-Examples:
-COMPONENT 1: YES - Uses recursive algorithm that needs explanation
-COMPONENT 2: NO - Simple utility function, self-explanatory
-COMPONENT 3: YES - Complex state management with threading patterns"""
+        prompt += """Respond EXACTLY in this format:
+COMPONENT 1: YES/NO - reason
+COMPONENT 2: YES/NO - reason
+..."""
         
         return prompt
     
-    def _parse_batch_response(self, response: str, components: List[CodeComponent]) -> List[Dict[str, Any]]:
+    def _get_context_assessment_system_prompt(self) -> str:
+        """System prompt for unified context assessment (internal + external)."""
+        return """You are a Reader Agent responsible for determining if more context is needed to generate a high-quality docstring. You should analyze the code component and current context to make this determination.
+
+You have access to two types of information sources:
+
+1. Internal Codebase Information (from local code repository):
+    For Functions:
+    - Code components called within the function body
+    - Places where this function is called
+
+    For Methods:
+    - Code components called within the method body
+    - Places where this method is called
+    - The class this method belongs to
+
+    For Classes:
+    - Code components called in the __init__ method
+    - Places where this class is instantiated
+    - Complete class implementation beyond __init__
+
+2. External Open Internet Retrieval Information:
+    - External Retrieval is EXTREMELY EXPENSIVE. Only request external open internet
+      retrieval information if the component involves a novel, state-of-the-art,
+      recently-proposed algorithms or techniques.
+    
+    REQUEST EXTERNAL ONLY FOR:
+    - Novel loss functions (NDCG Loss, Alignment and Uniformity Loss, Focal Loss, etc)
+    - State-of-the-art techniques (Transformers, Vision Transformers, Diffusion Models, etc)
+    - Recently proposed methods or specialized metrics (Cohen's Kappa, BLEU, ROUGE, etc)
+    - Cutting-edge research implementations
+    - Proprietary or experimental algorithms
+    
+    DO NOT REQUEST EXTERNAL FOR:
+    - Standard libraries (React, Redux, Vue, Angular, numpy, pandas, tensorflow, pytorch, etc)
+    - Common patterns (CRUD, API calls, state management, routing, authentication)
+    - Basic operations (loops, conditionals, arithmetic, string manipulation)
+    - Well-known frameworks and their standard usage
+    - Database operations (SQL queries, ORM patterns)
+    - HTTP/REST API implementations
+
+Your response should:
+1. First provide a brief analysis of the current code and context
+2. Explain what additional information might be needed (if any)
+3. Include an <INFO_NEED>true</INFO_NEED> tag if more information is needed,
+   or <INFO_NEED>false</INFO_NEED> if current context is sufficient
+4. Include a <COMPLEXITY>simple|moderate|complex</COMPLEXITY> tag
+5. If more information is needed, end your response with a structured XML request:
+
+<REQUEST>
+    <INTERNAL>
+        <CALLS>
+            <CLASS>class1,class2</CLASS>
+            <FUNCTION>func1,func2</FUNCTION>
+            <METHOD>self.method1,instance.method2</METHOD>
+        </CALLS>
+        <CALLED_BY>true/false</CALLED_BY>
+    </INTERNAL>
+    <EXTERNAL>
+        <CLASSIFICATION>novel_algorithm|novel_technique|standard_library|standard_pattern</CLASSIFICATION>
+        <QUERY>Clear natural language question for external retrieval (empty if standard)</QUERY>
+    </EXTERNAL>
+</REQUEST>
+
+Important rules for structured request:
+
+INTERNAL SECTION:
+1. For CALLS sections, only include names that are explicitly needed
+2. If no items exist for a category, use empty tags (e.g., <CLASS></CLASS>)
+3. CALLED_BY should be "true" only if you need to know what calls/uses a component
+4. For METHODS, keep dot notation in the same format as the input
+5. Only first-level calls of the focal code component are accessible
+
+EXTERNAL SECTION:
+1. CLASSIFICATION: Determine if component falls into:
+   - novel_algorithm: Novel loss functions, custom metrics, research implementations
+   - novel_technique: State-of-the-art methods, cutting-edge approaches
+   - standard_library: Common libraries (React, numpy, pandas, etc)
+   - standard_pattern: Common patterns (CRUD, auth, state management)
+2. QUERY: Only include a question if CLASSIFICATION is novel_algorithm or novel_technique
+   - Each query should be a clear, natural language question
+   - If standard_library or standard_pattern, leave QUERY empty
+
+Critical rules:
+1. Only request internal codebase information that is necessary for docstring generation
+2. External Open-Internet retrieval is EXTREMELY expensive - only for truly novel concepts
+3. For most standard library/framework components, you do NOT need additional information
+4. You are NOT generating docstrings - only determining if more information is needed"""
+    
+
+    def _parse_batch_decisions_with_assessments(
+        self,
+        response: str,
+        components: List[CodeComponent],
+        analyses: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
         """
-        Parse LLM batch response to extract individual decisions.
+        Parse batch LLM response into individual assessment dicts.
         
-        Args:
-            response: LLM response containing decisions for all components
-            components: Original list of components
-            
         Returns:
-            List of dicts with 'needs_context' (bool) and 'reason' (str)
+            List of dicts with: needs_context, llm_response, external_classification, external_query
         """
-        decisions = []
+        assessments = []
         lines = response.strip().split('\n')
         
-        # Extract lines that start with "COMPONENT i:"
-        component_lines = [l for l in lines if l.strip().startswith('COMPONENT')]
-        
-        for i, comp in enumerate(components):
+        for i, (comp, analysis) in enumerate(zip(components, analyses)):
             component_num = i + 1
+            # Find line starting with "COMPONENT N:"
+            matching = [l for l in lines if l.strip().startswith(f'COMPONENT {component_num}:')]
             
-            # Find matching line for this component
-            matching_lines = [
-                l for l in component_lines 
-                if l.strip().startswith(f'COMPONENT {component_num}:')
-            ]
+            needs_context = False
+            external_classification = 'standard_pattern'
+            external_query = ''
             
-            if matching_lines:
-                line = matching_lines[0]
-                # Parse "COMPONENT i: YES/NO - reason"
+            if matching:
+                line = matching[0]
+                # Parse: "COMPONENT 1: YES/NO - reason"
                 parts = line.split(':', 1)
                 if len(parts) > 1:
-                    decision_part = parts[1].strip()
-                    
-                    # Extract YES/NO and reason
-                    if decision_part.upper().startswith('YES'):
-                        needs_context = True
-                        reason = decision_part[3:].strip(' -').strip()
-                    elif decision_part.upper().startswith('NO'):
-                        needs_context = False
-                        reason = decision_part[2:].strip(' -').strip()
-                    else:
-                        # Fallback if parsing fails
-                        needs_context = True
-                        reason = decision_part[:50]
-                    
-                    decisions.append({
-                        'needs_context': needs_context,
-                        'reason': reason
-                    })
-                    continue
+                    decision = parts[1].strip().upper()
+                    needs_context = decision.startswith('YES')
+            else:
+                # Fallback: use complexity
+                needs_context = analysis['complexity_level'] != 'simple'
             
-            # Fallback: if we can't parse, default to safe choice
-            self.logger.warning(
-                f"Failed to parse decision for component {component_num} ({comp.name}), "
-                f"defaulting to needs_context=True"
-            )
-            decisions.append({
-                'needs_context': True,
-                'reason': 'Parsing failed, defaulting to gather context'
+            assessments.append({
+                'needs_context': needs_context,
+                'llm_response': response,
+                'external_classification': external_classification,
+                'external_query': external_query
             })
         
-        return decisions
+        return assessments
     
-    # def _detect_external_concepts(self, component: CodeComponent) -> List[str]:
-    #     """
-    #     Detect external concepts, APIs, annotations, or DSLs referenced by the component.
-    #     Returns a list of concept names/identifiers.
-    #     """
-    #     concepts = set()
-
-    #     # 1. Add decorators and annotations (often used for non-obvious behavior)
-    #     for deco in getattr(component, "decorators", []):
-    #         if "." in deco:
-    #             concepts.add(deco)
+    # =========================================================================
+    # STEP 3: Generate Structured XML Output
+    # =========================================================================
+    
+    def _generate_xml_output(
+        self,
+        component: CodeComponent,
+        analysis: Dict[str, Any],
+        assessment: Dict[str, Any]
+    ) -> str:
+        """
+        Generate clean XML output for Searcher Agent.
         
-    #     # 2. Add explicit imports that look like external APIs or DSLs
-    #     for imp in getattr(component, "imports", []):
-    #         # Only consider imports with a dot (e.g., 'javax.persistence.Entity')
-    #         if "." in imp:
-    #             concepts.add(imp)
+        Args:
+            component: The code component being analyzed
+            analysis: Analysis results from _analyze_component
+            assessment: LLM assessment result with needs_context, external_classification, external_query
         
-    #     # 3. Optionally, scan source code for known external API patterns
-    #     known_patterns = [
-    #         r"javax\.persistence\.\w+",
-    #         r"lombok\.\w+",
-    #         r"spring\.transactional",
-    #         r"@Entity",
-    #         r"@Data",
-    #         r"@Transactional"
-    #     ]
-    #     for pattern in known_patterns:
-    #         matches = re.findall(pattern, component.source_code)
-    #         for match in matches:
-    #             concepts.add(match.replace("@", ""))
+        Format:
+            <READER_OUTPUT>
+                <INFO_NEED>true/false</INFO_NEED>
+                <COMPLEXITY>simple/moderate/complex</COMPLEXITY>
+                <REQUEST>
+                    <INTERNAL>
+                        <CALLS>
+                            <CLASS>Class1,Class2</CLASS>
+                            <FUNCTION>func1,func2</FUNCTION>
+                            <METHOD>self.method1,obj.method2</METHOD>
+                        </CALLS>
+                        <CALLED_BY>true/false</CALLED_BY>
+                    </INTERNAL>
+                    <EXTERNAL>
+                        <CLASSIFICATION>novel_algorithm|novel_technique|standard_library|standard_pattern</CLASSIFICATION>
+                        <QUERY>Clear natural language question (empty if standard)</QUERY>
+                    </EXTERNAL>
+                </REQUEST>
+            </READER_OUTPUT>
+        """
+        needs_context = assessment.get('needs_context', False)
         
-    #     return list(concepts)
+        root = ET.Element('READER_OUTPUT')
+        
+        # INFO_NEED: Does this component need additional context?
+        info_need = ET.SubElement(root, 'INFO_NEED')
+        info_need.text = 'true' if needs_context else 'false'
+        
+        # COMPLEXITY: For downstream agents
+        complexity = ET.SubElement(root, 'COMPLEXITY')
+        complexity.text = analysis['complexity_level']
+        
+        # REQUEST: What context is needed?
+        request = ET.SubElement(root, 'REQUEST')
+        
+        # INTERNAL: Code from same repository
+        internal = ET.SubElement(request, 'INTERNAL')
+        
+        # CALLS: What this component calls (dependencies)
+        calls_elem = ET.SubElement(internal, 'CALLS')
+        calls = analysis['calls']
+        
+        if calls['CLASS']:
+            class_elem = ET.SubElement(calls_elem, 'CLASS')
+            class_elem.text = ','.join(calls['CLASS'])
+        
+        if calls['FUNCTION']:
+            func_elem = ET.SubElement(calls_elem, 'FUNCTION')
+            func_elem.text = ','.join(calls['FUNCTION'])
+        
+        if calls['METHOD']:
+            method_elem = ET.SubElement(calls_elem, 'METHOD')
+            method_elem.text = ','.join(calls['METHOD'])
+        
+        # CALLED_BY: Should Searcher find usage examples?
+        # Only for public, non-simple components that need context
+        called_by = ET.SubElement(internal, 'CALLED_BY')
+        should_find_callers = (
+            needs_context and
+            analysis['is_public'] and
+            analysis['complexity_level'] != 'simple' and
+            component.type in [ComponentType.FUNCTION, ComponentType.METHOD, ComponentType.CLASS]
+        )
+        called_by.text = 'true' if should_find_callers else 'false'
+        
+        # EXTERNAL: Novel algorithms/techniques with LLM-determined classification
+        external = ET.SubElement(request, 'EXTERNAL')
+        
+        # Classification from LLM (novel_algorithm, novel_technique, standard_library, standard_pattern)
+        classification = assessment.get('external_classification', 'standard_pattern')
+        classification_elem = ET.SubElement(external, 'CLASSIFICATION')
+        classification_elem.text = classification
+        
+        # Query: Only populated for novel_algorithm or novel_technique
+        query = assessment.get('external_query', '')
+        
+        # If LLM didn't provide a query but classification suggests novel, use fallback detection
+        if not query and classification in ['novel_algorithm', 'novel_technique']:
+            fallback_queries = self._detect_novel_concepts(component)
+            query = fallback_queries[0] if fallback_queries else ''
+        
+        query_elem = ET.SubElement(external, 'QUERY')
+        query_elem.text = query if query else ''
+        
+        # Convert to pretty XML string
+        xml_str = minidom.parseString(ET.tostring(root)).toprettyxml(indent="  ")
+        # Remove XML declaration and empty lines
+        xml_str = '\n'.join([
+            line for line in xml_str.split('\n')
+            if line.strip() and '<?xml' not in line
+        ])
+        
+        return xml_str
+    
+    def _detect_novel_concepts(self, component: CodeComponent) -> List[str]:
+        """
+        Detect truly novel/SOTA concepts that need external retrieval.
+        
+        IMPORTANT: External retrieval is EXPENSIVE. Only flag for:
+            - Novel loss functions (NDCG Loss, Contrastive Loss, etc.)
+            - Novel metrics (Cohen's Kappa, BLEU, etc.)
+            - State-of-the-art algorithms mentioned in comments
+            - Recently proposed techniques
+        
+        DO NOT flag for:
+            - Standard libraries (numpy, pandas, sklearn, etc.)
+            - Framework APIs (Django, FastAPI, PyTorch basics)
+            - Built-in functions
+            - Common algorithms (sorting, searching, etc.)
+        """
+        novel_concepts = []
+        source = component.source_code or ''
+        name = component.name or ''
+        
+        # Pattern 1: Comments mentioning "novel", "paper", "SOTA"
+        novel_keywords = ['novel', 'paper', 'sota', 'state-of-the-art', 'proposed']
+        for line in source.split('\n'):
+            # Check comments
+            if any(kw in line.lower() for kw in novel_keywords):
+                # Extract from comment
+                for marker in ['#', '//', '/*', '*']:
+                    if marker in line:
+                        comment = line.split(marker, 1)[-1].strip()
+                        if len(comment) > 10 and len(comment) < 100:
+                            novel_concepts.append(f"Novel concept: {comment[:80]}")
+                            break
+        
+        # Pattern 2: Custom loss/metric implementations (not standard ones)
+        STANDARD_LOSSES = {'CrossEntropyLoss', 'MSELoss', 'BCELoss', 'L1Loss', 'NLLLoss'}
+        STANDARD_METRICS = {'accuracy', 'precision', 'recall', 'f1_score', 'auc'}
+        
+        if 'loss' in name.lower():
+            # Check if it's a custom loss
+            if not any(std in source for std in STANDARD_LOSSES):
+                novel_concepts.append(f"Custom loss function: {name}")
+        
+        if 'metric' in name.lower() or 'score' in name.lower():
+            # Check if it's a custom metric
+            if not any(std in source.lower() for std in STANDARD_METRICS):
+                novel_concepts.append(f"Custom metric: {name}")
+        
+        # Limit to top 3 most relevant
+        return novel_concepts[:3]
+    
+    def _save_xml_output(self, component_id: str, xml_output: str) -> None:
+        """
+        Save Reader Agent XML output to disk for debugging/analysis.
+        
+        Args:
+            component_id: The component identifier
+            xml_output: The generated XML string
+        """
+        try:
+            # Create filename from component_id, replacing special chars
+            safe_id = component_id.replace(".", "_").replace("/", "_")
+            output_file = self.output_dir / f"{safe_id}_reader_xml_output.xml"
+            
+            # Write XML to file
+            with open(output_file, 'w', encoding='utf-8') as f:
+                # Pretty-print XML for readability
+                try:
+                    root = ET.fromstring(xml_output)
+                    pretty_xml = minidom.parseString(ET.tostring(root)).toprettyxml(indent="  ")
+                    # Remove XML declaration and extra blank lines
+                    pretty_xml = '\n'.join(line for line in pretty_xml.split('\n') 
+                                          if line.strip() and not line.startswith('<?xml'))
+                    f.write(pretty_xml)
+                except ET.ParseError:
+                    # Fallback: write raw XML if parsing fails
+                    f.write(xml_output)
+            
+            self.logger.debug(f"Reader XML saved to: {output_file}")
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to save Reader XML output for {component_id}: {e}")
+    
+    def save_consolidated_output(self, filename: str = "consolidated_reader_output.xml") -> Path:
+        """
+        Save all collected XML outputs to a single consolidated XML file.
+        
+        Args:
+            filename: Name of the consolidated output file
+            
+        Returns:
+            Path to the consolidated output file
+        """
+        try:
+            if not self.consolidated_outputs:
+                self.logger.warning("No consolidated outputs to save")
+                return None
+            
+            # Create root element
+            root = ET.Element("CONSOLIDATED_READER_OUTPUT")
+            root.set("timestamp", datetime.now().isoformat())
+            root.set("total_components", str(len(self.consolidated_outputs)))
+            
+            # Add each component's output
+            for component_id, xml_output in self.consolidated_outputs:
+                try:
+                    # Parse individual XML output
+                    component_root = ET.fromstring(xml_output)
+                    
+                    # Create wrapper element for this component
+                    component_elem = ET.SubElement(root, "COMPONENT")
+                    component_elem.set("id", component_id)
+                    component_elem.set("name", self._extract_name_from_id(component_id))
+                    
+                    # Copy the READER_OUTPUT content
+                    for child in component_root:
+                        component_elem.append(child)
+                        
+                except ET.ParseError as e:
+                    self.logger.warning(f"Failed to parse XML for {component_id}: {e}")
+                    continue
+            
+            # Write consolidated XML to file
+            output_file = self.output_dir / filename
+            tree = ET.ElementTree(root)
+            
+            # Pretty-print for readability
+            pretty_xml = minidom.parseString(ET.tostring(root)).toprettyxml(indent="  ")
+            # Remove XML declaration
+            pretty_xml = '\n'.join(line for line in pretty_xml.split('\n') 
+                                  if line.strip() and not line.startswith('<?xml'))
+            
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write(f'<?xml version="1.0" encoding="UTF-8"?>\n')
+                f.write(pretty_xml)
+            
+            self.logger.info(f"Consolidated reader output saved to: {output_file}")
+            return output_file
+            
+        except Exception as e:
+            self.logger.error(f"Failed to save consolidated output: {e}", exc_info=True)
+            return None
+    
+    def clear_consolidated_outputs(self) -> None:
+        """Clear the consolidated outputs list."""
+        self.consolidated_outputs = []
