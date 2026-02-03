@@ -174,18 +174,19 @@ class Orchestrator:
         """
         Process all components through the agent pipeline.
         Supports parallel processing when enabled in config.
+        
+        NOTE: The searcher should already have repository data set via 
+        searcher.set_repository_data() before calling this method.
+        The reader also needs component map for accurate type classification.
         """
         self.logger.info(f"Processing {len(components)} components (parallel={self._parallel_enabled})")
         start_time = datetime.now()
 
         component_map = {c.id: c for c in components}  # For dependency lookup
         
-        # Initialize searcher with repository data
-        try:
-            self.searcher.set_repository_data(components)
-            self.logger.info("Searcher initialized with repository data")
-        except Exception as e:
-            self.logger.warning(f"Failed to initialize searcher with repository data: {e}")
+        # Set component map in Reader for accurate type classification
+        self.reader.set_component_map(components)
+        self.logger.info("Reader initialized with component map")
 
         # Choose processing mode
         if self._parallel_enabled and len(components) > 1:
@@ -218,6 +219,15 @@ class Orchestrator:
                 self.logger.info(f"Consolidated reader outputs saved to: {consolidated_path}")
         except Exception as e:
             self.logger.warning(f"Failed to save consolidated reader outputs: {e}")
+        
+        # Save consolidated searcher outputs
+        try:
+            if hasattr(self.searcher, 'save_consolidated_output'):
+                searcher_consolidated_path = self.searcher.save_consolidated_output()
+                if searcher_consolidated_path:
+                    self.logger.info(f"Consolidated searcher outputs saved to: {searcher_consolidated_path}")
+        except Exception as e:
+            self.logger.warning(f"Failed to save consolidated searcher outputs: {e}")
         
         return documented_components
     
