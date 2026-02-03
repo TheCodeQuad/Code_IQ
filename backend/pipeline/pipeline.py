@@ -3,6 +3,7 @@ Main pipeline orchestrator
 """
 
 from typing import List,Dict
+import networkx as nx
 from backend.navigator.core.dag_export import PROJECT_ROOT
 from backend.navigator.core.repository_parser import RepositoryParser
 from backend.navigator.core.topo import (
@@ -105,10 +106,19 @@ def run_pipeline(repo_path: str):
     # Stage 5: Set repository data in searcher
     logger.info("Stage 5: Setting up searcher with repository data...")
 
-    # Stage 5: Pass repository data to the searcher agent BEFORE processing
+    # Stage 5: Convert adjacency dict to NetworkX DiGraph and pass to searcher
+    # The graph is Dict[str, Set[str]] where A -> B means A depends on B
+    nx_graph = nx.DiGraph()
+    nx_graph.add_nodes_from(graph.keys())
+    for source, targets in graph.items():
+        for target in targets:
+            nx_graph.add_edge(source, target)
+    
+    logger.info(f"Converted adjacency graph to NetworkX DiGraph: {nx_graph.number_of_nodes()} nodes, {nx_graph.number_of_edges()} edges")
+    
     orchestrator.searcher.set_repository_data(
         all_components=ordered_components,
-        dependency_graph=None
+        dependency_graph=nx_graph
     )
 
     # Stage 6: Run multi-agent pipeline

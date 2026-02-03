@@ -74,6 +74,19 @@ class ReaderAgent(BaseAgent):
         self.output_dir.mkdir(parents=True, exist_ok=True)
         # Consolidated XML output tracking
         self.consolidated_outputs = []  # List of (component_id, xml_output) tuples
+        # Component map for type lookup
+        self.component_map: Dict[str, CodeComponent] = {}
+    
+    def set_component_map(self, all_components: List[CodeComponent]) -> None:
+        """
+        Set the component map for accurate type lookup.
+        Should be called before processing components.
+        
+        Args:
+            all_components: All components from Navigator
+        """
+        self.component_map = {comp.id: comp for comp in all_components}
+        self.logger.info(f"Reader component map loaded: {len(self.component_map)} components")
     
     def process(self, context: AgentContext) -> AgentResult:
         """
@@ -238,8 +251,8 @@ class ReaderAgent(BaseAgent):
     
     def _extract_calls(self, component: CodeComponent) -> Dict[str, List[str]]:
         """
-        Extract what this component calls, categorized by type.
-        Uses Navigator's extracted data (component.calls, component.depends_on).
+        Extract what this component calls, categorized by ACTUAL type.
+        Uses component_map to look up real types instead of guessing from names.
         
         Returns:
             Dict with keys: CLASS, FUNCTION, METHOD
@@ -248,32 +261,42 @@ class ReaderAgent(BaseAgent):
         function_calls = []
         method_calls = []
         
-        # 1. From component.calls (actual invocations in source)
+        # Extract dependencies and categorize by ACTUAL type
         for dep_id in (component.depends_on or []):
-            call_name = self._extract_name_from_id(dep_id)
-            # Method call pattern: contains '.' (e.g., self.method, obj.method)
-            if '.' in call_name:
-                method_calls.append(call_name)
-            # Class instantiation pattern: starts with uppercase
-            elif call_name and call_name[0].isupper():
-                class_calls.append(call_name)
-            # Function call
-            else:
-                function_calls.append(call_name)
-        
-        # 2. From component.depends_on (resolved dependency IDs)
-        for dep_id in (component.depends_on or []):
-            dep_name = self._extract_name_from_id(dep_id)
+            # Look up the actual component to get its real type
+            dep_component = self.component_map.get(dep_id)
             
-            # Avoid duplicates
-            if dep_name in class_calls or dep_name in function_calls or dep_name in method_calls:
-                continue
-            
-            # Categorize
-            if dep_name and dep_name[0].isupper():
-                class_calls.append(dep_name)
+            if dep_component:
+                # Use the ACTUAL component type
+                dep_type_str = str(dep_component.type).lower()
+                
+                # Normalize ComponentType enum to string
+                if 'componenttype.' in dep_type_str:
+                    dep_type_str = dep_type_str.split('.')[-1]
+                
+                # Categorize by actual type
+                if dep_type_str == 'class':
+                    class_calls.append(dep_id)
+                elif dep_type_str == 'function':
+                    function_calls.append(dep_id)
+                elif dep_type_str == 'method':
+                    method_calls.append(dep_id)
+                else:
+                    # Fallback for other types (module, etc.) - treat as function
+                    function_calls.append(dep_id)
             else:
-                function_calls.append(dep_name)
+                # Fallback to name-based heuristic if component not in map
+                call_name = self._extract_name_from_id(dep_id)
+                
+                # Method call pattern: contains '.' (e.g., self.method, obj.method)
+                if '.' in call_name and call_name.count('.') >= 2:
+                    method_calls.append(dep_id)
+                # Class instantiation pattern: starts with uppercase
+                elif call_name and call_name[0].isupper():
+                    class_calls.append(dep_id)
+                # Function call
+                else:
+                    function_calls.append(dep_id)
         
         return {
             'CLASS': list(set(class_calls)),
