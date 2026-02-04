@@ -1,6 +1,9 @@
 """
 Main pipeline orchestrator
 """
+
+from typing import List,Dict
+import networkx as nx
 from backend.navigator.core.dag_export import PROJECT_ROOT
 from backend.navigator.core.repository_parser import RepositoryParser
 from backend.navigator.core.topo import (
@@ -29,7 +32,9 @@ def run_pipeline(repo_path: str):
     logger.info("Stage 1: Parsing repository and extracting components...")
     parser = RepositoryParser(repo_path)
     components = parser.parse()  # {id: CodeComponent}
-    
+    # Extract module globals and inject into component metadata
+    _extract_module_globals(components)
+    logger.info(f"Populated module_globals metadata for components")
     logger.info(f"Extracted {len(components)} components")
 
     # Convert all components to standard CodeComponent if needed
@@ -101,10 +106,19 @@ def run_pipeline(repo_path: str):
     # Stage 5: Set repository data in searcher
     logger.info("Stage 5: Setting up searcher with repository data...")
 
-    # Stage 5: Pass repository data to the searcher agent BEFORE processing
+    # Stage 5: Convert adjacency dict to NetworkX DiGraph and pass to searcher
+    # The graph is Dict[str, Set[str]] where A -> B means A depends on B
+    nx_graph = nx.DiGraph()
+    nx_graph.add_nodes_from(graph.keys())
+    for source, targets in graph.items():
+        for target in targets:
+            nx_graph.add_edge(source, target)
+    
+    logger.info(f"Converted adjacency graph to NetworkX DiGraph: {nx_graph.number_of_nodes()} nodes, {nx_graph.number_of_edges()} edges")
+    
     orchestrator.searcher.set_repository_data(
         all_components=ordered_components,
-        dependency_graph=None
+        dependency_graph=nx_graph
     )
 
     # Stage 6: Run multi-agent pipeline
@@ -116,6 +130,28 @@ def run_pipeline(repo_path: str):
         f"{orchestrator.successful_docs} successful, "
         f"{orchestrator.failed_docs} failed"
     )
+    
+    # Stage 7: Save writer output (documentation) to disk
+    logger.info("Stage 7: Saving writer agent output to disk...")
+    repo_path_obj = Path(repo_path)
+    repo_name = repo_path_obj.name
+    docs_output_path = PROJECT_ROOT / "data" / "intermediate" / "agent_output" / "writer" / f"{repo_name}_writer_output.json"
+    try:
+        serialized_docs = {}
+        for doc in docs:
+            if hasattr(doc, 'to_dict'):
+                serialized_docs[doc.component_id] = doc.to_dict()
+            else:
+                serialized_docs[doc.component_id] = FileHandler.serialize_component(doc)
+        
+        FileHandler.write_json(docs_output_path, serialized_docs)
+        logger.info(f"Writer output saved to {docs_output_path}")
+    except Exception as e:
+        logger.warning(f"Failed to save writer output: {e}")
+
+    # Extract module globals and inject into component metadata
+    _extract_module_globals(components)
+    logger.info(f"Populated module_globals metadata for components")
 
     # Return all relevant results as a dict
     return {
@@ -131,3 +167,62 @@ def run_pipeline(repo_path: str):
             'success_rate': (orchestrator.successful_docs / max(orchestrator.total_components_processed, 1)) * 100
         }
     }
+
+def _extract_module_globals(components: Dict[str, CodeComponent]) -> None:
+    """
+    Extract module-level globals and inject into component metadata.
+    Scan each module in the component set for module-level variable definitions.
+    """
+    # Group components by module path
+    modules: Dict[str, List[CodeComponent]] = {}
+    for comp in components.values():
+        module = getattr(comp, 'module_path', None)
+        if module:
+            if module not in modules:
+                modules[module] = []
+            modules[module].append(comp)
+    
+    # For each module, extract globals from any module-level component
+    for module_path, comps in modules.items():
+        module_globals = set()
+        
+        # Look for module docstring or use first function's module context
+        module_source = None
+        for comp in comps:
+            if comp.type == ComponentType.MODULE:
+                module_source = comp.source_code
+                break
+        
+        # If no module component, extract from first available component
+        if not module_source and comps:
+            # Get the source file and parse globals
+            first_comp = comps[0]
+            try:
+                import re
+                # Find variable assignments at module level (not indented)
+                source_file_path = getattr(first_comp.location, 'file_path', None)
+                if source_file_path:
+                    with open(source_file_path, 'r') as f:
+                        full_source = f.read()
+                    
+                    # Extract module-level assignments (lines not starting with spaces)
+                    lines = full_source.split('\n')
+                    for line in lines:
+                        # Skip empty lines, comments, and indented code
+                        if not line or line[0] in ' \t' or line.strip().startswith('#'):
+                            continue
+                        # Match variable assignments
+                        match = re.match(r'^(\w+)\s*=', line)
+                        if match:
+                            var_name = match.group(1)
+                            # Skip imports and special names
+                            if not line.startswith('import ') and not line.startswith('from '):
+                                module_globals.add(var_name)
+            except Exception:
+                pass
+        
+        # Inject module_globals into all components from this module
+        for comp in comps:
+            if not comp.metadata:
+                comp.metadata = {}
+            comp.metadata['module_globals'] = module_globals

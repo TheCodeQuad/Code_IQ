@@ -102,7 +102,6 @@ def extract_signature(node, source):
     sig_end = node.end_byte
     source_text = source[sig_start:sig_end]
     
-    # Find the opening brace
     brace_pos = source_text.find('{')
     if brace_pos != -1:
         return source_text[:brace_pos].strip()
@@ -346,9 +345,26 @@ def extract_components(tree, source, file_path, module_path):
             modifiers = get_modifiers(node)
             parent_classes = extract_parent_classes(node)
             
+            # Extract parent classes
+            parent_classes = []
+            superclass_node = node.child_by_field_name("superclass")
+            if superclass_node:
+                parent_classes = [superclass_node.text.decode()]
+            
+            # Check for interfaces
+            interfaces_types = []
+            for child in node.children:
+                if child.type == "super_interfaces":
+                    for intf_child in child.children:
+                        if intf_child.type == "type_list":
+                            for type_node in intf_child.children:
+                                if type_node.type != ",":
+                                    interfaces_types.append(type_node.text.decode())
+            
+            parent_classes.extend(interfaces_types)
+            
             start_line = node.start_point[0] + 1
             end_line = node.end_point[0] + 1
-            lines_of_code = end_line - start_line + 1
             
             sig = extract_signature(node, source)
             is_public, is_private, is_protected = get_visibility(node)
@@ -364,9 +380,9 @@ def extract_components(tree, source, file_path, module_path):
                     end_line=end_line
                 ),
                 source_code=source[node.start_byte:node.end_byte],
-                signature=sig,
+                signature=f"class {name}",
+                parent_classes=parent_classes,
                 existing_docstring=javadoc if has_javadoc else None,
-                parameters=[],
                 decorators=annotations,
                 parent_classes=parent_classes,
                 imports=file_imports,
@@ -606,9 +622,35 @@ def extract_components(tree, source, file_path, module_path):
         for child in node.children:
             walk(child, parent_id)
 
-    # Start walking from root
-    for child in root.children:
-        walk(child, None)
+def _extract_java_exceptions(self, source: str) -> List[Dict]:
+    """Extract throws declarations and actual throws in Java"""
+    exceptions = []
+    
+    # throws declaration
+    throws_pattern = r'throws\s+([\w\s.,]+)'
+    for match in re.finditer(throws_pattern, source):
+        exc_list = match.group(1).split(',')
+        for exc in exc_list:
+            exceptions.append({
+                'exception_type': exc.strip(),
+                'declared': True,
+                'raised': False
+            })
+    
+    # actual throw statements
+    throw_pattern = r'throw\s+new\s+(\w+)'
+    for match in re.finditer(throw_pattern, source):
+        exc_type = match.group(1)
+        # Check if already in list
+        existing = next((e for e in exceptions if e['exception_type'] == exc_type), None)
+        if existing:
+            existing['raised'] = True
+        else:
+            exceptions.append({
+                'exception_type': exc_type,
+                'declared': False,
+                'raised': True
+            })
     
     # Add module_path to all components
     for comp in components.values():

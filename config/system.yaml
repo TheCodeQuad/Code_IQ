@@ -10,9 +10,13 @@ system:
       - multi_agent_system
       - evaluator
     
-    parallel_processing: false
+    parallel_processing: true  # Enable parallel component processing for GPU utilization
     checkpoint_enabled: true
     resume_on_failure: true
+    
+    # Continuous docstring insertion settings
+    insert_docstrings: true           # Insert docstrings into source files during pipeline
+    replace_existing_docstrings: false  # Replace existing docstrings if already present
 
 modules:
   navigator:
@@ -37,7 +41,7 @@ llm:
   max_tokens: 4000
   
 logging:
-  level: "INFO"
+  level: "WARNING"  # Changed from INFO to reduce Python overhead
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
   file: "logs/system.log"
   module_specific:
@@ -58,6 +62,6 @@ cache:
   ttl: 86400  # 24 hours
   
 performance:
-  max_workers: 4
-  batch_size: 10
-  memory_limit: "4GB"
+  max_workers: 16
+  batch_size: 32
+  memory_limit: "15GB"
