@@ -1,70 +1,71 @@
-﻿"""Java language adapter for component extraction and dependency resolution"""
+﻿# languages/java/adapter.py
+
+"""
+Java Language Adapter for Navigator
+
+Integrates Java parsing, extraction, and dependency resolution
+into the DocAgent pipeline.
+"""
+
 from ...treesitter.parser_factory import get_ts_parser
 from .extractor import extract_components
-from ...core.api_extractor import extract_api_endpoints
+from .dependencies import resolve_dependencies
 
 
 class JavaAdapter:
-    """Adapter for Java language"""
+    """
+    Adapter for Java language support in DocAgent.
+    
+    Provides:
+    - Tree-sitter parsing for Java
+    - Component extraction (classes, methods, fields, constructors)
+    - Dependency resolution
+    
+    Matches existing adapter architecture with centralized parser factory.
+    """
+    
     language = "java"
     extensions = [".java"]
 
     def __init__(self):
+        """Initialize Java parser using centralized parser factory"""
         self.parser = get_ts_parser("java")
 
     def parse(self, source):
-        """Parse Java source code"""
+        """
+        Parse Java source code into AST.
+        
+        Args:
+            source: Java source code as string
+            
+        Returns:
+            tree-sitter Tree object
+        """
         return self.parser.parse(bytes(source, "utf8"))
 
-    def extract_components(self, tree, source, file_path, module_path):
-        """Extract all code components including API endpoints"""
-        # Extract regular components
-        components = extract_components(tree, source, file_path, module_path)
+    def extract_components(self, *args):
+        """
+        Extract all components from Java source.
         
-        # Extract API endpoints (Spring, etc.)
-        file_imports = self._extract_imports(tree)
-        api_endpoints = extract_api_endpoints(
-            source, file_path, module_path, self.language, file_imports
-        )
-        components.update(api_endpoints)
-        
-        return components
+        Args:
+            *args: (tree, source, file_path, module_path)
+            
+        Returns:
+            Dictionary mapping component_id -> CodeComponent
+        """
+        return extract_components(*args)
 
     def resolve_dependencies(self, component, tree, source, all_components):
-        """Resolve dependencies for a component (not implemented for Java)"""
-        return set()
-    
-    def _extract_imports(self, tree):
-        """Extract imports from AST tree - consistent tree-based approach"""
-        imports = []
-        root = tree.root_node
+        """
+        Resolve dependencies for a Java component.
         
-        def walk(node):
-            # Handle: import package.Class;
-            if node.type == "import_declaration":
-                import_node = None
-                for child in node.children:
-                    # Skip 'import' keyword and ';'
-                    if child.type == "identifier" or (hasattr(child, 'type') and 'name' in child.type):
-                        import_node = child
-                    elif child.type == "scoped_identifier":
-                        import_node = child
-                    elif child.type == "dotted_name":
-                        import_node = child
-                
-                if import_node:
-                    import_text = import_node.text.decode()
-                    imports.append(import_text)
-                else:
-                    # Fallback: extract the full import path
-                    import_text = node.text.decode()
-                    import_text = import_text.replace("import", "").replace(";", "").strip()
-                    if import_text and not import_text.startswith("static"):
-                        imports.append(import_text)
+        Args:
+            component: CodeComponent to resolve dependencies for
+            tree: tree-sitter Tree object
+            source: Source code string
+            all_components: Dictionary of all components in the project
             
-            for c in node.children:
-                walk(c)
-        
-        walk(root)
-        return imports
-
+        Returns:
+            Set of component IDs that this component depends on
+        """
+        return resolve_dependencies(component, tree, source, all_components)
