@@ -1,7 +1,10 @@
 # Virtual envs
-venv/
-env/
+venv
+.env
 .Python
+.env
+.env.local
+*.env
 
 # Cache / bytecode
 __pycache__/
@@ -16,7 +19,7 @@ dist/
 
 # Navigator outputs (generated)
 backend/navigator/output/
-data/
+data/**/
 
 # Logs (runtime)
 logs/
@@ -31,3 +34,6 @@ backend/repos/
 .idea/
 .DS_Store
 Thumbs.db
+models/
+llama_cpp_python-0.3.4-cp311-cp311-win_amd64.whl
+llama.cpp/
