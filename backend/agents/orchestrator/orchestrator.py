@@ -452,7 +452,7 @@ class Orchestrator:
     def _insert_docstring_for_component(
         self,
         component: CodeComponent,
-        documentation: Documentation
+        documentation: str
     ) -> None:
         """
         Insert the generated docstring into the source file for a component.
@@ -460,7 +460,7 @@ class Orchestrator:
         
         Args:
             component: The code component being documented
-            documentation: The generated documentation from writer agent
+            documentation: The generated docstring string from writer agent
         """
         if not self._docstring_inserter:
             return

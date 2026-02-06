@@ -54,6 +54,27 @@ class BaseLLMClient(ABC):
         pass
     
     @abstractmethod
+    def generate_with_messages(
+        self,
+        agent_name: str,
+        messages: List[Dict[str, str]],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None
+    ) -> LLMResponse:
+        """Generate response using a list of conversation messages.
+        
+        Args:
+            agent_name: Name of the calling agent
+            messages: List of message dicts with 'role' and 'content' keys
+            temperature: Sampling temperature
+            max_tokens: Maximum tokens to generate
+            
+        Returns:
+            LLMResponse with generated content
+        """
+        pass
+    
+    @abstractmethod
     def get_stats(self) -> Dict[str, Any]:
         pass
 
@@ -207,6 +228,76 @@ class LocalLlamaClient(BaseLLMClient):
         )
         return self.generate(request)
     
+    def generate_with_messages(
+        self,
+        agent_name: str,
+        messages: List[Dict[str, str]],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None
+    ) -> LLMResponse:
+        """Generate response using conversation messages (memory-based approach).
+        
+        Args:
+            agent_name: Name of the calling agent
+            messages: List of message dicts with 'role' and 'content' keys
+            temperature: Sampling temperature (default 0.7)
+            max_tokens: Maximum tokens to generate (default 4000)
+            
+        Returns:
+            LLMResponse with generated content
+        """
+        start_time = time.time()
+        
+        # Build prompt with chat template from messages
+        full_prompt = ""
+        for msg in messages:
+            role = msg.get('role', 'user')
+            content = msg.get('content', '')
+            full_prompt += f"<|im_start|>{role}\n{content}<|im_end|>\n"
+        full_prompt += "<|im_start|>assistant\n"
+        
+        # Direct inference
+        output = self.llm(
+            full_prompt,
+            max_tokens=max_tokens or 4000,
+            temperature=temperature or 0.7,
+            stop=["<|im_end|>", "<|im_start|>"],
+            echo=False
+        )
+        
+        content = output['choices'][0]['text'].strip()
+        usage = output.get('usage', {})
+        
+        prompt_tokens = usage.get('prompt_tokens', 0)
+        completion_tokens = usage.get('completion_tokens', 0)
+        total_tokens = prompt_tokens + completion_tokens
+        
+        normalized_usage = {
+            'prompt_tokens': prompt_tokens,
+            'completion_tokens': completion_tokens,
+            'total_tokens': total_tokens
+        }
+        
+        latency = time.time() - start_time
+        
+        self.request_count += 1
+        self.total_tokens += total_tokens
+        self.total_prompt_tokens += prompt_tokens
+        self.total_completion_tokens += completion_tokens
+        
+        logger.info(
+            f"Local LLM (memory) Request #{self.request_count} for {agent_name}: "
+            f"Messages={len(messages)}, Tokens={total_tokens}, Latency={latency:.2f}s"
+        )
+        
+        return LLMResponse(
+            content=content,
+            model=self.model_name,
+            usage=normalized_usage,
+            latency=latency,
+            metadata={'local': True, 'memory_based': True}
+        )
+    
     def get_stats(self) -> Dict[str, Any]:
         """Get usage statistics"""
         return {
@@ -344,6 +435,101 @@ class RemoteAPIClient(BaseLLMClient):
         )
         
         return self.generate(request, agent_params=params)
+
+    def generate_with_messages(
+        self,
+        agent_name: str,
+        messages: List[Dict[str, str]],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None
+    ) -> LLMResponse:
+        """Generate response using conversation messages (memory-based approach).
+        
+        Args:
+            agent_name: Name of the calling agent
+            messages: List of message dicts with 'role' and 'content' keys
+            temperature: Sampling temperature
+            max_tokens: Maximum tokens to generate
+            
+        Returns:
+            LLMResponse with generated content
+        """
+        agent_config = self.agent_models.get(agent_name, {})
+        params = agent_config.get('params', {})
+        model = agent_config.get('model', self.default_model)
+        
+        temp = temperature if temperature is not None else params.get('temperature', 0.7)
+        max_tok = max_tokens if max_tokens is not None else params.get('max_tokens', 4000)
+        
+        start_time = time.time()
+        
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        # Build payload with messages directly (OpenAI/OpenRouter compatible)
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": temp,
+            "max_tokens": max_tok
+        }
+        
+        max_retries = 4
+        base_backoff = 2
+        
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(
+                    self.base_url,
+                    headers=headers,
+                    json=payload,
+                    timeout=120
+                )
+                response.raise_for_status()
+                data = response.json()
+                content = data['choices'][0]['message']['content']
+                usage = data.get('usage', {})
+                latency = time.time() - start_time
+                
+                self.request_count += 1
+                self.total_tokens += usage.get('total_tokens', 0)
+                cost = self._calculate_cost(model, usage)
+                self.total_cost += cost
+                
+                logger.info(
+                    f"Remote API (memory) Request #{self.request_count} for {agent_name}: "
+                    f"Messages={len(messages)}, Tokens={usage.get('total_tokens', 0)}, "
+                    f"Cost=${cost:.4f}, Latency={latency:.2f}s"
+                )
+                
+                return LLMResponse(
+                    content=content,
+                    model=model,
+                    usage=usage,
+                    latency=latency,
+                    metadata={'request_id': data.get('id'), 'local': False, 'memory_based': True}
+                )
+            except requests.exceptions.HTTPError as e:
+                if hasattr(e, 'response') and e.response.status_code == 429 and attempt < max_retries - 1:
+                    wait_time = base_backoff * (2 ** attempt)
+                    logger.warning(f"Rate limited (429). Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                logger.error(f"Remote API request failed: {e}")
+                raise
+            except RequestException as e:
+                if attempt < max_retries - 1:
+                    wait_time = base_backoff * (2 ** attempt)
+                    logger.warning(f"Request failed. Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                logger.error(f"Remote API request failed: {e}")
+                raise
+            except Exception as e:
+                logger.error(f"Remote API generation error: {e}")
+                raise
 
     def _calculate_cost(self, model: str, usage: Dict[str, int]) -> float:
         """Calculate approximate cost (0 for local models)"""

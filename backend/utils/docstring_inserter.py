@@ -34,6 +34,7 @@ class InsertionPoint:
     docstring: str
     has_existing_docstring: bool = False
     existing_docstring_lines: Tuple[int, int] = (0, 0)  # start, end lines if exists
+    language: str = "python"  # Programming language detected from file extension
 
 
 @dataclass
@@ -127,6 +128,46 @@ class DocstringInserter:
         else:
             self.line_offsets.clear()
     
+    def _detect_language(self, file_path: str) -> str:
+        """Detect programming language from file extension.
+        
+        Args:
+            file_path: Path to the source file
+            
+        Returns:
+            str: Language identifier (python, javascript, java, cpp, csharp, etc.)
+        """
+        ext = Path(file_path).suffix.lower()
+        
+        # Map file extensions to language identifiers
+        language_map = {
+            '.py': 'python',
+            '.js': 'javascript',
+            '.jsx': 'javascript',
+            '.ts': 'typescript',
+            '.tsx': 'typescript',
+            '.java': 'java',
+            '.cpp': 'cpp',
+            '.cc': 'cpp',
+            '.cxx': 'cpp',
+            '.c++': 'cpp',
+            '.c': 'c',
+            '.h': 'c',
+            '.hpp': 'cpp',
+            '.cs': 'csharp',
+            '.go': 'go',
+            '.rs': 'rust',
+            '.php': 'php',
+            '.rb': 'ruby',
+            '.swift': 'swift',
+            '.kt': 'kotlin',
+            '.scala': 'scala',
+            '.m': 'objective_c',
+            '.mm': 'objective_cpp',
+        }
+        
+        return language_map.get(ext, 'python')  # Default to Python if unknown
+    
     def _load_component_data(self):
         """Load component data containing component locations"""
         if self.component_data_file and self.component_data_file.exists():
@@ -144,7 +185,8 @@ class DocstringInserter:
         file_path: str,
         start_line: int,
         component_type: str = "function",
-        has_existing_docstring: bool = False
+        has_existing_docstring: bool = False,
+        language: Optional[str] = None
     ) -> InsertionResult:
         """
         Insert a single docstring for one component (for continuous pipeline mode).
@@ -213,8 +255,12 @@ class DocstringInserter:
                     message="Existing docstring preserved"
                 )
             
-            # Format the new docstring
-            docstring_lines = self._format_docstring(docstring, base_indent, component_type)
+            # Detect language if not provided
+            if not language:
+                language = self._detect_language(file_path)
+            
+            # Format the new docstring with language-aware syntax
+            docstring_lines = self._format_docstring(docstring, base_indent, component_type, language)
             
             # Calculate line offset for future insertions
             if has_existing:
@@ -378,7 +424,8 @@ class DocstringInserter:
                 start_line=start_line,
                 component_type=component_type,
                 docstring=docstring,
-                has_existing_docstring=has_docstring
+                has_existing_docstring=has_docstring,
+                language=self._detect_language(file_path)
             ))
         
         # Sort by file path, then by line number (descending for bottom-up insertion)
@@ -395,15 +442,25 @@ class DocstringInserter:
         self,
         docstring: str,
         base_indent: str,
-        component_type: str
+        component_type: str,
+        language: str = "python"
     ) -> List[str]:
         """
-        Format docstring with proper indentation and quotes.
+        Format docstring with proper indentation and language-specific syntax.
+        
+        Supports multiple languages:
+        - Python: Triple-quoted strings
+        - JavaScript/TypeScript: JSDoc /** */ or line comments
+        - Java: JavaDoc /** */
+        - C/C++/C#: Multi-line /* */ or line comments //
+        - Go: Line comments //
+        - And others
         
         Args:
             docstring: Raw docstring text
             base_indent: Base indentation for the component body
             component_type: Type of component (class, function, method)
+            language: Programming language (auto-detect if not provided)
             
         Returns:
             List of formatted docstring lines
@@ -413,19 +470,61 @@ class DocstringInserter:
         
         lines = docstring.strip().split('\n')
         
-        if len(lines) == 1:
-            # Single line docstring
-            return [f'{body_indent}"""{lines[0]}"""']
+        # Select comment style based on language
+        if language in ['javascript', 'typescript', 'java', 'cpp', 'c', 'csharp']:
+            # Use /** */ block comment style for C-like languages
+            return self._format_block_comment(lines, body_indent)
+        elif language in ['go', 'rust', 'ruby', 'swift']:
+            # Use // or # line comments
+            return self._format_line_comment(lines, body_indent, language)
         else:
-            # Multi-line docstring
-            formatted = [f'{body_indent}"""']
+            # Default to Python triple-quoted strings
+            return self._format_python_docstring(lines, body_indent)
+    
+    def _format_python_docstring(self, lines: List[str], indent: str) -> List[str]:
+        """Format docstring as Python triple-quoted string."""
+        if len(lines) == 1:
+            return [f'{indent}\"\"\"{lines[0]}\"\"\"']
+        else:
+            formatted = [f'{indent}"""']
             for line in lines:
                 if line.strip():
-                    formatted.append(f'{body_indent}{line}')
+                    formatted.append(f'{indent}{line}')
                 else:
                     formatted.append('')
-            formatted.append(f'{body_indent}"""')
+            formatted.append(f'{indent}"""')
             return formatted
+    
+    def _format_block_comment(self, lines: List[str], indent: str) -> List[str]:
+        """Format docstring as /** */ block comment (JavaScript, Java, C-style)."""
+        if len(lines) == 1:
+            # Single-line block comment
+            return [f'{indent}/** {lines[0]} */']
+        else:
+            # Multi-line block comment
+            formatted = [f'{indent}/**']
+            for line in lines:
+                if line.strip():
+                    formatted.append(f'{indent} * {line}')
+                else:
+                    formatted.append(f'{indent} *')
+            formatted.append(f'{indent} */')
+            return formatted
+    
+    def _format_line_comment(self, lines: List[str], indent: str, language: str) -> List[str]:
+        """Format docstring as line comments (Go, Rust, Ruby, etc.)."""
+        # Choose comment character based on language
+        comment_char = '// ' if language in ['go', 'rust'] else '# '
+        
+        formatted = []
+        for line in lines:
+            if line.strip():
+                formatted.append(f'{indent}{comment_char}{line}')
+            else:
+                formatted.append('')  # Preserve blank lines
+        
+        return formatted
+
     
     def _find_docstring_insert_position(
         self,
@@ -567,11 +666,12 @@ class DocstringInserter:
                     ))
                     continue
                 
-                # Format the new docstring
+                # Format the new docstring with language-aware syntax
                 docstring_lines = self._format_docstring(
                     point.docstring,
                     base_indent,
-                    point.component_type
+                    point.component_type,
+                    point.language
                 )
                 
                 if has_existing:
