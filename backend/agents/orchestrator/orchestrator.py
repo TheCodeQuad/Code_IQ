@@ -452,7 +452,7 @@ class Orchestrator:
     def _insert_docstring_for_component(
         self,
         component: CodeComponent,
-        documentation: str
+        raw_response
     ) -> None:
         """
         Insert the generated docstring into the source file for a component.
@@ -460,18 +460,39 @@ class Orchestrator:
         
         Args:
             component: The code component being documented
-            documentation: The generated docstring string from writer agent
+            raw_response: The raw LLM response string from writer agent,
+                          or a Documentation object whose .docstring holds it
         """
         if not self._docstring_inserter:
             return
+
+        # Accept both Documentation objects and plain strings
+        if hasattr(raw_response, 'docstring'):
+            raw_response = raw_response.docstring
         
         try:
-            # Convert Documentation to dict format expected by inserter
-            doc_data = {
-                'docstring': documentation.docstring if hasattr(documentation, 'docstring') else str(documentation)
-            }
+            # Extract docstring from raw LLM response
+            docstring = self._docstring_inserter.extract_docstring(raw_response)
             
-            # Use the component-aware insertion method
+            if not docstring:
+                with self._stats_lock:
+                    self.docstrings_failed += 1
+                self.logger.warning(f"Failed to extract docstring for {component.name}")
+                return
+            
+            # Clean the extracted docstring
+            docstring = self._docstring_inserter._clean_docstring_artifacts(docstring)
+            
+            # Validate the docstring has meaningful content
+            word_count = len(docstring.split())
+            if word_count < 5:
+                with self._stats_lock:
+                    self.docstrings_failed += 1
+                self.logger.warning(f"Docstring too short ({word_count} words) for {component.name}")
+                return
+            
+            # Insert into source file
+            doc_data = {'docstring': docstring}
             result = self._docstring_inserter.insert_for_component(component, doc_data)
             
             # Track stats (thread-safe)
