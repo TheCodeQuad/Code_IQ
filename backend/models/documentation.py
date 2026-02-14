@@ -137,8 +137,17 @@ class Documentation:
         if self.parameters_doc:
             lines.append("Args:")
             for param in self.parameters_doc:
-                type_str = f" ({param['type']})" if param.get('type') else ""
-                lines.append(f"    {param['name']}{type_str}: {param['description']}")
+                # Handle both dict and string parameter formats
+                if isinstance(param, dict):
+                    name = param.get('name', 'param')
+                    type_str = f" ({param['type']})" if param.get('type') else ""
+                    desc = param.get('description', '')
+                else:
+                    # String format: just use as name
+                    name = str(param)
+                    type_str = ""
+                    desc = ""
+                lines.append(f"    {name}{type_str}: {desc}")
             lines.append("")
         
         if self.returns_doc:

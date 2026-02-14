@@ -8,6 +8,12 @@ openai>=1.0.0  # Alternative LLM
 langchain>=0.1.0
 langchain-anthropic>=0.1.0
 
+# Local LLM inference (llama-cpp-python)
+# For CPU only: pip install llama-cpp-python
+# For CUDA GPU: CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python --force-reinstall --no-cache-dir
+# For Apple Metal: CMAKE_ARGS="-DGGML_METAL=on" pip install llama-cpp-python --force-reinstall --no-cache-dir
+# llama-cpp-python>=0.2.0
+
 # Language parsers
 tree-sitter==0.20.4
 tree-sitter-languages==1.7.0

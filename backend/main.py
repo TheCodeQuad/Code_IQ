@@ -1,11 +1,16 @@
+import json
+import os
 import sys
 from pathlib import Path
+from typing import Dict, List, Optional
+from datetime import datetime
 
-# Ensure project root is on sys.path so 'backend.*' imports work when running this file directly
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, FileResponse
+from pydantic import BaseModel, HttpUrl, Field
 
+from backend.navigator.core.repo_loader import clone_repo, extract_repo_name
 from backend.navigator.core.repository_parser import RepositoryParser
 from backend.navigator.core.topo import (
     build_graph_from_components,
@@ -16,9 +21,6 @@ from backend.navigator.core.topo import (
 from backend.navigator.core.ir_export import export_ir
 from backend.navigator.core.dag_export import export_dag
 from backend.models.code_component import CodeComponent, ComponentType
-from backend.navigator.core.repo_loader import clone_repo
-from pathlib import Path
-import sys
 
 # Orchestrator disabled for navigator-only run
 # from backend.agents.orchestrator.orchestrator import Orchestrator
@@ -63,61 +65,417 @@ def main():
     graph = resolve_cycles(graph)
     export_dag(graph, repo_id=repo_id)
 
-    # Get topological order of component IDs
-    topo_order = topological_sort(graph)
-    # Convert all components to the standard CodeComponent if needed
-    for cid, nav_comp in components.items():
-    # Only convert if not already the correct type
-        if not hasattr(nav_comp, "name"):
-            comp_type = nav_comp.type
-            if not isinstance(comp_type, ComponentType):
-                comp_type = ComponentType(comp_type)
-            components[cid] = CodeComponent(
-                id=getattr(nav_comp, 'id', cid),
-                name=getattr(nav_comp, 'name', getattr(nav_comp, 'id', cid)),
-                type=comp_type,
-                location=getattr(nav_comp, 'location', None),
-                source_code=getattr(nav_comp, 'source_code', ''),
-                signature=getattr(nav_comp, 'signature', ''),
-                parameters=getattr(nav_comp, 'parameters', []),
-                return_type=getattr(nav_comp, 'return_type', None),
-                decorators=getattr(nav_comp, 'decorators', []),
-                parent_classes=getattr(nav_comp, 'parent_classes', []),
-                methods=getattr(nav_comp, 'methods', []),
-                attributes=getattr(nav_comp, 'attributes', []),
-                existing_docstring=getattr(nav_comp, 'existing_docstring', None),
-                calls=getattr(nav_comp, 'calls', []),
-                imports=getattr(nav_comp, 'imports', []),
-                depends_on=getattr(nav_comp, 'depends_on', []),
-                complexity=getattr(nav_comp, 'complexity', None),
-                lines_of_code=getattr(nav_comp, 'lines_of_code', 0),
-                language=getattr(nav_comp, 'language', 'python'),
-                is_async=getattr(nav_comp, 'is_async', False),
-                is_generator=getattr(nav_comp, 'is_generator', False),
-                is_abstract=getattr(nav_comp, 'is_abstract', False),
-                is_static=getattr(nav_comp, 'is_static', False),
-                is_class_method=getattr(nav_comp, 'is_class_method', False),
-                priority=getattr(nav_comp, 'priority', 0),
-                dependency_level=getattr(nav_comp, 'dependency_level', 0),
-                metadata=getattr(nav_comp, 'metadata', {}),
-            )
-# components is already a dict: {id: CodeComponent}
-    # id_to_component = components
-    ordered_components = [components[cid] for cid in topo_order if cid in components]
-    for idx, component in enumerate(components.values()):
-        print(f"Component {idx}: type={type(component)}, value={component}")
+# ============================================================================
+# FASTAPI APP SETUP
+# ============================================================================
 
-    # Orchestrator pipeline disabled for faster navigator-only iteration
-    # orchestrator = Orchestrator()
-    # docs = orchestrator.process_components(ordered_components)
+app = FastAPI(
+    title="Code Dependency Analyzer API",
+    description="Analyze code repositories and extract dependency graphs",
+    version="1.0.0"
+)
+
+# CORS Configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3000"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ============================================================================
+# OUTPUT DIRECTORY
+# ============================================================================
+
+OUTPUT_DIR = Path("./output")
+OUTPUT_DIR.mkdir(exist_ok=True)
+
+# ============================================================================
+# REQUEST/RESPONSE MODELS
+# ============================================================================
+
+class AnalyzeRequest(BaseModel):
+    repo_url: HttpUrl = Field(..., description="GitHub repository URL")
+    save_json: bool = Field(default=True, description="Save results to JSON file")
+    include_source: bool = Field(default=True, description="Include source code in response")
+
+class ComponentInfo(BaseModel):
+    id: str
+    language: str
+    type: str
+    file_path: str
+    module_path: str
+    depends_on: List[str]
+    start_line: int
+    end_line: int
+    has_docstring: bool
+    docstring: Optional[str] = None
+    source_code: Optional[str] = None
+
+class AnalysisStats(BaseModel):
+    total_components: int
+    functions: int
+    classes: int
+    methods: int
+    global_variables: int
+    components_with_docstrings: int
+    components_without_docstrings: int
+    total_dependencies: int
+    max_dependencies: int
+    avg_dependencies: float
+
+class AnalyzeResponse(BaseModel):
+    success: bool
+    repo_url: str
+    timestamp: str
+    stats: AnalysisStats
+    components: Dict[str, ComponentInfo]
+    topological_order: List[str]
+    dfs_order: List[str]
+    dag: Dict[str, List[str]]
+    formatted_output: Optional[str] = None
+    output_file: Optional[str] = None
+    message: Optional[str] = None
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+def calculate_stats(components: dict) -> AnalysisStats:
+    """Calculate statistics from components"""
+    stats = {
+        "total_components": len(components),
+        "functions": 0,
+        "classes": 0,
+        "methods": 0,
+        "global_variables": 0,
+        "components_with_docstrings": 0,
+        "components_without_docstrings": 0,
+        "total_dependencies": 0,
+        "max_dependencies": 0,
+        "avg_dependencies": 0.0
+    }
     
-    print("Parsed components:", components)
-    print("Topological order:", topo_order)
-    print("Ordered components:", ordered_components)
+    dep_counts = []
+    
+    for comp in components.values():
+        # Count by type
+        comp_type = comp.type
+        if comp_type == "function":
+            stats["functions"] += 1
+        elif comp_type == "class":
+            stats["classes"] += 1
+        elif comp_type == "method":
+            stats["methods"] += 1
+        elif comp_type == "global_variable":
+            stats["global_variables"] += 1
+        
+        # Count docstrings - check if existing_docstring is not None
+        if comp.existing_docstring:
+            stats["components_with_docstrings"] += 1
+        else:
+            stats["components_without_docstrings"] += 1
+        
+        # Count dependencies
+        dep_count = len(comp.depends_on)
+        dep_counts.append(dep_count)
+        stats["total_dependencies"] += dep_count
+        
+        if dep_count > stats["max_dependencies"]:
+            stats["max_dependencies"] = dep_count
+    
+    # Calculate average
+    if dep_counts:
+        stats["avg_dependencies"] = round(sum(dep_counts) / len(dep_counts), 2)
+    
+    return AnalysisStats(**stats)
 
-    # print("\nGenerated Documentation:")
-    # for doc in docs:
-    #     print(doc)  # Or format as needed
+def save_analysis_to_json(components_dict: dict, repo_name: str) -> str:
+    """Save analysis results to JSON file in the required format"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{repo_name}_{timestamp}.json"
+    filepath = OUTPUT_DIR / filename
+    
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(components_dict, f, indent=2, ensure_ascii=False)
+    
+    return str(filepath)
+
+def format_analysis_output(components: dict, graph: dict, dfs_order: list, topo_order: list) -> str:
+    """Format analysis output as a string for UI display"""
+    output_lines = []
+    
+    # Components section
+    output_lines.append("Components:")
+    for comp_id in sorted(components.keys()):
+        output_lines.append(f"  {comp_id}")
+    
+    # DAG section
+    output_lines.append("DAG:")
+    for comp_id, dependencies in sorted(graph.items()):
+        if dependencies:  # Only show components that have dependencies
+            deps_str = ", ".join([f"'{dep}'" for dep in sorted(dependencies)])
+            output_lines.append(f"{comp_id} -> [{deps_str}]")
+    
+    # DFS Order section
+    output_lines.append("Dependency-first DFS order:")
+    for comp_id in dfs_order:
+        output_lines.append(comp_id)
+    
+    # Topological Order section
+    output_lines.append("Topological Order:")
+    for comp_id in topo_order:
+        output_lines.append(comp_id)
+    
+    return "\n".join(output_lines)
+
+def print_analysis_summary(components: dict, graph: dict, dfs_order: list, topo_order: list):
+    """Print formatted analysis summary to console"""
+    print("\n" + "="*80)
+    print("ANALYSIS SUMMARY")
+    print("="*80)
+    
+    # Print Components
+    print("\nComponents:")
+    for comp_id in sorted(components.keys()):
+        print(f"  {comp_id}")
+    
+    # Print DAG
+    print("\nDAG:")
+    for comp_id, dependencies in sorted(graph.items()):
+        if dependencies:  # Only show components that have dependencies
+            deps_str = ", ".join([f"'{dep}'" for dep in sorted(dependencies)])
+            print(f"{comp_id} -> [{deps_str}]")
+    
+    # Print DFS Order
+    print("\nDependency-first DFS order:")
+    for comp_id in dfs_order:
+        print(f"{comp_id}")
+    
+    # Print Topological Order
+    print("\nTopological Order:")
+    for comp_id in topo_order:
+        print(f"{comp_id}")
+    
+    print("\n" + "="*80 + "\n")
+
+def truncate_source_code(source_code: str, max_length: int = 500) -> str:
+    """Truncate source code if it's too long"""
+    if len(source_code) <= max_length:
+        return source_code
+    return source_code[:max_length] + "..."
+
+# ============================================================================
+# API ENDPOINTS
+# ============================================================================
+
+@app.get("/")
+def root():
+    """Health check endpoint"""
+    return {
+        "status": "online",
+        "service": "Code Dependency Analyzer",
+        "version": "1.0.0",
+        "endpoints": {
+            "analyze": "/analyze",
+            "health": "/health",
+            "download": "/download/{filename}",
+            "files": "/files"
+        }
+    }
+
+@app.get("/health")
+def health_check():
+    """Detailed health check"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "output_dir": str(OUTPUT_DIR),
+        "output_dir_exists": OUTPUT_DIR.exists()
+    }
+
+@app.post("/analyze", response_model=AnalyzeResponse)
+def analyze_repo(req: AnalyzeRequest):
+    """
+    Analyze a Git repository and extract dependency graph
+    
+    - **repo_url**: GitHub repository URL
+    - **save_json**: Save results to JSON file (default: True)
+    - **include_source**: Include source code in response (default: True)
+    """
+    try:
+        # Extract repo name for naming
+        repo_name = extract_repo_name(str(req.repo_url))
+        
+        # Step 1: Clone repository
+        print(f"📥 Cloning repository: {req.repo_url}")
+        repo_path = clone_repo(str(req.repo_url))
+        
+        # Step 2: Parse repository
+        print(f"🔍 Parsing repository at: {repo_path}")
+        parser = RepositoryParser(repo_path)
+        components = parser.parse()
+        
+        if not components:
+            raise HTTPException(
+                status_code=400,
+                detail="No components found in repository. Make sure it contains Python files."
+            )
+        
+        # Step 3: Build dependency graph
+        print(f"📊 Building dependency graph...")
+        graph = build_graph_from_components(components)
+        graph = resolve_cycles(graph)
+
+        # Step 3.5: Export IR and DAG files (ir_reponame.json, dag_reponame.json)
+        print(f"💾 Exporting IR and DAG...")
+        export_ir(components, repo_id=repo_name)
+        export_dag(graph, repo_id=repo_name)
+        print(f"   IR  -> ir_{repo_name}.json")
+        print(f"   DAG -> dag_{repo_name}.json")
+        
+        # Step 4: Calculate ordering
+        print(f"🔄 Calculating topological order...")
+        topo_order = topological_sort(graph)
+        dfs_order = dependency_first_dfs(graph)
+        
+        # Step 5: Calculate statistics
+        stats = calculate_stats(components)
+        
+        # Step 6: Prepare component data in the required format
+        components_dict = {}
+        for comp_id, comp in components.items():
+            comp_info = {
+                "id": comp.id,
+                "language": comp.language,
+                "type": str(comp.type.value) if hasattr(comp.type, 'value') else str(comp.type),
+                "file_path": comp.location.file_path if hasattr(comp, 'location') else "",
+                "module_path": getattr(comp, 'module_path', ""),
+                "depends_on": list(comp.depends_on) if hasattr(comp, 'depends_on') else [],
+                "start_line": comp.location.start_line if hasattr(comp, 'location') else 0,
+                "end_line": comp.location.end_line if hasattr(comp, 'location') else 0,
+                "has_docstring": bool(comp.existing_docstring),
+                "docstring": comp.existing_docstring or "",
+            }
+            
+            # Include source code (truncated for display)
+            if req.include_source and comp.source_code:
+                comp_info["source_code"] = truncate_source_code(comp.source_code)
+            
+            components_dict[comp_id] = comp_info
+        
+        # Step 7: Format output for UI display
+        formatted_output = format_analysis_output(components, graph, dfs_order, topo_order)
+        
+        # Step 8: Print summary to console
+        print_analysis_summary(components, graph, dfs_order, topo_order)
+        
+        # Step 9: Save components to JSON file (in the required format)
+        output_file = None
+        if req.save_json:
+            print(f"💾 Saving components to JSON...")
+            output_file = save_analysis_to_json(components_dict, repo_name)
+            print(f"✅ Results saved to: {output_file}")
+        
+        # Step 10: Prepare response data
+        response_data = {
+            "success": True,
+            "repo_url": str(req.repo_url),
+            "timestamp": datetime.now().isoformat(),
+            "stats": stats.dict(),
+            "components": components_dict,
+            "topological_order": topo_order,
+            "dfs_order": dfs_order,
+            "dag": {k: list(v) for k, v in graph.items()},
+            "formatted_output": formatted_output,
+            "output_file": output_file,
+            "message": f"Analysis complete. Results saved to {output_file}" if output_file else "Analysis complete."
+        }
+        
+        print(f"✅ Analysis complete!")
+        print(f"   Total components: {stats.total_components}")
+        print(f"   Functions: {stats.functions}")
+        print(f"   Classes: {stats.classes}")
+        print(f"   Methods: {stats.methods}")
+        print(f"   Global Variables: {stats.global_variables}")
+        
+        return JSONResponse(content=response_data)
+        
+    except Exception as e:
+        print(f"❌ Error during analysis: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Analysis failed: {str(e)}"
+        )
+
+@app.get("/download/{filename}")
+def download_file(filename: str):
+    """Download a previously generated JSON file"""
+    filepath = OUTPUT_DIR / filename
+    
+    if not filepath.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"File {filename} not found"
+        )
+    
+    return FileResponse(
+        path=filepath,
+        filename=filename,
+        media_type="application/json"
+    )
+
+@app.get("/files")
+def list_files():
+    """List all available output files"""
+    files = []
+    for filepath in OUTPUT_DIR.glob("*.json"):
+        stat = filepath.stat()
+        files.append({
+            "filename": filepath.name,
+            "size": stat.st_size,
+            "created": datetime.fromtimestamp(stat.st_ctime).isoformat(),
+            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
+        })
+    
+    return {
+        "output_dir": str(OUTPUT_DIR),
+        "total_files": len(files),
+        "files": sorted(files, key=lambda x: x["modified"], reverse=True)
+    }
+
+@app.delete("/files/{filename}")
+def delete_file(filename: str):
+    """Delete a specific output file"""
+    filepath = OUTPUT_DIR / filename
+    
+    if not filepath.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"File {filename} not found"
+        )
+    
+    filepath.unlink()
+    return {
+        "success": True,
+        "message": f"File {filename} deleted successfully"
+    }
+
+# ============================================================================
+# RUN SERVER
+# ============================================================================
 
 if __name__ == "__main__":
-    main()
+    # If --serve flag passed, start FastAPI server; otherwise run CLI
+    if len(sys.argv) > 1 and sys.argv[1] == "--serve":
+        import uvicorn
+        uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+    else:
+        main()
