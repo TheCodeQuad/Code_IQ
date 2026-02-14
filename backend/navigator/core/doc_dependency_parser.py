@@ -17,9 +17,7 @@
     # ==================================================
     # Classes should depend on other classes, not individual methods
     for comp in components.values():
-        comp_type = comp.type.value if hasattr(comp.type, 'value') else str(comp.type)
-        
-        if comp_type != "class":
+        if comp.type != "class":
             continue
 
         new_deps = set()
@@ -36,27 +34,23 @@
 
             # Keep global variables as-is
             dep_comp = components.get(dep)
-            if dep_comp:
-                dep_type = dep_comp.type.value if hasattr(dep_comp.type, 'value') else str(dep_comp.type)
-                if dep_type == "global_variable":
-                    new_deps.add(dep)
-                    continue
+            if dep_comp and dep_comp.type == "global_variable":
+                new_deps.add(dep)
+                continue
 
             # For external class methods, depend on the class instead
             dep_parts = dep.split(".")
             if len(dep_parts) >= 2:
                 owner = ".".join(dep_parts[:-1])
-                if owner in components:
-                    owner_type = components[owner].type.value if hasattr(components[owner].type, 'value') else str(components[owner].type)
-                    if owner_type == "class":
-                        # This is a method of another class -> depend on the class
-                        new_deps.add(owner)
-                        continue
+                if owner in components and components[owner].type == "class":
+                    # This is a method of another class -> depend on the class
+                    new_deps.add(owner)
+                    continue
 
             # Keep other dependencies as-is
             new_deps.add(dep)
 
-        comp.depends_on = list(new_deps)
+        comp.depends_on = new_deps
 
     # ==================================================
     # PASS 2: CLEAN METHOD / FUNCTION DEPENDENCIES
@@ -64,14 +58,12 @@
     # Methods and functions should depend on classes, not individual methods
     # BUT they should keep global variable dependencies
     for comp in components.values():
-        comp_type = comp.type.value if hasattr(comp.type, 'value') else str(comp.type)
-        
-        if comp_type not in ("method", "function"):
+        if comp.type not in ("method", "function"):
             continue
 
         # Determine parent class for methods
         self_class = None
-        if comp_type == "method":
+        if comp.type == "method":
             comp_parts = comp.id.split(".")
             if len(comp_parts) >= 2:
                 self_class = ".".join(comp_parts[:-1])
@@ -89,34 +81,28 @@
 
             # Keep global variables as-is
             dep_comp = components.get(dep)
-            if dep_comp:
-                dep_type = dep_comp.type.value if hasattr(dep_comp.type, 'value') else str(dep_comp.type)
-                if dep_type == "global_variable":
-                    new_deps.add(dep)
-                    continue
+            if dep_comp and dep_comp.type == "global_variable":
+                new_deps.add(dep)
+                continue
 
             # Keep direct class dependencies
-            if dep in components:
-                dep_dep_type = components[dep].type.value if hasattr(components[dep].type, 'value') else str(components[dep].type)
-                if dep_dep_type == "class":
-                    new_deps.add(dep)
-                    continue
+            if dep in components and components[dep].type == "class":
+                new_deps.add(dep)
+                continue
 
             # For external class methods, depend on the class instead
             dep_parts = dep.split(".")
             if len(dep_parts) >= 2:
                 owner = ".".join(dep_parts[:-1])
-                if owner in components:
-                    owner_type = components[owner].type.value if hasattr(components[owner].type, 'value') else str(components[owner].type)
-                    if owner_type == "class":
-                        # This is a method of another class -> depend on the class
-                        new_deps.add(owner)
-                        continue
+                if owner in components and components[owner].type == "class":
+                    # This is a method of another class -> depend on the class
+                    new_deps.add(owner)
+                    continue
 
             # Keep module-level functions and other dependencies
             new_deps.add(dep)
 
-        comp.depends_on = list(new_deps)
+        comp.depends_on = new_deps
 
     # ==================================================
     # PASS 3: ORCHESTRATOR METHOD COLLAPSE (OPTIONAL)
@@ -127,9 +113,7 @@
     # HOWEVER: We DO NOT collapse global variable dependencies
     
     for comp in components.values():
-        comp_type = comp.type.value if hasattr(comp.type, 'value') else str(comp.type)
-        
-        if comp_type != "method":
+        if comp.type != "method":
             continue
 
         comp_parts = comp.id.split(".")
@@ -142,35 +126,21 @@
         if not class_comp:
             continue
 
-        # Convert to sets for comparison
-        comp_deps_set = set(comp.depends_on)
-        class_deps_set = set(class_comp.depends_on)
-        
         # Separate global variables from other dependencies
-        method_globals = set()
-        for dep in comp_deps_set:
-            if dep in components:
-                dep_comp = components[dep]
-                dep_type = dep_comp.type.value if hasattr(dep_comp.type, 'value') else str(dep_comp.type)
-                if dep_type == "global_variable":
-                    method_globals.add(dep)
-        method_non_globals = comp_deps_set - method_globals
+        method_globals = {dep for dep in comp.depends_on 
+                         if dep in components and components[dep].type == "global_variable"}
+        method_non_globals = comp.depends_on - method_globals
         
-        class_globals = set()
-        for dep in class_deps_set:
-            if dep in components:
-                dep_comp = components[dep]
-                dep_type = dep_comp.type.value if hasattr(dep_comp.type, 'value') else str(dep_comp.type)
-                if dep_type == "global_variable":
-                    class_globals.add(dep)
-        class_non_globals = class_deps_set - class_globals
+        class_globals = {dep for dep in class_comp.depends_on 
+                        if dep in components and components[dep].type == "global_variable"}
+        class_non_globals = class_comp.depends_on - class_globals
 
         # If non-global method dependencies are subset of non-global class dependencies,
         # we can hide them (but keep global dependencies visible)
         if method_non_globals and method_non_globals.issubset(class_non_globals):
             # Keep only global variable dependencies
             # For true hiding of non-globals, uncomment:
-            # comp.depends_on = list(method_globals)
+            # comp.depends_on = method_globals
             pass
 
     # ==================================================
@@ -178,6 +148,7 @@
     # ==================================================
     # Final safety pass to ensure no component depends on itself
     for comp in components.values():
+        # Remove self-references from the dependency list
         if comp.id in comp.depends_on:
             comp.depends_on.remove(comp.id)
 
@@ -204,8 +175,7 @@ def get_dependency_summary(components):
     dep_counts = []
 
     for comp in components.values():
-        comp_type = comp.type.value if hasattr(comp.type, 'value') else str(comp.type)
-        
+        comp_type = comp.type
         if comp_type == "class":
             summary["classes"] += 1
         elif comp_type == "method":
