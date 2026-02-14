@@ -9,19 +9,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel, HttpUrl, Field
 
-from navigator.core.repo_loader import clone_repo
-from navigator.core.repository_parser import RepositoryParser
-from navigator.core.topo import (
+from .navigator.core.repo_loader import clone_repo
+from .navigator.core.repository_parser import RepositoryParser
+from .navigator.core.topo import (
     build_graph_from_components,
     topological_sort,
     dependency_first_dfs,
     resolve_cycles
 )
-from agents.orchestrator.orchestrator import Orchestrator
+from .agents.orchestrator.orchestrator import Orchestrator
 from backend.pipeline.pipeline import run_pipeline
 from backend.utils.file_handler import FileHandler
-from backend.utils.logger import get_logger
-logger = get_logger(__name__)
 # ============================================================================
 # FASTAPI APP SETUP
 # ============================================================================
@@ -286,7 +284,89 @@ def analyze_repo(req: AnalyzeRequest):
         # Step 1: Clone repository
         print(f"📥 Cloning repository: {req.repo_url}")
         repo_path = clone_repo(str(req.repo_url))
+        print(f"🔍 Parsing repository at: {repo_path}")
+        parser = RepositoryParser(repo_path)
+        components = parser.parse()
         
+        if not components:
+            raise HTTPException(
+                status_code=400,
+                detail="No components found in repository. Make sure it contains Python files."
+            )
+        
+        # Step 3: Build dependency graph
+        print(f"📊 Building dependency graph...")
+        graph = build_graph_from_components(components)
+        graph = resolve_cycles(graph)
+        
+        # Step 4: Calculate ordering
+        print(f"🔄 Calculating topological order...")
+        topo_order = topological_sort(graph)
+        dfs_order = dependency_first_dfs(graph)
+        
+        # Step 5: Calculate statistics
+        stats = calculate_stats(components)
+        
+        # Step 6: Prepare component data in the required format
+        components_dict = {}
+        for comp_id, comp in components.items():
+            # Get source code, truncated if needed
+            source_code = ""
+            if comp.source_code:
+                source_code = truncate_source_code(comp.source_code) if req.include_source else comp.source_code
+            
+            comp_info = {
+                "id": comp.id,
+                "language": comp.language,
+                "type": str(comp.type.value) if hasattr(comp.type, 'value') else str(comp.type),
+                "file_path": comp.location.file_path if hasattr(comp, 'location') else "",
+                "module_path": getattr(comp, 'module_path', ""),
+                "depends_on": list(comp.depends_on) if hasattr(comp, 'depends_on') else [],
+                "start_line": comp.location.start_line if hasattr(comp, 'location') else 0,
+                "end_line": comp.location.end_line if hasattr(comp, 'location') else 0,
+                "has_docstring": bool(comp.existing_docstring),
+                "docstring": comp.existing_docstring or "",
+                "source_code": source_code,
+            }
+            
+            components_dict[comp_id] = comp_info
+        
+        # Step 7: Format output for UI display
+        formatted_output = format_analysis_output(components, graph, dfs_order, topo_order)
+        
+        # Step 8: Print summary to console
+        print_analysis_summary(components, graph, dfs_order, topo_order)
+        
+        # Step 9: Save components to JSON file (in the required format)
+        output_file = None
+        if req.save_json:
+            print(f"💾 Saving components to JSON...")
+            output_file = save_analysis_to_json(components_dict, repo_name)
+            print(f"✅ Results saved to: {output_file}")
+        
+        # Step 10: Prepare response data
+        response_data = {
+            "success": True,
+            "repo_url": str(req.repo_url),
+            "timestamp": datetime.now().isoformat(),
+            "stats": stats.dict(),
+            "components": components_dict,
+            "topological_order": topo_order,
+            "dfs_order": dfs_order,
+            "dag": {k: list(v) for k, v in graph.items()},
+            "formatted_output": formatted_output,
+            "output_file": output_file,
+            "message": f"Analysis complete. Results saved to {output_file}" if output_file else "Analysis complete."
+        }
+        
+        print(f"✅ Analysis complete!")
+        print(f"   Total components: {stats.total_components}")
+        print(f"   Functions: {stats.functions}")
+        print(f"   Classes: {stats.classes}")
+        print(f"   Methods: {stats.methods}")
+        print(f"   Global Variables: {stats.global_variables}")
+        
+    
         # Use the pipeline function
         print(f"🚀 Running documentation pipeline for: {repo_path}")
         result = run_pipeline(repo_path)
@@ -304,21 +384,6 @@ def analyze_repo(req: AnalyzeRequest):
         topo_order = result["topological_order"]
         dfs_order = result["dfs_order"]
         docs = result["documentation"]
-
-        # Save writer output (documentation) to disk
-        writer_output_path = PROJECT_ROOT / "data" / "intermediate" / "agent_output" / "writer" / f"{repo_name}_writer_output.json"
-        try:
-            serialized_docs = {}
-            for doc in docs:
-                if hasattr(doc, 'to_dict'):
-                    serialized_docs[doc.component_id] = doc.to_dict()
-                else:
-                    serialized_docs[doc.component_id] = FileHandler.serialize_component(doc)
-            
-            FileHandler.write_json(writer_output_path, serialized_docs)
-            logger.info(f"Writer output saved to {writer_output_path}")
-        except Exception as e:
-            logger.warning(f"Failed to save writer output: {e}")
 
         # Prepare component data for response
         components_dict = {}
@@ -365,6 +430,7 @@ def analyze_repo(req: AnalyzeRequest):
             status_code=500,
             detail=f"Analysis failed: {str(e)}"
         )
+        
 
 @app.get("/download/{filename}")
 def download_file(filename: str):

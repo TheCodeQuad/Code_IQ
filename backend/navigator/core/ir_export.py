@@ -5,10 +5,11 @@ import os
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 
-def export_ir(components, out_dir=os.path.join(DATA_DIR, "intermediate", "navigator_output")):
+def export_ir(components, repo_id: str | None = None, out_dir=os.path.join(DATA_DIR, "intermediate", "navigator_output")):
     os.makedirs(out_dir, exist_ok=True)
 
-    ir_path = os.path.join(out_dir, "ir.json")
+    filename = f"ir_{repo_id}.json" if repo_id else "ir.json"
+    ir_path = os.path.join(out_dir, filename)
 
     with open(ir_path, "w", encoding="utf-8") as f:
         json.dump(

@@ -1,0 +1,35 @@
+{
+  "dag_test.helper": [],
+  "dag_test.process": [
+    "dag_test.helper"
+  ],
+  "dag_test.Calculator": [
+    "dag_test.helper",
+    "dag_test.process"
+  ],
+  "dag_test.Calculator.compute": [
+    "dag_test.helper"
+  ],
+  "dag_test.Calculator.run": [
+    "dag_test.process"
+  ],
+  "dag_test.main": [
+    "dag_test.Calculator"
+  ],
+  "sample.add": [],
+  "sample.multiply": [
+    "sample.add"
+  ],
+  "sample.Calculator": [
+    "sample.multiply",
+    "sample.add"
+  ],
+  "sample.Calculator.__init__": [],
+  "sample.Calculator.calculate": [
+    "sample.multiply",
+    "sample.add"
+  ],
+  "sample.async_function": [
+    "sample.multiply"
+  ]
+}

@@ -1,6 +1,7 @@
 ﻿import os
-from ..languages.adapter_registry import AdapterRegistry
-from .doc_dependency_parser import apply_doc_dependency_rules
+from backend.navigator.languages.adapter_registry import AdapterRegistry
+from backend.navigator.core.doc_dependency_parser import apply_doc_dependency_rules
+
 
 class RepositoryParser:
     def __init__(self, repo_path: str):
@@ -45,7 +46,6 @@ class RepositoryParser:
                 parsed_files.append((adapter, tree, source, components))
                 all_components.update(components)
 
-
         # ---------- PASS 2: resolve dependencies ----------
         for adapter, tree, source, components in parsed_files:
             for component in components.values():
@@ -54,27 +54,24 @@ class RepositoryParser:
                 )
                 # Convert deps to list if it's a set, then extend
                 if isinstance(deps, set):
-                    component.depends_on.extend(list(deps))
-                else:
-                    component.depends_on.extend(list(deps) if deps else [])
-    
-        # ---------- PASS 3: class → method ----------
-        for cid, comp in all_components.items():
-            # Handle both enum and string types
-            comp_type = comp.type.value if hasattr(comp.type, 'value') else str(comp.type)
-            
-            if comp_type == "class":
-                for other_id, other in all_components.items():
-                    other_type = other.type.value if hasattr(other.type, 'value') else str(other.type)
-                    if other_type == "method" and other_id.startswith(cid + "."):
-                        if not other_id.endswith(".__init__"):
-                            if other_id not in comp.depends_on:
-                                comp.depends_on.append(other_id)
+                    deps = list(deps)
+                elif not isinstance(deps, list):
+                    deps = list(deps) if deps else []
+                
+                # Extend the depends_on list with new dependencies (avoiding duplicates)
+                for dep in deps:
+                    if dep not in component.depends_on:
+                        component.depends_on.append(dep)
 
+        # 🔥 FIX: Remove Pass 3 (the problematic class → method dependency addition)
+        # Pass 3 was adding all methods as dependencies of their parent class,
+        # which is conceptually wrong (methods are PART of a class, not dependencies).
+        # The doc_dependency_rules will handle proper class-level abstraction.
 
+        # ---------- PASS 3: Apply documentation rules ----------
         apply_doc_dependency_rules(all_components)
+        
         return all_components
-    
 
     def _to_module_path(self, file_path):
         rel = os.path.relpath(file_path, self.repo_path)
@@ -84,5 +81,3 @@ class RepositoryParser:
         if rel.endswith(".py"):
             rel = rel[:-3]
         return rel
-
-
