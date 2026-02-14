@@ -1,12 +1,24 @@
 # LLM Provider Configurations
 providers:
   openrouter:
-    enabled: false
+    enabled: false  # Disabled - using local inference instead
     api_base_url: "https://openrouter.ai/api/v1/chat/completions"
     api_key_env: "OPENROUTER_API_KEY"
     timeout: 120
     models:
-      default: "openai/gpt-4-turbo"
+      default: "tngtech/deepseek-r1t-chimera:free"
+      deepseek-r1t-chimera:
+        name: "DeepSeek R1T Chimera Free"
+        model_id: "tngtech/deepseek-r1t-chimera:free"
+        context_window: 128000
+        max_output_tokens: 8192
+        cost_per_1k_input: 0.0
+        cost_per_1k_output: 0.0
+        capabilities:
+          - text_generation
+          - code_analysis
+          - code_generation
+          - reasoning
       gpt-4-turbo:
         name: "GPT-4 Turbo"
         model_id: "openai/gpt-4-turbo"
@@ -42,38 +54,25 @@ providers:
     default_params:
       temperature: 0.7
       max_tokens: 4000
-    rate_limits:
-      tier_1:
-        requests: 100
-        tokens: 1000000
 
+  # Local inference via llama-cpp-python (no HTTP overhead, model loaded once)
   local:
-    enabled: true
-    api_base_url: "http://localhost:11434"
-    api_key_env: "DUMMY"
-    timeout: 300
+    enabled: true  # Set to true to use local model
+    mode: "llama_cpp"  # "llama_cpp" for direct inference, "ollama" for Ollama API
+    # Path to your GGUF model file (download from HuggingFace)
+    # Using Qwen2.5-Coder-7B-Instruct (better for code documentation)
+    model_path: "models/qwen2.5-coder-7b-instruct-q4_k_m.gguf"
+    n_ctx: 8192  # Context window size (Qwen supports up to 128k, but 8k for efficiency)
+    n_gpu_layers: -1  # -1 = all layers on GPU, 0 = CPU only
+    n_threads: null  # null = auto-detect, or set specific thread count
     models:
-      default: "qwen2.5:7b"
-      qwen2.5-7b:
-        name: "Qwen 2.5 7B"
-        model_id: "qwen2.5:7b"
-        context_window: 32768
-        max_output_tokens: 8192
-        capabilities:
-          - text_generation
-          - code_analysis
+      default: "Qwen2.5-Coder-7B-Instruct"
     default_params:
-      temperature: 0.7
-      max_tokens: 4000
-      num_gpu: -1              # ALL layers to GPU (your A2 has 16GB - plenty for 7B model)
-      num_ctx: 16384           # Reduced for faster prefill - increase if needed
-      num_batch: 512           # Reduced for more consistent GPU utilization
-      num_thread: 16           # Adjust to your CPU core count
-      num_parallel: 4          # A2 can handle more parallelism
-    rate_limits:
-      tier_1:
-        requests: 1000
-        tokens: 500000
+      temperature: 0.3  # Lower for documentation (more focused)
+      max_tokens: 2000  # Sufficient for docstrings
+    # Ollama fallback settings (if mode: "ollama")
+    api_base_url: "http://localhost:11434/v1/chat/completions"
+    api_key_env: "DUMMY"
 
   gemini:
     enabled: false
@@ -85,10 +84,6 @@ providers:
     default_params:
       temperature: 0.7
       max_tokens: 4000
-    rate_limits:
-      tier_1:
-        requests: 60
-        tokens: 1000000
 
   anthropic:
     enabled: false
@@ -120,59 +115,39 @@ providers:
       temperature: 0.7
       max_tokens: 2000
 
-# Agent-specific LLM assignments — use local Ollama
+# Agent-specific LLM assignments — using local inference
 agent_models:
   reader:
     provider: "local"
-    model: "qwen2.5:7b"
+    model: "DeepSeek-R1-Distill-Qwen-1.5B"
     params:
       temperature: 0.3
-      max_tokens: 8000
-      num_ctx: 20480         # INCREASE: Reader needs context
-      num_batch: 512         # REDUCE from 512
-      num_gpu: -1            # ADD: Force GPU offload
-      num_parallel: 2        # ADD
+      max_tokens: 4000  # Reduced for 1.5B model context
 
   searcher:
     provider: "local"
-    model: "qwen2.5:7b"
+    model: "DeepSeek-R1-Distill-Qwen-1.5B"
     params:
       temperature: 0.5
       max_tokens: 2000
-      num_ctx: 8192          # Keep reasonable
-      num_batch: 512         # REDUCE from 512
-      num_gpu: -1            # ADD
-      num_parallel: 2        # ADD
 
   writer:
     provider: "local"
-    model: "qwen2.5:7b"
+    model: "Qwen2.5-Coder-7B-Instruct"
     params:
-      temperature: 0.7
-      max_tokens: 4000
-      num_ctx: 12288         # INCREASE
-      num_batch: 512         # REDUCE from 512
-      num_gpu: -1            # ADD
-      num_parallel: 2        # ADD
+      temperature: 0.3
+      max_tokens: 2000
 
   verifier:
     provider: "local"
-    model: "qwen2.5:7b"
+    model: "DeepSeek-R1-Distill-Qwen-1.5B"
     params:
       temperature: 0.2
       max_tokens: 4000
-      num_ctx: 12288
-      num_batch: 512         # REDUCE from 512
-      num_gpu: -1            # ADD
-      num_parallel: 2        # ADD
 
   evaluator:
     provider: "local"
-    model: "qwen2.5:7b"
+    model: "DeepSeek-R1-Distill-Qwen-1.5B"
     params:
       temperature: 0.4
-      max_tokens: 8000
-      num_ctx: 20480         # INCREASE
-      num_batch: 512         # REDUCE from 512
-      num_gpu: -1            # ADD
-      num_parallel: 2        # ADD
+      max_tokens: 4000  # Reduced for 1.5B model context

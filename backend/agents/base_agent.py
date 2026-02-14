@@ -71,6 +71,9 @@ class BaseAgent(ABC):
         self.failure_count = 0
         self.total_execution_time = 0.0
         
+        # Conversation memory for LLM interactions
+        self.memory: List[Dict[str, str]] = []
+        
         self.logger.info(f"Initialized {agent_name} agent")
     
     @abstractmethod
@@ -223,3 +226,52 @@ class BaseAgent(ABC):
     def create_system_prompt(self) -> str:
         """Create system prompt for this agent"""
         return f"You are a {self.agent_name} agent in a documentation generation system."
+    
+    def add_to_memory(self, role: str, content: str) -> None:
+        """
+        Add a message to the conversation memory.
+        
+        Args:
+            role: The role of the message sender ('system', 'user', or 'assistant')
+            content: The message content
+        """
+        self.memory.append({"role": role, "content": content})
+        self.logger.debug(f"Added {role} message to memory ({len(content)} chars)")
+    
+    def clear_memory(self) -> None:
+        """Clear the conversation memory."""
+        self.memory = []
+        self.logger.debug("Memory cleared")
+    
+    def generate_response(
+        self,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None
+    ) -> str:
+        """
+        Generate a response using the current conversation memory.
+        
+        Uses the messages stored via add_to_memory() to create a conversational
+        context for the LLM.
+        
+        Args:
+            temperature: Sampling temperature (default from config)
+            max_tokens: Maximum tokens to generate (default from config)
+            
+        Returns:
+            str: The generated response content
+        """
+        if not self.memory:
+            raise ValueError("No messages in memory. Use add_to_memory() first.")
+        
+        try:
+            response = self.llm_client.generate_with_messages(
+                agent_name=self.agent_name,
+                messages=self.memory,
+                temperature=temperature,
+                max_tokens=max_tokens
+            )
+            return response.content
+        except Exception as e:
+            self.logger.error(f"LLM generation error: {e}")
+            raise

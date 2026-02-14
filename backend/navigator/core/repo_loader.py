@@ -2,11 +2,25 @@
 import shutil
 import subprocess
 import re
+import stat
 
 
 # Get the absolute path to the project root (one level up from backend/)
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+
+def handle_remove_readonly(func, path, exc_info):
+    """
+    Error handler for Windows read-only file removal.
+    Used with shutil.rmtree to handle git files that are read-only.
+    """
+    # Check if it's a permission error
+    if not os.access(path, os.W_OK):
+        # Make the file writable and retry
+        os.chmod(path, stat.S_IWRITE)
+        func(path)
+    else:
+        raise
 
 def extract_repo_name(repo_url: str) -> str:
     """
@@ -51,7 +65,7 @@ def clone_repo(repo_url: str, base_dir=os.path.join(DATA_DIR, "input", "reposito
     
     # If directory already exists, remove it to avoid conflicts
     if os.path.exists(repo_path):
-        shutil.rmtree(repo_path)
+        shutil.rmtree(repo_path, onerror=handle_remove_readonly)
 
     subprocess.run(
         ["git", "clone", repo_url, repo_path],
