@@ -35,6 +35,7 @@ def get_jsdoc(node, source):
 def extract_parameters(node):
     """
     Extract parameters with metadata including defaults
+    Extract parameters with metadata including defaults
     
     Args:
         node: tree-sitter function/method node

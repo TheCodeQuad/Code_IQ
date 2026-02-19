@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime
@@ -9,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel, HttpUrl, Field
 
-from backend.navigator.core.repo_loader import clone_repo
+from backend.navigator.core.repo_loader import clone_repo, extract_repo_name
 from backend.navigator.core.repository_parser import RepositoryParser
 from backend.navigator.core.topo import (
     build_graph_from_components,
@@ -17,6 +18,52 @@ from backend.navigator.core.topo import (
     dependency_first_dfs,
     resolve_cycles
 )
+from backend.navigator.core.ir_export import export_ir
+from backend.navigator.core.dag_export import export_dag
+from backend.models.code_component import CodeComponent, ComponentType
+
+# Orchestrator disabled for navigator-only run
+# from backend.agents.orchestrator.orchestrator import Orchestrator
+
+def main():
+    # Prompt for GitHub repo URL or local path
+    print("Navigator runner (no agents)")
+    print("Enter GitHub repository URL or local path (e.g., data/input/repositories/<repo>):")
+    user_input = input("> ").strip()
+
+    if not user_input:
+        print("No input provided. Exiting.")
+        return
+
+    # Resolve repository path: clone if URL, else treat as local path
+    if user_input.startswith("http"):
+        print(f"Cloning repository: {user_input}")
+        repo_path = Path(clone_repo(user_input))
+    else:
+        repo_path = Path(user_input)
+        if not repo_path.is_absolute():
+            # Treat relative paths as relative to project root
+            project_root = Path(__file__).resolve().parents[1]
+            repo_path = (project_root / repo_path).resolve()
+
+    if not repo_path.exists():
+        print(f"Repository path does not exist: {repo_path}")
+        return
+
+    # Ensure project root is on sys.path for backend.* imports if run directly
+    project_root = Path(__file__).resolve().parents[1]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+
+    repo_id = repo_path.name
+    parser = RepositoryParser(str(repo_path))  # navigator-only parse
+
+    components = parser.parse()
+    export_ir(components, repo_id=repo_id)
+
+    graph = build_graph_from_components(components)
+    graph = resolve_cycles(graph)
+    export_dag(graph, repo_id=repo_id)
 
 # ============================================================================
 # FASTAPI APP SETUP
@@ -159,14 +206,6 @@ def save_analysis_to_json(components_dict: dict, repo_name: str) -> str:
     
     return str(filepath)
 
-def extract_repo_name(repo_url: str) -> str:
-    """Extract repository name from URL"""
-    # Handle different URL formats
-    url = str(repo_url).rstrip("/")
-    if url.endswith(".git"):
-        url = url[:-4]
-    return url.split("/")[-1]
-
 def format_analysis_output(components: dict, graph: dict, dfs_order: list, topo_order: list) -> str:
     """Format analysis output as a string for UI display"""
     output_lines = []
@@ -292,6 +331,13 @@ def analyze_repo(req: AnalyzeRequest):
         print(f"📊 Building dependency graph...")
         graph = build_graph_from_components(components)
         graph = resolve_cycles(graph)
+
+        # Step 3.5: Export IR and DAG files (ir_reponame.json, dag_reponame.json)
+        print(f"💾 Exporting IR and DAG...")
+        export_ir(components, repo_id=repo_name)
+        export_dag(graph, repo_id=repo_name)
+        print(f"   IR  -> ir_{repo_name}.json")
+        print(f"   DAG -> dag_{repo_name}.json")
         
         # Step 4: Calculate ordering
         print(f"🔄 Calculating topological order...")
@@ -427,5 +473,9 @@ def delete_file(filename: str):
 # ============================================================================
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+    # If --serve flag passed, start FastAPI server; otherwise run CLI
+    if len(sys.argv) > 1 and sys.argv[1] == "--serve":
+        import uvicorn
+        uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+    else:
+        main()
