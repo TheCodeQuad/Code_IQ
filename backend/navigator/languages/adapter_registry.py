@@ -19,4 +19,12 @@ class AdapterRegistry:
                 if file_path.endswith(ext):
                     return adapter
         return None  # unsupported file
-
+    
+    def get_adapter(self, language: str):
+        """Get adapter by language name (e.g., 'javascript', 'python')."""
+        language_lower = language.lower()
+        for adapter in self.adapters:
+            adapter_lang = adapter.language.lower()
+            if adapter_lang == language_lower:
+                return adapter
+        return None  # unsupported language
