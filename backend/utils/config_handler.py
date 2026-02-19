@@ -36,10 +36,7 @@ class ConfigHandler:
         """Load all YAML configuration files"""
         config_files = [
             'system.yaml',
-            'navigator.yaml',
             'agents.yaml',
-            'evaluator.yaml',
-            'api.yaml',
             'llm.yaml',
             'templates.yaml'
         ]

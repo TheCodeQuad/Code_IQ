@@ -1,126 +1,126 @@
-navigator:
-  name: "Code Navigator Module"
-  enabled: true
+# navigator:
+#   name: "Code Navigator Module"
+#   enabled: true
   
-file_discovery:
-  ignore_patterns:
-    - ".git"
-    - ".gitignore"
-    - "node_modules"
-    - "__pycache__"
-    - ".pytest_cache"
-    - "*.pyc"
-    - ".DS_Store"
-    - "venv"
-    - "env"
-    - ".env"
-    - "build"
-    - "dist"
-    - "*.egg-info"
+# file_discovery:
+#   ignore_patterns:
+#     - ".git"
+#     - ".gitignore"
+#     - "node_modules"
+#     - "__pycache__"
+#     - ".pytest_cache"
+#     - "*.pyc"
+#     - ".DS_Store"
+#     - "venv"
+#     - "env"
+#     - ".env"
+#     - "build"
+#     - "dist"
+#     - "*.egg-info"
   
-  language_extensions:
-    python:
-      - ".py"
-    javascript:
-      - ".js"
-      - ".jsx"
-    typescript:
-      - ".ts"
-      - ".tsx"
-    java:
-      - ".java"
+#   language_extensions:
+#     python:
+#       - ".py"
+#     javascript:
+#       - ".js"
+#       - ".jsx"
+#     typescript:
+#       - ".ts"
+#       - ".tsx"
+#     java:
+#       - ".java"
 
-parsing:
-  languages:
-    - python
-    - javascript
-    - java
+# parsing:
+#   languages:
+#     - python
+#     - javascript
+#     - java
   
-  parser_settings:
-    python:
-      type: "tree-sitter"
-      grammar: "python"
-      version: "3.9+"
+#   parser_settings:
+#     python:
+#       type: "tree-sitter"
+#       grammar: "python"
+#       version: "3.9+"
     
-    javascript:
-      type: "tree-sitter"
-      grammar: "javascript"
-      version: "ES6+"
+#     javascript:
+#       type: "tree-sitter"
+#       grammar: "javascript"
+#       version: "ES6+"
     
-    java:
-      type: "tree-sitter"
-      grammar: "java"
-      version: "11+"
+#     java:
+#       type: "tree-sitter"
+#       grammar: "java"
+#       version: "11+"
 
-component_extraction:
-  extract:
-    - functions
-    - classes
-    - methods
-    - variables
-    - imports
+# component_extraction:
+#   extract:
+#     - functions
+#     - classes
+#     - methods
+#     - variables
+#     - imports
   
-  metadata:
-    - name
-    - parameters
-    - return_type
-    - source_code
-    - location
-    - docstrings
-    - decorators
-    - annotations
+#   metadata:
+#     - name
+#     - parameters
+#     - return_type
+#     - source_code
+#     - location
+#     - docstrings
+#     - decorators
+#     - annotations
 
-dependency_analysis:
-  track:
-    - function_calls
-    - imports
-    - class_inheritance
-    - method_invocations
+# dependency_analysis:
+#   track:
+#     - function_calls
+#     - imports
+#     - class_inheritance
+#     - method_invocations
   
-  analysis_depth: "deep"  # shallow, medium, deep
-  include_external: true
-  include_stdlib: false
+#   analysis_depth: "deep"  # shallow, medium, deep
+#   include_external: true
+#   include_stdlib: false
 
-graph_building:
-  node_types:
-    - component
+# graph_building:
+#   node_types:
+#     - component
   
-  edge_types:
-    - calls
-    - imports
-    - inherits
-    - depends_on
+#   edge_types:
+#     - calls
+#     - imports
+#     - inherits
+#     - depends_on
   
-  graph_format: "networkx"  # networkx, graphml, json
+#   graph_format: "networkx"  # networkx, graphml, json
 
-cycle_detection:
-  enabled: true
-  algorithm: "depth_first_search"
-  report_cycles: true
+# cycle_detection:
+#   enabled: true
+#   algorithm: "depth_first_search"
+#   report_cycles: true
 
-cycle_breaking:
-  enabled: true
-  strategy: "minimum_edges"  # minimum_edges, weakest_dependency
-  preserve_strong_dependencies: true
+# cycle_breaking:
+#   enabled: true
+#   strategy: "minimum_edges"  # minimum_edges, weakest_dependency
+#   preserve_strong_dependencies: true
 
-topological_sort:
-  enabled: true
-  algorithm: "kahn"  # kahn, dfs
-  handle_cycles: "break_first"  # break_first, report_error
+# topological_sort:
+#   enabled: true
+#   algorithm: "kahn"  # kahn, dfs
+#   handle_cycles: "break_first"  # break_first, report_error
 
-priority_assignment:
-  enabled: true
-  base_priority: 0
-  increment: 1
-  max_levels: 100
+# priority_assignment:
+#   enabled: true
+#   base_priority: 0
+#   increment: 1
+#   max_levels: 100
 
-output:
-  format: "json"  # json, pickle, graphml
-  include_metadata: true
-  ordered_list: true
-  dependency_graph: true
+# output:
+#   format: "json"  # json, pickle, graphml
+#   include_metadata: true
+#   ordered_list: true
+#   dependency_graph: true
 
-# Example config/navigator.yaml
-paths:
-  input: "data/input/repositories/"
-  output: "data/intermediate/navigator_output/"
+# # Example config/navigator.yaml
+# paths:
+#   input: "data/input/repositories/"
+#   output: "data/intermediate/navigator_output/"
