@@ -1,4 +1,10 @@
-﻿def apply_doc_dependency_rules(components):
+﻿import logging
+from backend.models.code_component import ComponentType
+
+logger = logging.getLogger(__name__)
+
+
+def apply_doc_dependency_rules(components):
     """
     Apply documentation-oriented dependency abstraction rules.
     
@@ -17,7 +23,7 @@
     # ==================================================
     # Classes should depend on other classes, not individual methods
     for comp in components.values():
-        if comp.type != "class":
+        if comp.type != ComponentType.CLASS:
             continue
 
         new_deps = set()
@@ -34,7 +40,7 @@
 
             # Keep global variables as-is
             dep_comp = components.get(dep)
-            if dep_comp and dep_comp.type == "global_variable":
+            if dep_comp and dep_comp.type == ComponentType.GLOBAL_VARIABLE:
                 new_deps.add(dep)
                 continue
 
@@ -42,7 +48,7 @@
             dep_parts = dep.split(".")
             if len(dep_parts) >= 2:
                 owner = ".".join(dep_parts[:-1])
-                if owner in components and components[owner].type == "class":
+                if owner in components and components[owner].type == ComponentType.CLASS:
                     # This is a method of another class -> depend on the class
                     new_deps.add(owner)
                     continue
@@ -58,12 +64,15 @@
     # Methods and functions should depend on classes, not individual methods
     # BUT they should keep global variable dependencies
     for comp in components.values():
-        if comp.type not in ("method", "function"):
+        if comp.type not in (ComponentType.METHOD, ComponentType.FUNCTION):
             continue
+        
+        # Debug: Log before cleaning
+        before_deps = list(comp.depends_on) if comp.depends_on else []
 
         # Determine parent class for methods
         self_class = None
-        if comp.type == "method":
+        if comp.type == ComponentType.METHOD:
             comp_parts = comp.id.split(".")
             if len(comp_parts) >= 2:
                 self_class = ".".join(comp_parts[:-1])
@@ -81,12 +90,12 @@
 
             # Keep global variables as-is
             dep_comp = components.get(dep)
-            if dep_comp and dep_comp.type == "global_variable":
+            if dep_comp and dep_comp.type == ComponentType.GLOBAL_VARIABLE:
                 new_deps.add(dep)
                 continue
 
             # Keep direct class dependencies
-            if dep in components and components[dep].type == "class":
+            if dep in components and components[dep].type == ComponentType.CLASS:
                 new_deps.add(dep)
                 continue
 
@@ -94,7 +103,7 @@
             dep_parts = dep.split(".")
             if len(dep_parts) >= 2:
                 owner = ".".join(dep_parts[:-1])
-                if owner in components and components[owner].type == "class":
+                if owner in components and components[owner].type == ComponentType.CLASS:
                     # This is a method of another class -> depend on the class
                     new_deps.add(owner)
                     continue
@@ -103,6 +112,11 @@
             new_deps.add(dep)
 
         comp.depends_on = new_deps
+        
+        # Debug: Log if dependencies changed significantly
+        after_deps = list(comp.depends_on) if comp.depends_on else []
+        if comp.language == "typescript" and before_deps != after_deps and len(before_deps) > 0:
+            logger.debug(f"[DocRules PASS 2] {comp.id}: before={before_deps[:3]}, after={after_deps[:3]}")
 
     # ==================================================
     # PASS 3: ORCHESTRATOR METHOD COLLAPSE (OPTIONAL)
@@ -113,7 +127,7 @@
     # HOWEVER: We DO NOT collapse global variable dependencies
     
     for comp in components.values():
-        if comp.type != "method":
+        if comp.type != ComponentType.METHOD:
             continue
 
         comp_parts = comp.id.split(".")
@@ -128,11 +142,11 @@
 
         # Separate global variables from other dependencies
         method_globals = {dep for dep in comp.depends_on 
-                         if dep in components and components[dep].type == "global_variable"}
+                         if dep in components and components[dep].type == ComponentType.GLOBAL_VARIABLE}
         method_non_globals = comp.depends_on - method_globals
         
         class_globals = {dep for dep in class_comp.depends_on 
-                        if dep in components and components[dep].type == "global_variable"}
+                        if dep in components and components[dep].type == ComponentType.GLOBAL_VARIABLE}
         class_non_globals = class_comp.depends_on - class_globals
 
         # If non-global method dependencies are subset of non-global class dependencies,

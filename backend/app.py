@@ -9,17 +9,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel, HttpUrl, Field
 
-from navigator.core.repo_loader import clone_repo
-from navigator.core.repository_parser import RepositoryParser
-from navigator.core.topo import (
+# ============================
+# INTERNAL IMPORTS (FIXED)
+# ============================
+
+from .navigator.core.repo_loader import clone_repo
+from .navigator.core.repository_parser import RepositoryParser
+from .navigator.core.topo import (
     build_graph_from_components,
     topological_sort,
     dependency_first_dfs,
     resolve_cycles
 )
-from agents.orchestrator.orchestrator import Orchestrator
-from backend.pipeline.pipeline import run_pipeline
-from backend.utils.file_handler import FileHandler
+
+from .agents.orchestrator.orchestrator import Orchestrator
+from .pipeline.pipeline import run_pipeline
+from .utils.file_handler import FileHandler
+
 # ============================================================================
 # FASTAPI APP SETUP
 # ============================================================================

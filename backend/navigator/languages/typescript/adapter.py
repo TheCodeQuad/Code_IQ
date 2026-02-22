@@ -1,6 +1,5 @@
 ﻿from ...treesitter.parser_factory import get_ts_parser
-from ..javascript.extractor import extract_components
-from ..javascript.dependencies import resolve_dependencies
+from .extractor import extract_components
 
 class TypeScriptAdapter:
     language = "typescript"
@@ -15,6 +14,8 @@ class TypeScriptAdapter:
     def extract_components(self, *args):
         return extract_components(*args)
 
-    def resolve_dependencies(self, *args):
-        return resolve_dependencies(*args)
+    def resolve_dependencies(self, component, tree, source, all_components):
+        # TypeScript extractor already sets depends_on during extraction
+        # Return empty list to avoid overwriting
+        return []
 
