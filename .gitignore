@@ -31,3 +31,4 @@ backend/repos/
 .idea/
 .DS_Store
 Thumbs.db
+.env
