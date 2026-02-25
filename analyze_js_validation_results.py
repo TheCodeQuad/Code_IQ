@@ -3,7 +3,7 @@ JavaScript Navigator Validation - Type-Aware Detailed Analysis
 
 Performs type-aware analysis on JS validation results, detecting:
   - MODULE fallback misclassification of anonymous functions
-  - Per-type field coverage (function vs module vs class)
+  - Per-type field coverage (function vs module vs class vs method etc.)
   - True success rate (against full dataset, not just passed results)
   - Actionable recommendations filtered by component type semantics
 
@@ -11,7 +11,8 @@ Usage:
     python analyze_js_validation_results.py [results_json_file]
 
 Example:
-    python analyze_js_validation_results.py data/validation/codesearchnet/js_navigator_results_2000_samples.json
+    python analyze_js_validation_results.py data/validation/the-stack/js_navigator_results_500_samples.json
+    python analyze_js_validation_results.py data/validation/codesearchnet/js_navigator_results_500_samples.json
 """
 
 import json
@@ -37,6 +38,22 @@ EXPECTED_FIELDS = {
     'method': {
         'parameters', 'calls', 'return_type', 'signature', 'existing_docstring',
         'complexity', 'is_async', 'is_generator', 'source_code',
+    },
+    'constructor': {
+        'parameters', 'calls', 'signature', 'existing_docstring',
+        'source_code',
+    },
+    'field': {
+        'signature', 'source_code',
+    },
+    'static_field': {
+        'signature', 'source_code',
+    },
+    'global_variable': {
+        'signature', 'source_code', 'existing_docstring',
+    },
+    'variable': {
+        'signature', 'source_code', 'methods',
     },
 }
 
@@ -111,10 +128,19 @@ def analyze_results(data: Dict[str, Any]):
         if omitted > 0:
             print(f"  Not in results array: {omitted} (non-JS / parse errors excluded by test runner)")
 
+    dataset_name = meta.get('dataset', 'unknown')
+    is_codesearchnet = 'codesearchnet' in dataset_name.lower()
+    is_the_stack = 'the-stack' in dataset_name.lower() or 'stack' in dataset_name.lower()
+
     if _pct(len(successful), total_attempted) < 20:
         print(f"\n  ⚠️  NOTE: Only {_pct(len(successful), total_attempted):.1f}% of samples succeeded.")
-        print(f"     CodeSearchNet 'javascript' split is multi-language — most samples are")
-        print(f"     non-JS or invalid snippets that correctly fail at parse time.")
+        if is_codesearchnet:
+            print(f"     CodeSearchNet 'javascript' split is multi-language — most samples are")
+            print(f"     non-JS or invalid snippets that correctly fail at parse time.")
+        elif is_the_stack:
+            print(f"     the-stack samples may contain parse errors or non-standard syntax.")
+        else:
+            print(f"     Many samples may not be valid JavaScript.")
         print(f"     The {len(successful)} that passed ARE valid JavaScript.")
 
     if not successful:
@@ -197,7 +223,9 @@ def analyze_results(data: Dict[str, Any]):
     print(f"\n📊 FIELD-LEVEL COVERAGE BY COMPONENT TYPE")
     print("-" * 80)
 
-    for ctype in ['function', 'module', 'class', 'method']:
+    all_known_types = ['function', 'class', 'method', 'constructor',
+                        'global_variable', 'variable', 'field', 'static_field', 'module']
+    for ctype in all_known_types:
         type_data = field_by_type.get(ctype)
         if not type_data:
             continue
@@ -250,8 +278,13 @@ def analyze_results(data: Dict[str, Any]):
     # 7a. Low overall extraction rate
     if _pct(len(successful), total_attempted) < 20:
         print(f"  ℹ️  Dataset extraction rate is {_pct(len(successful), total_attempted):.1f}%.")
-        print(f"     This is normal for CodeSearchNet — most samples are non-JS snippets.")
-        print(f"     Consider: Use a JS-only dataset for higher yield.\n")
+        if is_codesearchnet:
+            print(f"     This is normal for CodeSearchNet — most samples are non-JS snippets.")
+            print(f"     Consider: Use a JS-only dataset (e.g. bigcode/the-stack) for higher yield.\n")
+        elif is_the_stack:
+            print(f"     Some the-stack files may contain syntax errors or non-standard JS.\n")
+        else:
+            print(f"     Many samples may not be valid JavaScript.\n")
 
     # 7b. Anonymous function / MODULE fallback
     if anon_module_count > 0:
@@ -290,7 +323,10 @@ def analyze_results(data: Dict[str, Any]):
         func_docstring = next((cov for ct, f, cov, _ in real_issues if ct == 'function' and f == 'existing_docstring'), None)
         if func_docstring is not None and func_docstring < 30:
             print(f"     → function.existing_docstring at {func_docstring:.0f}%: JSDoc comments")
-            print(f"       CodeSearchNet strips surrounding context; docstrings often in 'comment' field")
+            if is_codesearchnet:
+                print(f"       CodeSearchNet strips surrounding context; docstrings often in 'comment' field")
+            elif is_the_stack:
+                print(f"       the-stack preserves full files; check if extractor finds /** ... */ blocks")
             print(f"       Check: extractor may need to search preceding lines for /** ... */")
 
         module_issues = [(f, cov) for ct, f, cov, _ in real_issues if ct == 'module']
@@ -328,19 +364,20 @@ def analyze_results(data: Dict[str, Any]):
 def main():
     """Main entry point."""
     if len(sys.argv) < 2:
-        results_dir = Path('data/validation/codesearchnet')
-        if results_dir.exists():
-            results_files = sorted(results_dir.glob('js_navigator_results_*.json'), reverse=True)
-            if results_files:
-                results_file = str(results_files[0])
-                print(f"Using latest results: {results_file}")
-            else:
-                print("No results found. Run test first:")
-                print("  python test_navigator_js_codesearchnet.py 5")
-                sys.exit(1)
-        else:
+        # Search both the-stack and codesearchnet directories for latest results
+        results_file = None
+        for results_dir_name in ['the-stack', 'codesearchnet']:
+            results_dir = Path('data/validation') / results_dir_name
+            if results_dir.exists():
+                results_files = sorted(results_dir.glob('js_navigator_results_*.json'), reverse=True)
+                if results_files:
+                    results_file = str(results_files[0])
+                    print(f"Using latest results: {results_file}")
+                    break
+
+        if not results_file:
             print("No results found. Run test first:")
-            print("  python test_navigator_js_codesearchnet.py 5")
+            print("  python test_navigator_js_codesearchnet.py 10")
             sys.exit(1)
     else:
         results_file = sys.argv[1]

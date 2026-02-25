@@ -1,10 +1,10 @@
 """
-Test Navigator Module on JavaScript CodeSearchNet Dataset
+Test Navigator Module on JavaScript The-Stack Dataset
 
 This script:
-1. Downloads JavaScript code from CodeSearchNet
+1. Downloads JavaScript code from bigcode/the-stack
 2. Extracts components using your navigator
-3. Validates against gold extractor
+3. Validates extraction quality
 4. Generates comprehensive metrics and errors
 
 Usage:
@@ -20,19 +20,18 @@ import json
 from pathlib import Path
 from typing import Dict, List, Any
 from collections import defaultdict
+from datasets import load_dataset
 
 # Import validators and navigator
-from backend.validators.codesearchnet_validator import CodeSearchNetDataset, CodeSearchNetValidator
 from backend.validators.validation_framework import ValidationFramework
 from backend.navigator.languages.adapter_registry import AdapterRegistry
 
 
 class JSCodeSearchNetTester:
-    """Test navigator on JavaScript CodeSearchNet dataset."""
+    """Test navigator on JavaScript the-stack dataset."""
     
     def __init__(self, max_samples: int = 10):
         self.max_samples = max_samples
-        self.dataset = CodeSearchNetDataset()
         self.adapter_registry = AdapterRegistry()
         self.results = []
         self.metrics = {
@@ -46,7 +45,7 @@ class JSCodeSearchNetTester:
     def run(self):
         """Execute full test pipeline."""
         print("\n" + "="*80)
-        print("JAVASCRIPT NAVIGATOR VALIDATION - CODESEARCHNET DATASET")
+        print("JAVASCRIPT NAVIGATOR VALIDATION - THE-STACK DATASET")
         print("="*80)
         
         print(f"\nPhase 1: Downloading JavaScript dataset (max {self.max_samples} samples)...")
@@ -65,19 +64,33 @@ class JSCodeSearchNetTester:
         self._print_summary()
     
     def _download_dataset(self) -> List[Dict[str, Any]]:
-        """Download JavaScript CodeSearchNet split."""
+        """Download JavaScript the-stack dataset split."""
         try:
-            samples = self.dataset.download_split('javascript', max_samples=self.max_samples)
-            print(f"✓ Downloaded {len(samples)} JavaScript samples")
+            print(f"Loading the-stack dataset (streaming, max {self.max_samples} samples)...")
+            dataset = load_dataset(
+                "bigcode/the-stack",
+                data_dir="data/javascript",
+                split="train",
+                streaming=True
+            )
+            
+            # Extract samples from streaming dataset
+            samples = []
+            for i, sample in enumerate(dataset):
+                if i >= self.max_samples:
+                    break
+                samples.append(sample)
+            
+            print(f"✓ Loaded {len(samples)} JavaScript samples from the-stack")
             return samples
         except Exception as e:
-            print(f"✗ Failed to download dataset: {e}")
+            print(f"✗ Failed to load dataset: {e}")
             return []
     
     def _extract_components(self, samples: List[Dict[str, Any]]):
         """Extract components from each sample.
         
-        Dataset format: only 'code' and 'comment' columns (no language filter).
+        The-stack dataset format has 'content' field for code.
         Skip non-JavaScript code gracefully (parser will fail, which indicates non-JS).
         """
         if not samples:
@@ -88,19 +101,22 @@ class JSCodeSearchNetTester:
         
         for i, sample in enumerate(samples, 1):
             try:
-                # Extract code and metadata
-                source_code = sample.get('code')
+                # Extract code and metadata from the-stack format
+                # The-stack uses 'content' field for code
+                source_code = sample.get('content') or sample.get('code')
                 if not source_code:
                     print(f"\n[{i}/{len(samples)}] Skipping: No code in sample")
                     self.metrics['failed'] += 1
                     continue
                 
-                comment = sample.get('comment', '')
+                # Extract metadata from available fields
+                file_path = sample.get('path', f'sample_{i}.js')
+                repo = sample.get('repo_name', 'the-stack')
+                comment = sample.get('summary', '')
                 
-                # Use index as identifier since no repo/path/func_name
-                file_path = f'sample_{i}.js'
-                repo = 'codesearchnet'
-                func_name = f'snippet_{i}'
+                # Ensure file has .js extension
+                if not file_path.endswith(('.js', '.jsx')):
+                    file_path = f'{file_path}.js'
                 
                 # Show progress
                 code_preview = source_code[:50].replace('\n', ' ')
@@ -114,16 +130,8 @@ class JSCodeSearchNetTester:
                 if tree.root_node.has_error:
                     print(f"  ↷ Not valid JavaScript (skipped)")
                     self.metrics['failed'] += 1
+                    self.metrics['error_summary']['Not valid JavaScript'] += 1
                     continue
-                
-                # DEBUG: Print AST structure for first successful sample
-                if self.metrics['successful'] == 0:
-                    print(f"\n  🔍 AST STRUCTURE (first sample):")
-                    ast_text = tree.root_node.sexp()
-                    # Print first 500 chars
-                    ast_preview = str(ast_text)[:500]
-                    print(f"  {ast_preview}...")
-                    print(f"  [Full AST saved for inspection]")
                 
                 # Extract components
                 components = js_adapter.extract_components(tree, source_code, file_path, repo)
@@ -131,6 +139,7 @@ class JSCodeSearchNetTester:
                 if not components:
                     print(f"  ℹ No components extracted (may be incomplete JS snippet)")
                     self.metrics['failed'] += 1
+                    self.metrics['error_summary']['No components extracted'] += 1
                     continue
                 
                 # DEBUG: Analyze extracted components
@@ -140,6 +149,10 @@ class JSCodeSearchNetTester:
                     print(f"    • {comp.type.value}: {comp.name} (lines {comp.location.start_line}-{comp.location.end_line})")
                 
                 print(f"  ✓ Extracted {len(components)} components: {dict(comp_types)}")
+                
+                # Track extraction stats
+                for comp_type, count in comp_types.items():
+                    self.metrics['extraction_stats'][comp_type] += count
                 
                 # Extract dependencies for each component
                 for cid, component in components.items():
@@ -165,145 +178,117 @@ class JSCodeSearchNetTester:
                 self.metrics['successful'] += 1
                 
             except Exception as e:
-                # Silently skip non-JS code
-                error_type = type(e).__name__
-                if error_type in ['ParseError', 'ParserException', 'ValueError']:
-                    print(f"  ↷ Not JavaScript code (skipped)")
-                else:
-                    print(f"  ✗ Error: {str(e)[:80]}")
-                
-                self.results.append({
-                    'sample_index': i,
-                    'repo': 'codesearchnet',
-                    'status': 'failed',
-                    'error': str(e),
-                    'error_type': type(e).__name__
-                })
-                
+                print(f"  ✗ Error: {str(e)[:100]}")
                 self.metrics['failed'] += 1
                 self.metrics['error_summary'][type(e).__name__] += 1
+                
+                self.results.append({
+                    'repo': sample.get('repo_name', 'the-stack'),
+                    'file_path': sample.get('path', f'sample_{i}.js'),
+                    'sample_index': i,
+                    'comment': sample.get('summary', ''),
+                    'source_code': source_code[:100] if 'source_code' in locals() else '',
+                    'components': {},
+                    'component_count': 0,
+                    'status': 'error',
+                    'error': str(e)[:200]
+                })
         
         self.metrics['total_samples'] = len(samples)
     
     def _generate_metrics(self):
-        """Generate extraction quality metrics."""
-        print("\nCalculating metrics...")
+        """Generate validation metrics from results."""
+        print("\nMetrics generated:")
+        print(f"  Total samples: {self.metrics['total_samples']}")
+        print(f"  Successful: {self.metrics['successful']}")
+        print(f"  Failed: {self.metrics['failed']}")
         
-        successful_results = [r for r in self.results if r['status'] == 'success']
+        if self.metrics['extraction_stats']:
+            print(f"\n  Component types extracted:")
+            for comp_type, count in sorted(self.metrics['extraction_stats'].items()):
+                print(f"    - {comp_type}: {count}")
         
-        if not successful_results:
-            print("No successful extractions to analyze")
-            return
-        
-        # Component statistics
-        total_components = sum(r['component_count'] for r in successful_results)
-        avg_components = total_components / len(successful_results) if successful_results else 0
-        
-        # Field analysis
-        field_counts = defaultdict(int)
-        for result in successful_results:
-            for component in result['components'].values():
-                for field in component.keys():
-                    if component[field] is not None:
-                        field_counts[field] += 1
-        
-        print(f"\n  Components extracted: {total_components}")
-        print(f"  Average per file: {avg_components:.1f}")
-        print(f"  Success rate: {self.metrics['successful']}/{self.metrics['total_samples']} ({100*self.metrics['successful']/self.metrics['total_samples']:.1f}%)")
-        
-        print(f"\n  Top fields extracted:")
-        for field, count in sorted(field_counts.items(), key=lambda x: -x[1])[:10]:
-            print(f"    - {field}: {count}")
+        if self.metrics['error_summary']:
+            print(f"\n  Error breakdown:")
+            for error_type, count in sorted(self.metrics['error_summary'].items(), 
+                                           key=lambda x: x[1], reverse=True):
+                print(f"    - {error_type}: {count}")
     
     def _save_results(self):
         """Save results to JSON file."""
-        output_dir = Path('data/validation/codesearchnet')
+        output_dir = Path('data/validation/the-stack')
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        output_file = output_dir / f'js_navigator_results_{self.max_samples}_samples.json'
+        filename = f"js_navigator_results_{self.max_samples}_samples.json"
+        filepath = output_dir / filename
         
-        with open(output_file, 'w') as f:
-            json.dump({
-                'metadata': {
-                    'max_samples': self.max_samples,
-                    'successful': self.metrics['successful'],
-                    'failed': self.metrics['failed'],
-                    'dataset': 'CodeSearchNet JavaScript Mini',
-                },
-                'results': self.results,
-                'error_summary': dict(self.metrics['error_summary']),
-            }, f, indent=2)
+        output = {
+            'metadata': {
+                'language': 'javascript',
+                'dataset': 'the-stack',
+                'max_samples': self.max_samples,
+                'total_processed': self.metrics['total_samples'],
+            },
+            'metrics': dict(self.metrics),
+            'results': self.results,
+            'error_summary': dict(self.metrics['error_summary']),
+        }
         
-        print(f"\n✓ Results saved to: {output_file}")
-        return output_file
+        with open(filepath, 'w') as f:
+            json.dump(output, f, indent=2, default=str)
+        
+        print(f"✓ Results saved to {filepath}")
     
     def _print_summary(self):
-        """Print comprehensive summary."""
+        """Print test summary."""
         print("\n" + "="*80)
-        print("VALIDATION SUMMARY")
+        print("SUMMARY")
         print("="*80)
         
-        print(f"\nDataset: CodeSearchNet (sentence-transformers/codesearchnet)")
-        print(f"Samples processed: {self.metrics['total_samples']}")
-        print(f"JavaScript code: {self.metrics['successful']} ({100*self.metrics['successful']/max(self.metrics['total_samples'],1):.1f}%)")
-        print(f"Non-JavaScript/Failed: {self.metrics['failed']}")
+        total = self.metrics['total_samples']
+        successful = self.metrics['successful']
+        failed = self.metrics['failed']
         
-        if self.metrics['error_summary']:
-            print(f"\nError breakdown (non-JS detection):")
-            for error_type, count in sorted(self.metrics['error_summary'].items(), key=lambda x: -x[1]):
-                print(f"  - {error_type}: {count}")
+        if total > 0:
+            success_rate = successful / total * 100
+            print(f"\n✓ Success Rate: {successful}/{total} ({success_rate:.1f}%)")
+        else:
+            print(f"\n✗ No samples processed")
+            return
         
-        # Sample successful extractions
-        successful = [r for r in self.results if r['status'] == 'success']
-        if successful:
-            print(f"\n📊 Sample Extraction (first successful):")
-            sample = successful[0]
-            print(f"  Sample index: {sample['sample_index']}")
-            print(f"  Components extracted: {sample['component_count']}")
-            
-            if sample['components']:
-                first_comp = list(sample['components'].values())[0]
-                print(f"\n  Sample component schema:")
-                for key, value in list(first_comp.items())[:8]:
-                    print(f"    - {key}: {type(value).__name__}")
+        if self.metrics['extraction_stats']:
+            total_components = sum(self.metrics['extraction_stats'].values())
+            avg_components = total_components / successful if successful > 0 else 0
+            print(f"\n✓ Components Extracted:")
+            print(f"  Total: {total_components}")
+            print(f"  Average per file: {avg_components:.1f}")
+            for comp_type, count in sorted(self.metrics['extraction_stats'].items()):
+                pct = count / total_components * 100 if total_components > 0 else 0
+                print(f"  - {comp_type}: {count} ({pct:.1f}%)")
+        
+        if self.metrics['error_summary'] and failed > 0:
+            print(f"\n⚠ Top Failures:")
+            for error_type, count in sorted(self.metrics['error_summary'].items(), 
+                                           key=lambda x: x[1], reverse=True)[:5]:
+                pct = count / failed * 100
+                print(f"  - {error_type}: {count} ({pct:.1f}%)")
         
         print("\n" + "="*80)
-        print("✓ Validation complete!")
-        print("="*80 + "\n")
-    
-    def generate_gold_comparison(self):
-        """Generate comparison with gold extractor (optional advanced step)."""
-        print("\n" + "-"*80)
-        print("GOLD EXTRACTOR COMPARISON (Advanced)")
-        print("-"*80)
-        
-        try:
-            from backend.validators.gold_extractor import get_gold_extractor
-            from backend.validators.validation_framework import ValidationFramework
-            
-            print("Comparing with gold extractor on JavaScript samples...")
-            
-            # This would require more setup with actual validation framework
-            print("(See validation_framework.py for detailed comparison)")
-            
-        except Exception as e:
-            print(f"Note: Gold comparison skipped ({e})")
 
 
 def main():
     """Main entry point."""
-    # Parse args
-    max_samples = int(sys.argv[1]) if len(sys.argv) > 1 else 5
+    max_samples = 10
     
-    # Validate range
-    if max_samples < 1:
-        print("Error: max_samples must be >= 1")
-        sys.exit(1)
+    if len(sys.argv) > 1:
+        try:
+            max_samples = int(sys.argv[1])
+        except ValueError:
+            print(f"Invalid sample count: {sys.argv[1]}")
+            sys.exit(1)
     
-    # Run tester
     tester = JSCodeSearchNetTester(max_samples=max_samples)
     tester.run()
-    tester.generate_gold_comparison()
 
 
 if __name__ == '__main__':
