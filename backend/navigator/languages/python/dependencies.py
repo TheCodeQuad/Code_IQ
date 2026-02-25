@@ -154,7 +154,7 @@ def resolve_dependencies(component, tree, source, all_components):
     name_index = {cid.split(".")[-1]: cid for cid in all_components}
     local_vars = set()
     var_types = {}  # Maps variable names to their component IDs
-    class_name = component.id.split(".")[-2] if component.type == ComponentType.METHOD else None
+    class_name = component.id.split(".")[-2] if component.type in (ComponentType.METHOD, ComponentType.CONSTRUCTOR) else None
     
     # Collect imports from the file
     import_tracker = ImportTracker()
@@ -285,10 +285,32 @@ def resolve_dependencies(component, tree, source, all_components):
             return
 
         root = chain[0]
-        
+
         # Skip ignored names
         if is_ignored_name(root):
             return
+
+        # Check if root is a direct import
+        if root in import_tracker.imports:
+            if root in STANDARD_MODULES:
+                return
+            if root in repo_modules and len(chain) > 1:
+                # module.Class or module.function
+                potential_id = f"{root}.{chain[1]}"
+                if potential_id in all_components:
+                    deps.add(potential_id)
+            return
+
+        # Check if root is a global variable (like GUI widgets)
+        if root in global_tracker.global_vars:
+            potential_id = f"{module_path}.{root}"
+            deps.add(potential_id)
+            return
+
+        # Try to resolve the root name
+        resolved = resolve_name(root)
+        if resolved:
+            deps.add(resolved)
 
     def collect_type_identifiers(type_node):
         """Collect identifier names referenced inside a type annotation/subscript."""
@@ -309,28 +331,6 @@ def resolve_dependencies(component, tree, source, all_components):
         if type_node:
             walk_type(type_node)
         return names
-        
-        # Check if root is a direct import
-        if root in import_tracker.imports:
-            if root in STANDARD_MODULES:
-                return
-            if root in repo_modules and len(chain) > 1:
-                # module.Class or module.function
-                potential_id = f"{root}.{chain[1]}"
-                if potential_id in all_components:
-                    deps.add(potential_id)
-            return
-        
-        # Check if root is a global variable (like GUI widgets)
-        if root in global_tracker.global_vars:
-            potential_id = f"{module_path}.{root}"
-            deps.add(potential_id)
-            return
-        
-        # Try to resolve the root name
-        resolved = resolve_name(root)
-        if resolved:
-            deps.add(resolved)
 
     # ---------------- WALKER ----------------
 
@@ -338,7 +338,7 @@ def resolve_dependencies(component, tree, source, all_components):
         """Recursively walk the AST to find dependencies"""
 
         # ---- Handle base classes (inheritance) ----
-        if component.type == "class" and node.type == "argument_list":
+        if component.type == ComponentType.CLASS and node.type == "argument_list":
             parent = node.parent
             if parent and parent.type == "class_definition":
                 # This is the base class list
@@ -528,16 +528,17 @@ def resolve_dependencies(component, tree, source, all_components):
                 if chain:
                     root = chain[0]
 
-                    if not is_ignored_name(root):
-                        # Case 1: self.method() - method call on same class
-                        if root == "self" and class_name and len(chain) > 1:
-                            method_name = chain[1]
-                            cid = f"{component.id.rsplit('.', 1)[0]}.{method_name}"
-                            if cid in all_components:
-                                deps.add(cid)
+                    # Case 1: self.method() - checked before is_ignored_name
+                    # because 'self' is in EXCLUDED_NAMES
+                    if root == "self" and class_name and len(chain) > 1:
+                        method_name = chain[1]
+                        cid = f"{component.id.rsplit('.', 1)[0]}.{method_name}"
+                        if cid in all_components:
+                            deps.add(cid)
 
+                    elif not is_ignored_name(root):
                         # Case 2: Simple function call or global variable
-                        elif len(chain) == 1:
+                        if len(chain) == 1:
                             resolved = resolve_name(root)
                             if resolved:
                                 deps.add(resolved)
@@ -572,7 +573,7 @@ def resolve_dependencies(component, tree, source, all_components):
                             deps.add(resolved)
 
     # Track function/method parameters as local variables
-    if component.type in (ComponentType.FUNCTION, ComponentType.METHOD):
+    if component.type in (ComponentType.FUNCTION, ComponentType.METHOD, ComponentType.CONSTRUCTOR, ComponentType.API_ENDPOINT):
         params = component_node.child_by_field_name("parameters")
         if params:
             for child in params.children:
@@ -621,6 +622,7 @@ def resolve_dependencies(component, tree, source, all_components):
 def find_component_node(tree, component):
     """
     Locate the tree-sitter node corresponding to a component.
+    Handles: CLASS, FUNCTION, METHOD, CONSTRUCTOR, API_ENDPOINT, STATIC_FIELD.
     """
     from backend.models.code_component import ComponentType
     
@@ -636,16 +638,16 @@ def find_component_node(tree, component):
                     return node
                 parent_class = cname
 
-        # Handle function definitions (top-level functions)
-        if component.type == ComponentType.FUNCTION and node.type in ("function_definition", "async_function_definition"):
+        # Handle function definitions (top-level functions and API endpoints)
+        if component.type in (ComponentType.FUNCTION, ComponentType.API_ENDPOINT) and node.type in ("function_definition", "async_function_definition"):
             name_node = node.child_by_field_name("name")
             if name_node:
                 name = name_node.text.decode()
                 if component.id.endswith(f".{name}"):
                     return node
 
-        # Handle method definitions (inside classes)
-        if component.type == ComponentType.METHOD:
+        # Handle method and constructor definitions (inside classes)
+        if component.type in (ComponentType.METHOD, ComponentType.CONSTRUCTOR):
             # Handle decorated methods
             if node.type == "decorated_definition":
                 for child in node.children:
@@ -653,7 +655,7 @@ def find_component_node(tree, component):
                         node = child
                         break
 
-            # Check if this is our target method
+            # Check if this is our target method/constructor
             if node.type in ("function_definition", "async_function_definition"):
                 name_node = node.child_by_field_name("name")
                 if name_node:
@@ -664,6 +666,48 @@ def find_component_node(tree, component):
                         and component.id.split(".")[-2] == parent_class
                     ):
                         return node
+
+        # Handle static fields (class-level assignments)
+        if component.type == ComponentType.STATIC_FIELD:
+            if node.type == "assignment":
+                lhs = node.child_by_field_name("left")
+                if lhs and lhs.type == "identifier":
+                    name = lhs.text.decode()
+                    if (
+                        parent_class
+                        and component.id.endswith(f".{name}")
+                        and component.id.split(".")[-2] == parent_class
+                    ):
+                        return node
+            elif node.type == "expression_statement":
+                for child in node.children:
+                    if child.type == "assignment":
+                        lhs = child.child_by_field_name("left")
+                        if lhs and lhs.type == "identifier":
+                            name = lhs.text.decode()
+                            if (
+                                parent_class
+                                and component.id.endswith(f".{name}")
+                                and component.id.split(".")[-2] == parent_class
+                            ):
+                                return child
+
+        # Handle global variables (module-level assignments)
+        if component.type == ComponentType.GLOBAL_VARIABLE and parent_class is None:
+            if node.type == "assignment":
+                lhs = node.child_by_field_name("left")
+                if lhs and lhs.type == "identifier":
+                    name = lhs.text.decode()
+                    if component.id.endswith(f".{name}"):
+                        return node
+            elif node.type == "expression_statement":
+                for child in node.children:
+                    if child.type == "assignment":
+                        lhs = child.child_by_field_name("left")
+                        if lhs and lhs.type == "identifier":
+                            name = lhs.text.decode()
+                            if component.id.endswith(f".{name}"):
+                                return child
 
         # Recurse into children
         for child in node.children:

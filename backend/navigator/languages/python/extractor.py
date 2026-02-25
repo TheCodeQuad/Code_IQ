@@ -1,6 +1,74 @@
 ﻿from backend.models.code_component import CodeComponent, ComponentType, Location, Parameter
 import ast
+import re
 from typing import List, Set, Tuple
+
+
+# API route decorator HTTP methods
+ROUTE_METHODS = {"get", "post", "put", "delete", "patch", "head", "options", "trace"}
+
+
+def _detect_visibility(name):
+    """Detect public/private/protected from Python naming conventions."""
+    if name.startswith("__") and name.endswith("__"):
+        return True, False, False  # Dunder methods are public
+    elif name.startswith("__"):
+        return False, True, False  # Name-mangled private
+    elif name.startswith("_"):
+        return False, False, True  # Convention protected
+    return True, False, False
+
+
+def _detect_api_endpoint(decorators):
+    """
+    Detect API endpoint from decorators.
+    Returns (http_method, http_path, framework) or (None, None, None).
+    """
+    for dec in decorators:
+        dec_lower = dec.lower()
+        for method in ROUTE_METHODS:
+            if re.search(rf'\.{method}\s*\(', dec_lower):
+                path_match = re.search(r'\(["\']([^"\']*)["\']', dec)
+                path = path_match.group(1) if path_match else None
+                framework = None
+                if "app." in dec_lower or "router." in dec_lower:
+                    framework = "fastapi"
+                elif "blueprint." in dec_lower:
+                    framework = "flask"
+                return method.upper(), path, framework
+        if ".route(" in dec_lower:
+            path_match = re.search(r'\.route\s*\(["\']([^"\']*)["\']', dec)
+            path = path_match.group(1) if path_match else None
+            framework = "flask" if "blueprint." in dec_lower else None
+            return "GET", path, framework
+    return None, None, None
+
+
+def _has_decorator(decorators, name):
+    """Check if decorators contain @name or @name(...)."""
+    for dec in decorators:
+        stripped = dec.strip()
+        if stripped == f"@{name}" or stripped.startswith(f"@{name}("):
+            return True
+    return False
+
+
+def _is_class_body_function(func_node):
+    """Check if a function node is directly in a class body (i.e., a method)."""
+    p = func_node.parent
+    # Direct method: class_definition > block > function_definition
+    if p and p.type == "block":
+        gp = p.parent
+        if gp and gp.type == "class_definition":
+            return True
+    # Decorated method: class_definition > block > decorated_definition > function_definition
+    if p and p.type == "decorated_definition":
+        gp = p.parent
+        if gp and gp.type == "block":
+            ggp = gp.parent
+            if ggp and ggp.type == "class_definition":
+                return True
+    return False
 
 
 def get_docstring(node, source):
@@ -396,6 +464,9 @@ def extract_components(tree, source, file_path, module_path):
             # Calculate lines of code
             lines_of_code = node.end_point[0] - node.start_point[0] + 1
 
+            # Detect visibility
+            is_public, is_private, is_protected = _detect_visibility(name)
+
             components[cid] = CodeComponent(
                 id=cid,
                 name=name,
@@ -417,48 +488,62 @@ def extract_components(tree, source, file_path, module_path):
                 is_generator=is_generator,
                 lines_of_code=lines_of_code,
                 existing_docstring=docstring if has_docstring else None,
+                is_public=is_public,
+                is_private=is_private,
+                is_protected=is_protected,
                 metadata={"module_path": module_path},
             )
 
-        # -------- DECORATED TOP-LEVEL FUNCTIONS (e.g., FastAPI routes) --------
+        # -------- DECORATED TOP-LEVEL (functions, classes, API endpoints) --------
         elif node.type == "decorated_definition" and parent_type == "module":
-            # Find the underlying function definition within the decorated node
+            # Find the underlying definition (function or class)
             func_node = None
+            class_node = None
             for c in node.children:
                 if c.type in ("function_definition", "async_function_definition"):
                     func_node = c
                     break
+                elif c.type == "class_definition":
+                    class_node = c
+                    break
+
             if func_node:
                 name = func_node.child_by_field_name("name").text.decode()
                 cid = f"{module_path}.{name}"
 
                 # Extract all metadata
                 has_docstring, docstring = get_docstring(func_node, source)
-                parameters = extract_parameters(func_node, source, skip_self_cls=False)  # Top-level decorated functions don't have self/cls
+                parameters = extract_parameters(func_node, source, skip_self_cls=False)
                 return_type = extract_return_type(func_node, source)
                 decorators = extract_decorators(func_node, source)
                 calls = extract_calls(func_node, source)
-                # Check if async by looking for 'async' keyword in children
                 is_async = (func_node.type == "async_function_definition" or 
                            (len(func_node.children) > 0 and func_node.children[0].type == "async"))
                 
-                # Check if generator
                 is_generator = False
                 body = func_node.child_by_field_name("body")
                 if body:
                     body_text = body.text.decode()
                     is_generator = "yield" in body_text
                 
-                # Build signature
+                # Detect API endpoint
+                http_method, http_path, framework = _detect_api_endpoint(decorators)
+                is_endpoint = http_method is not None
+                comp_type = ComponentType.API_ENDPOINT if is_endpoint else ComponentType.FUNCTION
+
                 signature = build_signature(name, parameters, return_type, is_async, "function")
-                
-                # Calculate lines of code
                 lines_of_code = func_node.end_point[0] - func_node.start_point[0] + 1
+
+                # Detect visibility
+                is_public, is_private, is_protected = _detect_visibility(name)
+
+                # Extract path parameters from http_path
+                path_params = re.findall(r'\{(\w+)\}', http_path) if http_path else []
 
                 components[cid] = CodeComponent(
                     id=cid,
                     name=name,
-                    type=ComponentType.FUNCTION,
+                    type=comp_type,
                     location=Location(
                         file_path=file_path,
                         start_line=func_node.start_point[0] + 1,
@@ -476,8 +561,61 @@ def extract_components(tree, source, file_path, module_path):
                     is_generator=is_generator,
                     lines_of_code=lines_of_code,
                     existing_docstring=docstring if has_docstring else None,
+                    is_public=is_public,
+                    is_private=is_private,
+                    is_protected=is_protected,
+                    http_method=http_method,
+                    http_path=http_path,
+                    framework=framework,
+                    path_parameters=path_params,
                     metadata={"module_path": module_path},
                 )
+
+            elif class_node:
+                # -------- DECORATED CLASS --------
+                cname = class_node.child_by_field_name("name").text.decode()
+                class_id = f"{module_path}.{cname}"
+
+                has_docstring, docstring = get_docstring(class_node, source)
+                decorators = extract_decorators(class_node, source)
+                parent_classes = extract_parent_classes(class_node, source)
+
+                signature = f"class {cname}"
+                if parent_classes:
+                    signature += f"({', '.join(parent_classes)})"
+
+                lines_of_code = class_node.end_point[0] - class_node.start_point[0] + 1
+                is_public, is_private, is_protected = _detect_visibility(cname)
+                is_abstract_cls = any(
+                    "ABC" in pc or "ABCMeta" in pc for pc in parent_classes
+                )
+
+                components[class_id] = CodeComponent(
+                    id=class_id,
+                    name=cname,
+                    type=ComponentType.CLASS,
+                    location=Location(
+                        file_path=file_path,
+                        start_line=class_node.start_point[0] + 1,
+                        end_line=class_node.end_point[0] + 1
+                    ),
+                    source_code=source[class_node.start_byte:class_node.end_byte],
+                    signature=signature,
+                    decorators=decorators,
+                    parent_classes=parent_classes,
+                    imports=file_imports,
+                    language="python",
+                    lines_of_code=lines_of_code,
+                    existing_docstring=docstring if has_docstring else None,
+                    is_public=is_public,
+                    is_private=is_private,
+                    is_protected=is_protected,
+                    is_abstract=is_abstract_cls,
+                    metadata={"module_path": module_path},
+                )
+
+                # Extract methods, constructors, and static fields from decorated class
+                _extract_class_body(class_node, class_id, source, file_path, module_path, file_imports, components)
 
         # -------- CLASSES --------
         elif node.type == "class_definition":
@@ -497,6 +635,12 @@ def extract_components(tree, source, file_path, module_path):
             # Calculate lines of code
             lines_of_code = node.end_point[0] - node.start_point[0] + 1
 
+            # Detect visibility and abstract status
+            is_public, is_private, is_protected = _detect_visibility(cname)
+            is_abstract_cls = any(
+                "ABC" in pc or "ABCMeta" in pc for pc in parent_classes
+            )
+
             components[class_id] = CodeComponent(
                 id=class_id,
                 name=cname,
@@ -514,68 +658,52 @@ def extract_components(tree, source, file_path, module_path):
                 language="python",
                 lines_of_code=lines_of_code,
                 existing_docstring=docstring if has_docstring else None,
+                is_public=is_public,
+                is_private=is_private,
+                is_protected=is_protected,
+                is_abstract=is_abstract_cls,
                 metadata={"module_path": module_path},
             )
 
-            # Extract methods within the class
-            body = node.child_by_field_name("body")
-            if body:
-                for stmt in body.children:
+            # Extract methods, constructors, and static fields from class body
+            _extract_class_body(node, class_id, source, file_path, module_path, file_imports, components)
 
-                    # ---------------- NORMAL METHOD ----------------
-                    if stmt.type in ("function_definition", "async_function_definition"):
-                        func_node = stmt
+        # -------- NESTED FUNCTIONS (closures / helpers inside functions) --------
+        elif node.type in ("function_definition", "async_function_definition") and parent_type not in ("module", None):
+            # Skip class body methods (already extracted by _extract_class_body)
+            if not _is_class_body_function(node):
+                name = node.child_by_field_name("name").text.decode()
+                # Build ID relative to the enclosing function/module
+                cid = f"{module_path}.{name}"
+                # Avoid overwriting if already extracted with same ID
+                if cid not in components:
+                    has_docstring, docstring = get_docstring(node, source)
+                    parameters = extract_parameters(node, source, skip_self_cls=False)
+                    return_type = extract_return_type(node, source)
+                    decorators = extract_decorators(node, source)
+                    calls = extract_calls(node, source)
+                    is_async = (node.type == "async_function_definition" or
+                               (len(node.children) > 0 and node.children[0].type == "async"))
 
-                    # ---------------- DECORATED METHOD ----------------
-                    elif stmt.type == "decorated_definition":
-                        func_node = None
-                        for c in stmt.children:
-                            if c.type in ("function_definition", "async_function_definition"):
-                                func_node = c
-                                break
-                        if not func_node:
-                            continue
-
-                    else:
-                        continue
-
-                    # ---------- COMMON METHOD HANDLING ----------
-                    method_name = func_node.child_by_field_name("name").text.decode()
-                    method_id = f"{class_id}.{method_name}"
-
-                    # Extract all metadata
-                    method_has_docstring, method_docstring = get_docstring(func_node, source)
-                    parameters = extract_parameters(func_node, source, skip_self_cls=True)  # Methods should skip self/cls
-                    return_type = extract_return_type(func_node, source)
-                    decorators = extract_decorators(func_node, source)
-                    calls = extract_calls(func_node, source)
-                    # Check if async by looking for 'async' keyword in children
-                    is_async = (func_node.type == "async_function_definition" or 
-                               (len(func_node.children) > 0 and func_node.children[0].type == "async"))
-                    
-                    # Check if generator
                     is_generator = False
-                    body = func_node.child_by_field_name("body")
-                    if body:
-                        body_text = body.text.decode()
-                        is_generator = "yield" in body_text
-                    
-                    # Build signature
-                    signature = build_signature(method_name, parameters, return_type, is_async, "method")
-                    
-                    # Calculate lines of code
-                    lines_of_code = func_node.end_point[0] - func_node.start_point[0] + 1
+                    func_body = node.child_by_field_name("body")
+                    if func_body:
+                        is_generator = "yield" in func_body.text.decode()
 
-                    components[method_id] = CodeComponent(
-                        id=method_id,
-                        name=method_name,
-                        type=ComponentType.METHOD,
+                    signature = build_signature(name, parameters, return_type, is_async, "function")
+                    lines_of_code = node.end_point[0] - node.start_point[0] + 1
+                    is_public, is_private, is_protected = _detect_visibility(name)
+
+                    components[cid] = CodeComponent(
+                        id=cid,
+                        name=name,
+                        type=ComponentType.FUNCTION,
                         location=Location(
                             file_path=file_path,
-                            start_line=func_node.start_point[0] + 1,
-                            end_line=func_node.end_point[0] + 1
+                            start_line=node.start_point[0] + 1,
+                            end_line=node.end_point[0] + 1
                         ),
-                        source_code=source[func_node.start_byte:func_node.end_byte],
+                        source_code=source[node.start_byte:node.end_byte],
                         signature=signature,
                         parameters=parameters,
                         return_type=return_type,
@@ -586,8 +714,11 @@ def extract_components(tree, source, file_path, module_path):
                         is_async=is_async,
                         is_generator=is_generator,
                         lines_of_code=lines_of_code,
-                        existing_docstring=method_docstring if method_has_docstring else None,
-                        metadata={"module_path": module_path},
+                        existing_docstring=docstring if has_docstring else None,
+                        is_public=is_public,
+                        is_private=is_private,
+                        is_protected=is_protected,
+                        metadata={"module_path": module_path, "is_nested": True},
                     )
 
         for c in node.children:
@@ -609,8 +740,20 @@ def extract_components(tree, source, file_path, module_path):
                             var_name = lhs.text.decode()
                             var_id = f"{module_path}.{var_name}"
                             
+                            # Build a meaningful signature from the assignment
+                            type_ann = expr_child.child_by_field_name("type")
+                            rhs = expr_child.child_by_field_name("right")
+                            if type_ann:
+                                sig = f"{var_name}: {type_ann.text.decode()}"
+                            elif rhs:
+                                rhs_text = rhs.text.decode()
+                                sig = f"{var_name} = {rhs_text[:60]}{'...' if len(rhs_text) > 60 else ''}"
+                            else:
+                                sig = var_name
+
                             # Don't duplicate if already extracted
                             if var_id not in components:
+                                is_public, is_private, is_protected = _detect_visibility(var_name)
                                 components[var_id] = CodeComponent(
                                     id=var_id,
                                     name=var_name,
@@ -621,8 +764,11 @@ def extract_components(tree, source, file_path, module_path):
                                         end_line=expr_child.end_point[0] + 1
                                     ),
                                     source_code=source[expr_child.start_byte:expr_child.end_byte],
-                                    signature="",
+                                    signature=sig,
                                     language="python",
+                                    is_public=is_public,
+                                    is_private=is_private,
+                                    is_protected=is_protected,
                                     metadata={"module_path": module_path},
                                 )
             
@@ -632,9 +778,21 @@ def extract_components(tree, source, file_path, module_path):
                 if lhs and lhs.type == "identifier":
                     var_name = lhs.text.decode()
                     var_id = f"{module_path}.{var_name}"
+
+                    # Build a meaningful signature
+                    type_ann = child.child_by_field_name("type")
+                    rhs = child.child_by_field_name("right")
+                    if type_ann:
+                        sig = f"{var_name}: {type_ann.text.decode()}"
+                    elif rhs:
+                        rhs_text = rhs.text.decode()
+                        sig = f"{var_name} = {rhs_text[:60]}{'...' if len(rhs_text) > 60 else ''}"
+                    else:
+                        sig = var_name
                     
                     # Don't duplicate if already extracted
                     if var_id not in components:
+                        is_public, is_private, is_protected = _detect_visibility(var_name)
                         components[var_id] = CodeComponent(
                             id=var_id,
                             name=var_name,
@@ -645,8 +803,11 @@ def extract_components(tree, source, file_path, module_path):
                                 end_line=child.end_point[0] + 1
                             ),
                             source_code=source[child.start_byte:child.end_byte],
-                            signature="",
+                            signature=sig,
                             language="python",
+                            is_public=is_public,
+                            is_private=is_private,
+                            is_protected=is_protected,
                             metadata={"module_path": module_path},
                         )
 
@@ -654,8 +815,278 @@ def extract_components(tree, source, file_path, module_path):
     walk(root, "module")
     
     # Then extract global variables
+    extract_globals()
     
     return components
+
+
+def _extract_class_body(class_node, class_id, source, file_path, module_path, file_imports, components):
+    """
+    Extract methods, constructors, static fields, and nested classes from a class body.
+    
+    Distinguishes:
+    - __init__ → CONSTRUCTOR
+    - @staticmethod → is_static=True
+    - @classmethod → is_class_method=True
+    - @abstractmethod → is_abstract=True
+    - @property → metadata["is_property"]=True
+    - Class-level assignments → STATIC_FIELD
+    - Visibility from naming conventions
+    """
+    body = class_node.child_by_field_name("body")
+    if not body:
+        return
+
+    method_ids = []
+
+    for stmt in body.children:
+        func_node = None
+
+        # ---- Methods (normal and decorated) ----
+        if stmt.type in ("function_definition", "async_function_definition"):
+            func_node = stmt
+
+        elif stmt.type == "decorated_definition":
+            for c in stmt.children:
+                if c.type in ("function_definition", "async_function_definition"):
+                    func_node = c
+                    break
+            if not func_node:
+                continue
+
+        # ---- Static fields: class-level assignments ----
+        elif stmt.type == "expression_statement":
+            for expr_child in stmt.children:
+                if expr_child.type == "assignment":
+                    _extract_static_field(expr_child, class_id, source, file_path, module_path, components)
+            continue
+
+        elif stmt.type == "assignment":
+            _extract_static_field(stmt, class_id, source, file_path, module_path, components)
+            continue
+
+        else:
+            continue
+
+        # ---- Common method / constructor handling ----
+        method_name = func_node.child_by_field_name("name").text.decode()
+        method_id = f"{class_id}.{method_name}"
+
+        # Extract metadata
+        method_has_docstring, method_docstring = get_docstring(func_node, source)
+        parameters = extract_parameters(func_node, source, skip_self_cls=True)
+        return_type = extract_return_type(func_node, source)
+        decorators = extract_decorators(func_node, source)
+        calls = extract_calls(func_node, source)
+        is_async = (func_node.type == "async_function_definition" or
+                   (len(func_node.children) > 0 and func_node.children[0].type == "async"))
+
+        is_generator = False
+        func_body = func_node.child_by_field_name("body")
+        if func_body:
+            body_text = func_body.text.decode()
+            is_generator = "yield" in body_text
+
+        # Determine component type
+        if method_name == "__init__":
+            comp_type = ComponentType.CONSTRUCTOR
+        else:
+            comp_type = ComponentType.METHOD
+
+        # Detect flags from decorators
+        is_static = _has_decorator(decorators, "staticmethod")
+        is_class_method = _has_decorator(decorators, "classmethod")
+        is_abstract = _has_decorator(decorators, "abstractmethod")
+        is_property = _has_decorator(decorators, "property")
+
+        # Detect visibility
+        is_public, is_private, is_protected = _detect_visibility(method_name)
+
+        signature = build_signature(method_name, parameters, return_type, is_async, "method")
+        lines_of_code = func_node.end_point[0] - func_node.start_point[0] + 1
+
+        method_meta = {"module_path": module_path}
+        if is_property:
+            method_meta["is_property"] = True
+
+        components[method_id] = CodeComponent(
+            id=method_id,
+            name=method_name,
+            type=comp_type,
+            location=Location(
+                file_path=file_path,
+                start_line=func_node.start_point[0] + 1,
+                end_line=func_node.end_point[0] + 1
+            ),
+            source_code=source[func_node.start_byte:func_node.end_byte],
+            signature=signature,
+            parameters=parameters,
+            return_type=return_type,
+            decorators=decorators,
+            calls=calls,
+            imports=file_imports,
+            language="python",
+            is_async=is_async,
+            is_generator=is_generator,
+            is_static=is_static,
+            is_class_method=is_class_method,
+            is_abstract=is_abstract,
+            is_public=is_public,
+            is_private=is_private,
+            is_protected=is_protected,
+            lines_of_code=lines_of_code,
+            existing_docstring=method_docstring if method_has_docstring else None,
+            metadata=method_meta,
+        )
+
+        method_ids.append(method_id)
+
+    # Update parent class with method IDs and instance attributes
+    if class_id in components:
+        components[class_id].methods = method_ids
+        components[class_id].attributes = _extract_instance_attributes(class_node, source)
+
+
+def _extract_static_field(assignment_node, class_id, source, file_path, module_path, components):
+    """Extract a class-level assignment as a STATIC_FIELD component."""
+    lhs = assignment_node.child_by_field_name("left")
+    if not lhs or lhs.type != "identifier":
+        return
+
+    var_name = lhs.text.decode()
+    var_id = f"{class_id}.{var_name}"
+
+    if var_id in components:
+        return  # Already extracted
+
+    # Get type annotation if present
+    type_node = assignment_node.child_by_field_name("type")
+    type_hint = type_node.text.decode() if type_node else None
+
+    is_public, is_private, is_protected = _detect_visibility(var_name)
+
+    components[var_id] = CodeComponent(
+        id=var_id,
+        name=var_name,
+        type=ComponentType.STATIC_FIELD,
+        location=Location(
+            file_path=file_path,
+            start_line=assignment_node.start_point[0] + 1,
+            end_line=assignment_node.end_point[0] + 1
+        ),
+        source_code=source[assignment_node.start_byte:assignment_node.end_byte],
+        signature=f"{var_name}: {type_hint}" if type_hint else var_name,
+        language="python",
+        is_public=is_public,
+        is_private=is_private,
+        is_protected=is_protected,
+        metadata={"module_path": module_path, "class_id": class_id},
+    )
+
+
+def _extract_instance_attributes(class_node, source):
+    """
+    Extract instance attributes (self.x = ...) from the __init__ method body.
+
+    Scans __init__ for self.<attr> assignments, including typed variants
+    like ``self.x: int = 0``.
+
+    Returns:
+        List[Dict[str, Any]]: Each dict has 'name' and optionally 'type_hint'.
+    """
+    attributes = []
+    seen = set()
+
+    body = class_node.child_by_field_name("body")
+    if not body:
+        return attributes
+
+    # Locate __init__
+    init_node = None
+    for stmt in body.children:
+        func_node = None
+        if stmt.type in ("function_definition", "async_function_definition"):
+            func_node = stmt
+        elif stmt.type == "decorated_definition":
+            for c in stmt.children:
+                if c.type in ("function_definition", "async_function_definition"):
+                    func_node = c
+                    break
+        if func_node:
+            name_node = func_node.child_by_field_name("name")
+            if name_node and name_node.text.decode() == "__init__":
+                init_node = func_node
+                break
+
+    if not init_node:
+        return attributes
+
+    init_body = init_node.child_by_field_name("body")
+    if not init_body:
+        return attributes
+
+    def _scan(node):
+        if node.type == "assignment":
+            lhs = node.child_by_field_name("left")
+            if lhs and lhs.type == "attribute":
+                obj = lhs.child_by_field_name("object")
+                attr = lhs.child_by_field_name("attribute")
+                if (obj and attr
+                        and obj.type == "identifier"
+                        and obj.text.decode() == "self"):
+                    attr_name = attr.text.decode()
+                    if attr_name not in seen:
+                        seen.add(attr_name)
+                        type_node = node.child_by_field_name("type")
+                        type_hint = type_node.text.decode() if type_node else None
+                        attributes.append({"name": attr_name, "type_hint": type_hint})
+        for child in node.children:
+            _scan(child)
+
+    _scan(init_body)
+    return attributes
+
+
+def _extract_instance_attributes_ast(class_node):
+    """
+    Extract instance attributes (self.x = ...) from __init__ using the
+    built-in ``ast`` module (fallback path).
+    """
+    attributes = []
+    seen = set()
+
+    for item in class_node.body:
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == "__init__":
+            for stmt in ast.walk(item):
+                # self.x = value
+                if isinstance(stmt, ast.Assign):
+                    for target in stmt.targets:
+                        if (isinstance(target, ast.Attribute)
+                                and isinstance(target.value, ast.Name)
+                                and target.value.id == "self"):
+                            attr_name = target.attr
+                            if attr_name not in seen:
+                                seen.add(attr_name)
+                                attributes.append({"name": attr_name, "type_hint": None})
+                # self.x: Type = value  /  self.x: Type
+                elif isinstance(stmt, ast.AnnAssign):
+                    target = stmt.target
+                    if (isinstance(target, ast.Attribute)
+                            and isinstance(target.value, ast.Name)
+                            and target.value.id == "self"):
+                        attr_name = target.attr
+                        if attr_name not in seen:
+                            seen.add(attr_name)
+                            type_hint = None
+                            if stmt.annotation:
+                                try:
+                                    type_hint = ast.unparse(stmt.annotation)
+                                except Exception:
+                                    pass
+                            attributes.append({"name": attr_name, "type_hint": type_hint})
+            break  # only process the first __init__
+
+    return attributes
 
 
 def extract_components_ast(tree: ast.AST, source: str, file_path: str, module_path: str):
@@ -663,9 +1094,10 @@ def extract_components_ast(tree: ast.AST, source: str, file_path: str, module_pa
     Fallback extractor using Python's built-in `ast` when tree-sitter isn't available.
 
     Extracts:
-    - Classes
-    - Functions
-    - Methods
+    - Classes (with abstract detection)
+    - Functions (with visibility)
+    - Methods / Constructors (with decorator flags)
+    - Static fields (class-level assignments)
     - Module-level variables/constants
     """
     components = {}
@@ -675,7 +1107,8 @@ def extract_components_ast(tree: ast.AST, source: str, file_path: str, module_pa
             super().__init__()
             self.current_class = None
 
-        def add_component(self, cid, ctype, node, docstring, name):
+        def add_component(self, cid, ctype, node, docstring, name, **kwargs):
+            is_public, is_private, is_protected = _detect_visibility(name)
             components[cid] = CodeComponent(
                 id=cid,
                 name=name,
@@ -689,37 +1122,128 @@ def extract_components_ast(tree: ast.AST, source: str, file_path: str, module_pa
                 signature="",
                 language="python",
                 existing_docstring=docstring.strip() if docstring else None,
+                is_public=is_public,
+                is_private=is_private,
+                is_protected=is_protected,
                 metadata={"module_path": module_path},
+                **kwargs,
             )
 
         def visit_ClassDef(self, node: ast.ClassDef):
             cid = f"{module_path}.{node.name}"
             doc = ast.get_docstring(node)
-            self.add_component(cid, ComponentType.CLASS, node, doc, node.name)
+            parent_classes = [
+                (b.id if isinstance(b, ast.Name) else ast.dump(b))
+                for b in node.bases
+            ]
+            is_abstract_cls = any("ABC" in pc for pc in parent_classes)
+            self.add_component(
+                cid, ComponentType.CLASS, node, doc, node.name,
+                parent_classes=parent_classes,
+                is_abstract=is_abstract_cls,
+                decorators=[f"@{ast.dump(d)}" for d in node.decorator_list] if hasattr(node, 'decorator_list') else [],
+            )
+
+            # Extract instance attributes from __init__
+            components[cid].attributes = _extract_instance_attributes_ast(node)
 
             prev = self.current_class
             self.current_class = cid
             self.generic_visit(node)
             self.current_class = prev
 
-        def visit_FunctionDef(self, node: ast.FunctionDef):
+        def _handle_function(self, node):
             doc = ast.get_docstring(node)
+            decorators = []
+            if hasattr(node, 'decorator_list'):
+                for d in node.decorator_list:
+                    if isinstance(d, ast.Name):
+                        decorators.append(f"@{d.id}")
+                    elif isinstance(d, ast.Attribute):
+                        decorators.append(f"@{ast.dump(d)}")
+                    else:
+                        decorators.append(f"@{ast.dump(d)}")
+
+            is_async = isinstance(node, ast.AsyncFunctionDef)
+
             if self.current_class:
                 cid = f"{self.current_class}.{node.name}"
-                self.add_component(cid, ComponentType.METHOD, node, doc, node.name)
+                # Determine type: CONSTRUCTOR vs METHOD
+                if node.name == "__init__":
+                    comp_type = ComponentType.CONSTRUCTOR
+                else:
+                    comp_type = ComponentType.METHOD
+
+                is_static = _has_decorator(decorators, "staticmethod")
+                is_class_method = _has_decorator(decorators, "classmethod")
+                is_abstract = _has_decorator(decorators, "abstractmethod")
+
+                self.add_component(
+                    cid, comp_type, node, doc, node.name,
+                    decorators=decorators,
+                    is_async=is_async,
+                    is_static=is_static,
+                    is_class_method=is_class_method,
+                    is_abstract=is_abstract,
+                )
             else:
                 cid = f"{module_path}.{node.name}"
-                self.add_component(cid, ComponentType.FUNCTION, node, doc, node.name)
+                # Check for API endpoints
+                http_method, http_path, framework = _detect_api_endpoint(decorators)
+                if http_method:
+                    self.add_component(
+                        cid, ComponentType.API_ENDPOINT, node, doc, node.name,
+                        decorators=decorators,
+                        is_async=is_async,
+                        http_method=http_method,
+                        http_path=http_path,
+                        framework=framework,
+                    )
+                else:
+                    self.add_component(
+                        cid, ComponentType.FUNCTION, node, doc, node.name,
+                        decorators=decorators,
+                        is_async=is_async,
+                    )
             self.generic_visit(node)
 
+        def visit_FunctionDef(self, node: ast.FunctionDef):
+            self._handle_function(node)
+
         def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef):
-            self.visit_FunctionDef(node)  # treat similarly
+            self._handle_function(node)
 
         def visit_Assign(self, node: ast.Assign):
-            # Module-level variables only (no class scope tracking needed here)
-            if isinstance(getattr(node, "parent", None), ast.Module) or True:
-                for target in node.targets:
-                    if isinstance(target, ast.Name):
+            parent_node = getattr(node, "parent", None)
+            is_module_level = isinstance(parent_node, ast.Module)
+            is_class_level = isinstance(parent_node, ast.ClassDef)
+
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    if is_class_level and self.current_class:
+                        # Class-level assignment → STATIC_FIELD
+                        cid = f"{self.current_class}.{target.id}"
+                        if cid not in components:
+                            is_public, is_private, is_protected = _detect_visibility(target.id)
+                            components[cid] = CodeComponent(
+                                id=cid,
+                                name=target.id,
+                                type=ComponentType.STATIC_FIELD,
+                                location=Location(
+                                    file_path=file_path,
+                                    start_line=getattr(node, "lineno", 1),
+                                    end_line=getattr(node, "end_lineno", getattr(node, "lineno", 1))
+                                ),
+                                source_code=source[node.col_offset if hasattr(node, "col_offset") else 0 : node.end_col_offset if hasattr(node, "end_col_offset") else len(source)],
+                                signature=target.id,
+                                language="python",
+                                is_public=is_public,
+                                is_private=is_private,
+                                is_protected=is_protected,
+                                metadata={"module_path": module_path, "class_id": self.current_class},
+                            )
+                    elif is_module_level:
+                        # Module-level assignment → GLOBAL_VARIABLE
                         cid = f"{module_path}.{target.id}"
                         if cid not in components:
                             components[cid] = CodeComponent(

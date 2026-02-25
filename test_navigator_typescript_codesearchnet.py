@@ -1,18 +1,18 @@
 """
-Test Navigator Module on Python CodeSearchNet Dataset
+Test Navigator Module on TypeScript CodeSearchNet Dataset
 
 This script:
-1. Downloads Python code from sentence-transformers/codesearchnet
+1. Downloads TypeScript code from sentence-transformers/codesearchnet
 2. Extracts components using your navigator
 3. Validates extraction quality
 4. Generates comprehensive metrics and errors
 
 Usage:
-    python test_navigator_python_codesearchnet.py [max_samples]
+    python test_navigator_typescript_codesearchnet.py [max_samples]
     
 Example:
-    python test_navigator_python_codesearchnet.py 5  # Test on 5 samples
-    python test_navigator_python_codesearchnet.py 100 # Test on 100 samples
+    python test_navigator_typescript_codesearchnet.py 5  # Test on 5 samples
+    python test_navigator_typescript_codesearchnet.py 100 # Test on 100 samples
 """
 
 import sys
@@ -27,8 +27,8 @@ from backend.validators.validation_framework import ValidationFramework
 from backend.navigator.languages.adapter_registry import AdapterRegistry
 
 
-class PythonCodeSearchNetTester:
-    """Test navigator on Python CodeSearchNet dataset."""
+class TypeScriptCodeSearchNetTester:
+    """Test navigator on TypeScript CodeSearchNet dataset."""
     
     def __init__(self, max_samples: int = 10):
         self.max_samples = max_samples
@@ -45,10 +45,10 @@ class PythonCodeSearchNetTester:
     def run(self):
         """Execute full test pipeline."""
         print("\n" + "="*80)
-        print("PYTHON NAVIGATOR VALIDATION - CODESEARCHNET DATASET")
+        print("TYPESCRIPT NAVIGATOR VALIDATION - CODESEARCHNET DATASET")
         print("="*80)
         
-        print(f"\nPhase 1: Downloading Python dataset (max {self.max_samples} samples)...")
+        print(f"\nPhase 1: Downloading TypeScript dataset (max {self.max_samples} samples)...")
         samples = self._download_dataset()
         
         print(f"\nPhase 2: Extracting components with Navigator...")
@@ -64,16 +64,16 @@ class PythonCodeSearchNetTester:
         self._print_summary()
     
     def _download_dataset(self) -> List[Dict[str, Any]]:
-        """Download Python CodeSearchNet dataset split.
+        """Download TypeScript CodeSearchNet dataset split.
         
         CodeSearchNet has mixed languages, so we load the full dataset and will
-        filter for Python samples by parsing during extraction.
+        filter for TypeScript samples by parsing during extraction.
         """
         try:
             print(f"Loading CodeSearchNet validation split (may load more than needed)...")
             dataset = load_dataset(
                 "sentence-transformers/codesearchnet",
-                split="train"
+                split="validation"
             )
             
             # Convert to list of samples (up to max_samples to avoid memory issues)
@@ -93,13 +93,13 @@ class PythonCodeSearchNetTester:
         """Extract components from each sample.
         
         CodeSearchNet dataset format: 'code' and 'comment' fields.
-        Skip non-Python code gracefully (parser will fail, which indicates non-Python).
+        Skip non-TypeScript code gracefully (parser will fail, which indicates non-TypeScript).
         """
         if not samples:
             print("✗ No samples to process")
             return
         
-        python_adapter = self.adapter_registry.get_adapter('python')
+        typescript_adapter = self.adapter_registry.get_adapter('typescript')
         
         for i, sample in enumerate(samples, 1):
             try:
@@ -115,7 +115,7 @@ class PythonCodeSearchNetTester:
                 url = sample.get('url', '')
                 
                 # Use index as identifier since no repo/path/func_name in standard format
-                file_path = f'sample_{i}.py'
+                file_path = f'sample_{i}.ts'
                 repo = 'codesearchnet'
                 
                 # Show progress
@@ -123,19 +123,21 @@ class PythonCodeSearchNetTester:
                 print(f"\n[{i}/{len(samples)}] {repo}/{file_path}")
                 print(f"  Code: {code_preview}...")
                 
-                # Parse - if this fails, it's likely not Python, so skip gracefully
-                tree = python_adapter.parse(source_code)
+                # Parse - if this fails, it's likely not TypeScript, so skip gracefully
+                tree = typescript_adapter.parse(source_code)
                 
-                # Check for parse errors indicating non-Python code
+                # Check for parse errors indicating non-TypeScript code
                 if tree.root_node.has_error:
-                    print(f"  ↷ Not valid Python (skipped)")
+                    print(f"  ↷ Not valid TypeScript (skipped)")
                     self.metrics['failed'] += 1
-                    self.metrics['error_summary']['Not valid Python'] += 1
+                    self.metrics['error_summary']['Not valid TypeScript'] += 1
                     continue
-                components = python_adapter.extract_components(tree, source_code, file_path, repo)
+                
+                # Extract components
+                components = typescript_adapter.extract_components(tree, source_code, file_path, repo)
                 
                 if not components:
-                    print(f"  ℹ No components extracted (may be incomplete Python snippet)")
+                    print(f"  ℹ No components extracted (may be incomplete TypeScript snippet)")
                     self.metrics['failed'] += 1
                     self.metrics['error_summary']['No components extracted'] += 1
                     continue
@@ -155,7 +157,7 @@ class PythonCodeSearchNetTester:
                 # Extract dependencies for each component
                 for cid, component in components.items():
                     try:
-                        deps = python_adapter.resolve_dependencies(component, tree, source_code, components)
+                        deps = typescript_adapter.resolve_dependencies(component, tree, source_code, components)
                         component.depends_on = list(deps)
                     except Exception as dep_err:
                         # Log but continue if dependency resolution fails
@@ -217,12 +219,12 @@ class PythonCodeSearchNetTester:
         output_dir = Path('data/validation/codesearchnet')
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        filename = f"python_navigator_results_{self.max_samples}_samples.json"
+        filename = f"typescript_navigator_results_{self.max_samples}_samples.json"
         filepath = output_dir / filename
         
         output = {
             'metadata': {
-                'language': 'python',
+                'language': 'typescript',
                 'dataset': 'codesearchnet',
                 'max_samples': self.max_samples,
                 'total_processed': self.metrics['total_samples'],
@@ -285,7 +287,7 @@ def main():
             print(f"Invalid sample count: {sys.argv[1]}")
             sys.exit(1)
     
-    tester = PythonCodeSearchNetTester(max_samples=max_samples)
+    tester = TypeScriptCodeSearchNetTester(max_samples=max_samples)
     tester.run()
 
 
