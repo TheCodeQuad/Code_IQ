@@ -854,15 +854,17 @@ def _extract_class_body(class_node, class_id, source, file_path, module_path, fi
             if not func_node:
                 continue
 
-        # ---- Static fields: class-level assignments ----
-        elif stmt.type == "expression_statement":
-            for expr_child in stmt.children:
-                if expr_child.type == "assignment":
-                    _extract_static_field(expr_child, class_id, source, file_path, module_path, components)
-            continue
-
-        elif stmt.type == "assignment":
-            _extract_static_field(stmt, class_id, source, file_path, module_path, components)
+        # ---- Static fields: class-level assignments (disabled) ----
+        # elif stmt.type == "expression_statement":
+        #     for expr_child in stmt.children:
+        #         if expr_child.type == "assignment":
+        #             _extract_static_field(expr_child, class_id, source, file_path, module_path, components)
+        #     continue
+        #
+        # elif stmt.type == "assignment":
+        #     _extract_static_field(stmt, class_id, source, file_path, module_path, components)
+        #     continue
+        elif stmt.type in ("expression_statement", "assignment"):
             continue
 
         else:
@@ -1221,27 +1223,27 @@ def extract_components_ast(tree: ast.AST, source: str, file_path: str, module_pa
             for target in node.targets:
                 if isinstance(target, ast.Name):
                     if is_class_level and self.current_class:
-                        # Class-level assignment → STATIC_FIELD
-                        cid = f"{self.current_class}.{target.id}"
-                        if cid not in components:
-                            is_public, is_private, is_protected = _detect_visibility(target.id)
-                            components[cid] = CodeComponent(
-                                id=cid,
-                                name=target.id,
-                                type=ComponentType.STATIC_FIELD,
-                                location=Location(
-                                    file_path=file_path,
-                                    start_line=getattr(node, "lineno", 1),
-                                    end_line=getattr(node, "end_lineno", getattr(node, "lineno", 1))
-                                ),
-                                source_code=source[node.col_offset if hasattr(node, "col_offset") else 0 : node.end_col_offset if hasattr(node, "end_col_offset") else len(source)],
-                                signature=target.id,
-                                language="python",
-                                is_public=is_public,
-                                is_private=is_private,
-                                is_protected=is_protected,
-                                metadata={"module_path": module_path, "class_id": self.current_class},
-                            )
+                        pass  # Static field extraction disabled
+                        # cid = f"{self.current_class}.{target.id}"
+                        # if cid not in components:
+                        #     is_public, is_private, is_protected = _detect_visibility(target.id)
+                        #     components[cid] = CodeComponent(
+                        #         id=cid,
+                        #         name=target.id,
+                        #         type=ComponentType.STATIC_FIELD,
+                        #         location=Location(
+                        #             file_path=file_path,
+                        #             start_line=getattr(node, "lineno", 1),
+                        #             end_line=getattr(node, "end_lineno", getattr(node, "lineno", 1))
+                        #         ),
+                        #         source_code=source[...],
+                        #         signature=target.id,
+                        #         language="python",
+                        #         is_public=is_public,
+                        #         is_private=is_private,
+                        #         is_protected=is_protected,
+                        #         metadata={"module_path": module_path, "class_id": self.current_class},
+                        #     )
                     elif is_module_level:
                         # Module-level assignment → GLOBAL_VARIABLE
                         cid = f"{module_path}.{target.id}"
