@@ -65,6 +65,7 @@ providers:
     model_path: "models/qwen2.5-coder-7b-instruct-q4_k_m.gguf"
     n_ctx: 8192  # Context window size (Qwen supports up to 128k, but 8k for efficiency)
     n_gpu_layers: -1  # -1 = all layers on GPU, 0 = CPU only
+    main_gpu: 0  # GPU device index: 0 = RTX 4070 Super, 1 = A2
     n_threads: null  # null = auto-detect, or set specific thread count
     models:
       default: "Qwen2.5-Coder-7B-Instruct"
