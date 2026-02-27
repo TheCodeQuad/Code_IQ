@@ -361,7 +361,7 @@ def analyze_repo(req: AnalyzeRequest):
         # Step 11: Try running the documentation pipeline (optional - requires LLM)
         docs = []
         try:
-            from backend.pipeline.pipeline import run_pipeline
+            from backend.pipeline import run_pipeline
             print(f"🚀 Running documentation pipeline for: {repo_path}")
             result = run_pipeline(repo_path)
             docs = result.get("documentation", [])

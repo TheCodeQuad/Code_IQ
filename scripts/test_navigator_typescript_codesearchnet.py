@@ -1,18 +1,18 @@
 """
-Test Navigator Module on Java The-Stack Dataset
+Test Navigator Module on TypeScript CodeSearchNet Dataset
 
 This script:
-1. Downloads Java code from bigcode/the-stack
+1. Downloads TypeScript code from sentence-transformers/codesearchnet
 2. Extracts components using your navigator
 3. Validates extraction quality
 4. Generates comprehensive metrics and errors
 
 Usage:
-    python test_navigator_java_codesearchnet.py [max_samples]
+    python test_navigator_typescript_codesearchnet.py [max_samples]
     
 Example:
-    python test_navigator_java_codesearchnet.py 5  # Test on 5 samples
-    python test_navigator_java_codesearchnet.py 100 # Test on 100 samples
+    python test_navigator_typescript_codesearchnet.py 5  # Test on 5 samples
+    python test_navigator_typescript_codesearchnet.py 100 # Test on 100 samples
 """
 
 import sys
@@ -22,13 +22,17 @@ from typing import Dict, List, Any
 from collections import defaultdict
 from datasets import load_dataset
 
+# Add project root to sys.path
+project_root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(project_root))
+
 # Import validators and navigator
 from backend.validators.validation_framework import ValidationFramework
 from backend.navigator.languages.adapter_registry import AdapterRegistry
 
 
-class JavaCodeSearchNetTester:
-    """Test navigator on Java CodeSearchNet dataset."""
+class TypeScriptCodeSearchNetTester:
+    """Test navigator on TypeScript CodeSearchNet dataset."""
     
     def __init__(self, max_samples: int = 10):
         self.max_samples = max_samples
@@ -45,10 +49,10 @@ class JavaCodeSearchNetTester:
     def run(self):
         """Execute full test pipeline."""
         print("\n" + "="*80)
-        print("JAVA NAVIGATOR VALIDATION - THE-STACK DATASET")
+        print("TYPESCRIPT NAVIGATOR VALIDATION - CODESEARCHNET DATASET")
         print("="*80)
         
-        print(f"\nPhase 1: Downloading Java dataset (max {self.max_samples} samples)...")
+        print(f"\nPhase 1: Downloading TypeScript dataset (max {self.max_samples} samples)...")
         samples = self._download_dataset()
         
         print(f"\nPhase 2: Extracting components with Navigator...")
@@ -64,24 +68,26 @@ class JavaCodeSearchNetTester:
         self._print_summary()
     
     def _download_dataset(self) -> List[Dict[str, Any]]:
-        """Download Java the-stack dataset split."""
+        """Download TypeScript CodeSearchNet dataset split.
+        
+        CodeSearchNet has mixed languages, so we load the full dataset and will
+        filter for TypeScript samples by parsing during extraction.
+        """
         try:
-            print(f"Loading the-stack dataset (streaming, max {self.max_samples} samples)...")
+            print(f"Loading CodeSearchNet validation split (may load more than needed)...")
             dataset = load_dataset(
-                "bigcode/the-stack",
-                data_dir="data/java",
-                split="train",
-                streaming=True
+                "sentence-transformers/codesearchnet",
+                split="validation"
             )
             
-            # Extract samples from streaming dataset
+            # Convert to list of samples (up to max_samples to avoid memory issues)
             samples = []
             for i, sample in enumerate(dataset):
-                if i >= self.max_samples:
+                if i >= self.max_samples * 2:  # Load more than needed to account for filtering
                     break
                 samples.append(sample)
             
-            print(f"✓ Loaded {len(samples)} Java samples from the-stack")
+            print(f"✓ Loaded {len(samples)} samples from CodeSearchNet")
             return samples
         except Exception as e:
             print(f"✗ Failed to load dataset: {e}")
@@ -90,54 +96,52 @@ class JavaCodeSearchNetTester:
     def _extract_components(self, samples: List[Dict[str, Any]]):
         """Extract components from each sample.
         
-        The-stack dataset format has 'content' field for code.
-        Skip non-Java code gracefully (parser will fail, which indicates non-Java).
+        CodeSearchNet dataset format: 'code' and 'comment' fields.
+        Skip non-TypeScript code gracefully (parser will fail, which indicates non-TypeScript).
         """
         if not samples:
             print("✗ No samples to process")
             return
         
-        java_adapter = self.adapter_registry.get_adapter('java')
+        typescript_adapter = self.adapter_registry.get_adapter('typescript')
         
         for i, sample in enumerate(samples, 1):
             try:
-                # Extract code and metadata from the-stack format
-                # The-stack uses 'content' field for code
-                source_code = sample.get('content') or sample.get('code')
+                # Extract code and metadata from CodeSearchNet format
+                source_code = sample.get('code')
                 if not source_code:
                     print(f"\n[{i}/{len(samples)}] Skipping: No code in sample")
                     self.metrics['failed'] += 1
                     continue
                 
                 # Extract metadata from available fields
-                file_path = sample.get('path', f'sample_{i}.java')
-                repo = sample.get('repo_name', 'the-stack')
-                comment = sample.get('summary', '')
+                comment = sample.get('comment', '')
+                url = sample.get('url', '')
                 
-                # Ensure file has .java extension
-                if not file_path.endswith('.java'):
-                    file_path = f'{file_path}.java'
+                # Use index as identifier since no repo/path/func_name in standard format
+                file_path = f'sample_{i}.ts'
+                repo = 'codesearchnet'
                 
                 # Show progress
                 code_preview = source_code[:50].replace('\n', ' ')
                 print(f"\n[{i}/{len(samples)}] {repo}/{file_path}")
                 print(f"  Code: {code_preview}...")
                 
-                # Parse - if this fails, it's likely not Java, so skip gracefully
-                tree = java_adapter.parse(source_code)
+                # Parse - if this fails, it's likely not TypeScript, so skip gracefully
+                tree = typescript_adapter.parse(source_code)
                 
-                # Check for parse errors indicating non-Java code
+                # Check for parse errors indicating non-TypeScript code
                 if tree.root_node.has_error:
-                    print(f"  ↷ Not valid Java (skipped)")
+                    print(f"  ↷ Not valid TypeScript (skipped)")
                     self.metrics['failed'] += 1
-                    self.metrics['error_summary']['Not valid Java'] += 1
+                    self.metrics['error_summary']['Not valid TypeScript'] += 1
                     continue
                 
                 # Extract components
-                components = java_adapter.extract_components(tree, source_code, file_path, repo)
+                components = typescript_adapter.extract_components(tree, source_code, file_path, repo)
                 
                 if not components:
-                    print(f"  ℹ No components extracted (may be incomplete Java snippet)")
+                    print(f"  ℹ No components extracted (may be incomplete TypeScript snippet)")
                     self.metrics['failed'] += 1
                     self.metrics['error_summary']['No components extracted'] += 1
                     continue
@@ -157,7 +161,7 @@ class JavaCodeSearchNetTester:
                 # Extract dependencies for each component
                 for cid, component in components.items():
                     try:
-                        deps = java_adapter.resolve_dependencies(component, tree, source_code, components)
+                        deps = typescript_adapter.resolve_dependencies(component, tree, source_code, components)
                         component.depends_on = list(deps)
                     except Exception as dep_err:
                         # Log but continue if dependency resolution fails
@@ -216,16 +220,16 @@ class JavaCodeSearchNetTester:
     
     def _save_results(self):
         """Save results to JSON file."""
-        output_dir = Path('data/validation/the-stack')
+        output_dir = project_root / 'data' / 'validation' / 'codesearchnet'
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        filename = f"java_navigator_results_{self.max_samples}_samples.json"
+        filename = f"typescript_navigator_results_{self.max_samples}_samples.json"
         filepath = output_dir / filename
         
         output = {
             'metadata': {
-                'language': 'java',
-                'dataset': 'the-stack',
+                'language': 'typescript',
+                'dataset': 'codesearchnet',
                 'max_samples': self.max_samples,
                 'total_processed': self.metrics['total_samples'],
             },
@@ -287,7 +291,7 @@ def main():
             print(f"Invalid sample count: {sys.argv[1]}")
             sys.exit(1)
     
-    tester = JavaCodeSearchNetTester(max_samples=max_samples)
+    tester = TypeScriptCodeSearchNetTester(max_samples=max_samples)
     tester.run()
 
 
