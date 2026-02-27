@@ -1,8 +1,8 @@
 """
-Test Navigator Module on TypeScript CodeSearchNet Dataset
+Test Navigator Module on TypeScript The-Stack Dataset
 
 This script:
-1. Downloads TypeScript code from sentence-transformers/codesearchnet
+1. Downloads TypeScript code from bigcode/the-stack
 2. Extracts components using your navigator
 3. Validates extraction quality
 4. Generates comprehensive metrics and errors
@@ -31,8 +31,8 @@ from backend.validators.validation_framework import ValidationFramework
 from backend.navigator.languages.adapter_registry import AdapterRegistry
 
 
-class TypeScriptCodeSearchNetTester:
-    """Test navigator on TypeScript CodeSearchNet dataset."""
+class TypeScriptTheStackTester:
+    """Test navigator on TypeScript the-stack dataset."""
     
     def __init__(self, max_samples: int = 10):
         self.max_samples = max_samples
@@ -49,7 +49,7 @@ class TypeScriptCodeSearchNetTester:
     def run(self):
         """Execute full test pipeline."""
         print("\n" + "="*80)
-        print("TYPESCRIPT NAVIGATOR VALIDATION - CODESEARCHNET DATASET")
+        print("TYPESCRIPT NAVIGATOR VALIDATION - THE-STACK DATASET")
         print("="*80)
         
         print(f"\nPhase 1: Downloading TypeScript dataset (max {self.max_samples} samples)...")
@@ -68,26 +68,24 @@ class TypeScriptCodeSearchNetTester:
         self._print_summary()
     
     def _download_dataset(self) -> List[Dict[str, Any]]:
-        """Download TypeScript CodeSearchNet dataset split.
-        
-        CodeSearchNet has mixed languages, so we load the full dataset and will
-        filter for TypeScript samples by parsing during extraction.
-        """
+        """Download TypeScript the-stack dataset split."""
         try:
-            print(f"Loading CodeSearchNet validation split (may load more than needed)...")
+            print(f"Loading the-stack dataset (streaming, max {self.max_samples} samples)...")
             dataset = load_dataset(
-                "sentence-transformers/codesearchnet",
-                split="validation"
+                "bigcode/the-stack",
+                data_dir="data/typescript",
+                split="train",
+                streaming=True
             )
             
-            # Convert to list of samples (up to max_samples to avoid memory issues)
+            # Extract samples from streaming dataset
             samples = []
             for i, sample in enumerate(dataset):
-                if i >= self.max_samples * 2:  # Load more than needed to account for filtering
+                if i >= self.max_samples:
                     break
                 samples.append(sample)
             
-            print(f"✓ Loaded {len(samples)} samples from CodeSearchNet")
+            print(f"✓ Loaded {len(samples)} TypeScript samples from the-stack")
             return samples
         except Exception as e:
             print(f"✗ Failed to load dataset: {e}")
@@ -96,7 +94,7 @@ class TypeScriptCodeSearchNetTester:
     def _extract_components(self, samples: List[Dict[str, Any]]):
         """Extract components from each sample.
         
-        CodeSearchNet dataset format: 'code' and 'comment' fields.
+        The-stack dataset format has 'content' field for code.
         Skip non-TypeScript code gracefully (parser will fail, which indicates non-TypeScript).
         """
         if not samples:
@@ -107,20 +105,22 @@ class TypeScriptCodeSearchNetTester:
         
         for i, sample in enumerate(samples, 1):
             try:
-                # Extract code and metadata from CodeSearchNet format
-                source_code = sample.get('code')
+                # Extract code and metadata from the-stack format
+                # The-stack uses 'content' field for code
+                source_code = sample.get('content') or sample.get('code')
                 if not source_code:
                     print(f"\n[{i}/{len(samples)}] Skipping: No code in sample")
                     self.metrics['failed'] += 1
                     continue
                 
                 # Extract metadata from available fields
-                comment = sample.get('comment', '')
-                url = sample.get('url', '')
+                file_path = sample.get('path', f'sample_{i}.ts')
+                repo = sample.get('repo_name', 'the-stack')
+                comment = sample.get('summary', '')
                 
-                # Use index as identifier since no repo/path/func_name in standard format
-                file_path = f'sample_{i}.ts'
-                repo = 'codesearchnet'
+                # Ensure file has .ts extension
+                if not file_path.endswith('.ts'):
+                    file_path = f'{file_path}.ts'
                 
                 # Show progress
                 code_preview = source_code[:50].replace('\n', ' ')
@@ -220,7 +220,7 @@ class TypeScriptCodeSearchNetTester:
     
     def _save_results(self):
         """Save results to JSON file."""
-        output_dir = project_root / 'data' / 'validation' / 'codesearchnet'
+        output_dir = project_root / 'data' / 'validation' / 'the-stack'
         output_dir.mkdir(parents=True, exist_ok=True)
         
         filename = f"typescript_navigator_results_{self.max_samples}_samples.json"
@@ -229,7 +229,7 @@ class TypeScriptCodeSearchNetTester:
         output = {
             'metadata': {
                 'language': 'typescript',
-                'dataset': 'codesearchnet',
+                'dataset': 'the-stack',
                 'max_samples': self.max_samples,
                 'total_processed': self.metrics['total_samples'],
             },
@@ -291,7 +291,7 @@ def main():
             print(f"Invalid sample count: {sys.argv[1]}")
             sys.exit(1)
     
-    tester = TypeScriptCodeSearchNetTester(max_samples=max_samples)
+    tester = TypeScriptTheStackTester(max_samples=max_samples)
     tester.run()
 
 
