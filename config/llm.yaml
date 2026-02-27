@@ -1,4 +1,5 @@
 # LLM Provider Configurations
+#durva
 providers:
   openrouter:
     enabled: false  # Disabled - using local inference instead
