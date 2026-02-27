@@ -965,14 +965,12 @@ class Orchestrator:
         """
         self.logger.info(f"Creating fallback documentation for {component.name}")
         return Documentation(
-            id=f"fallback-{component.id}",
-            name=f"Fallback Documentation for {component.name}",
             component_id=component.id,
+            component_name=component.name,
+            component_type=str(component.type),
+            summary=f"Fallback documentation for {component.name}.",
+            description="Documentation could not be generated due to Writer failure.",
             docstring="Fallback documentation due to Writer failure.",
-            source="orchestrator",
-            type=component.type,
-            created_at=datetime.now(),
-            updated_at=datetime.now()
         )
     
     def get_statistics(self) -> Dict[str, Any]:

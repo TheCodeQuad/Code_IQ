@@ -130,6 +130,100 @@ class WriterAgent(BaseAgent):
         return get_documentation_style(component.language)
 
     # ------------------------------------------------------------------
+    # Static analysis hints
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _compute_static_hints(source_code: str, language: str) -> Dict[str, bool]:
+        """Derive lightweight boolean hints from source code via regex.
+
+        These hints are injected into the user prompt so the LLM can make
+        evidence-based decisions without having to infer behaviour.
+        """
+        lang = _LANGUAGE_ALIASES.get(language.lower().strip(), language.lower().strip())
+        code = source_code or ""
+
+        # -- throw / raise detection (literal statements only) --
+        if lang in ("javascript", "typescript"):
+            detects_throw = bool(re.search(r'\bthrow\s+', code))
+        elif lang == "python":
+            detects_throw = bool(re.search(r'\braise\s+', code))
+        elif lang == "java":
+            detects_throw = bool(re.search(r'\bthrow\s+', code))
+        else:
+            detects_throw = bool(re.search(r'\b(throw|raise)\s+', code))
+
+        # -- JS/TS constructor-compatibility patterns --
+        uses_instanceof = bool(re.search(r'\binstanceof\b', code))
+        modifies_prototype = bool(
+            re.search(r'\.prototype\b', code)
+            or re.search(r'\bObject\.create\s*\(', code)
+        )
+
+        # -- export detection --
+        if lang in ("javascript", "typescript"):
+            is_exported = bool(
+                re.search(r'\bmodule\.exports\b', code)
+                or re.search(r'\bexports\.', code)
+                or re.search(r'\bexport\s+(default\s+)?', code)
+            )
+        else:
+            is_exported = False  # not reliably detectable in other languages
+
+        # -- async detection (supplement CodeComponent.is_async) --
+        uses_await = bool(re.search(r'\bawait\s+', code))
+
+        # -- callback / higher-order function pattern --
+        accepts_callback = bool(
+            re.search(r'\bcallback\b|\bcb\b|\bfn\b', code)
+            and lang in ("javascript", "typescript")
+        )
+
+        return {
+            "detects_throw": detects_throw,
+            "uses_instanceof": uses_instanceof,
+            "modifies_prototype": modifies_prototype,
+            "is_exported": is_exported,
+            "uses_await": uses_await,
+            "accepts_callback": accepts_callback,
+        }
+
+    @staticmethod
+    def _is_trivial_function(source_code: str, language: str) -> bool:
+        """Heuristic: detect boilerplate / trivial helper functions.
+
+        A function is considered trivial if it:
+          - Has <= 3 non-blank, non-comment body lines, AND
+          - Consists only of a single return / assignment / delegation.
+
+        Trivial functions receive a shorter documentation template so the
+        LLM does not over-document them.
+        """
+        if not source_code:
+            return False
+        lines = [ln.strip() for ln in source_code.splitlines() if ln.strip()]
+        # Exclude the signature line(s)
+        body_lines = [
+            ln for ln in lines
+            if not ln.startswith(("def ", "function ", "async ", "export ",
+                                 "public ", "private ", "protected ",
+                                 "static ", "@", "//", "#", "/*", "*", "}"))
+            and ln not in ("{", "}", ")", ");")
+        ]
+        if len(body_lines) > 3:
+            return False
+        trivial_patterns = [
+            r'^return\s+',          # single return
+            r'^this\.\w+\s*=',      # simple field assignment
+            r'^self\.\w+\s*=',      # Python field assignment
+            r'^\w+\s*=\s*',         # plain assignment
+        ]
+        for bl in body_lines:
+            if not any(re.match(p, bl) for p in trivial_patterns):
+                return False
+        return True
+
+    # ------------------------------------------------------------------
     # System prompt
     # ------------------------------------------------------------------
 
@@ -157,13 +251,25 @@ Returns:
 
         elif style.language in ("javascript", "typescript"):
             format_block = f"""FORMAT: JSDoc/TSDoc-style documentation (NO comment delimiters).
-- First line: one-sentence summary.
+- First line: one-sentence summary beginning with a strong action verb
+  (e.g., "Binds", "Creates", "Returns", "Validates", "Wraps").
 - Blank line after summary if more sections follow.
 - {style.param_tag} {{{{type}}}} name - description (for each parameter).
 - {style.return_tag} {{{{type}}}} description.
-- {style.raises_tag} {{{{type}}}} description (if applicable).
+- {style.raises_tag} {{{{type}}}} description — ONLY when the body has `throw`.
 - Do NOT include /** or */ — they are added by the system.
 - Do NOT use Python-specific terms (self, __init__, def, etc.).
+
+JAVASCRIPT / TYPESCRIPT STRUCTURAL RULES:
+- If the function uses `this instanceof` or checks constructor identity,
+  note that in the summary (e.g., "Ensures constructor invocation via
+  `new`.").
+- If the function modifies `.prototype`, document the prototype
+  augmentation (e.g., "Attaches ... to Constructor.prototype.").
+- If the function accepts a callback (`cb`, `callback`, `fn`),
+  document the callback signature when inferable from usage.
+- For exported functions (`module.exports`, `export`), lead the summary
+  with the module-level purpose.
 
 EXAMPLE OUTPUT FORMAT:
 Calculates the sum of two numbers.
@@ -198,15 +304,46 @@ Calculates the sum of two integers.
         return f"""You are a precise code documentation generator for {style.language}.
 
 STRICT RULES:
-1. Output ONLY the documentation content between <DOCSTRING> and </DOCSTRING> tags.
+1. Output ONLY the documentation content between <DOCSTRING> and </DOCSTRING>.
 2. Do NOT include comment delimiters ({style.comment_prefix}, {style.comment_suffix}).
-3. Do NOT include markdown code fences, backticks, or extra formatting.
-4. Do NOT include analysis, reasoning, or commentary outside the tags.
-5. Do NOT invent behavior not visible in the source code.
-6. Do NOT reference constructs or terminology from other languages.
-7. If something cannot be determined from the code, omit it entirely.
+3. Do NOT include markdown, backticks, analysis, or explanations outside the tags.
+4. Do NOT invent behavior not explicitly visible in the source code.
+5. Do NOT infer external system behavior.
+6. Keep the documentation concise and precise.
+7. Only include sections that are directly justified by the code.
+
+STRUCTURAL RULES (CRITICAL):
+- Always include a one-sentence summary starting with a strong action verb.
+- Include "{style.param_tag}" ONLY if the component has parameters.
+- Include "{style.return_tag}" ONLY if the function returns a value or has an explicit return statement.
+- Include "{style.raises_tag}" ONLY if:
+    - The code contains a literal `throw` (JS/TS/Java) or `raise` (Python) statement.
+    - Do NOT infer exceptions from indexing, property access, runtime behaviour,
+      dictionary lookups, file I/O, JSON parsing, or any implicit operation.
+- Do NOT include empty sections.
+- Do NOT include examples unless the code clearly demonstrates usage patterns.
+- If behavior is uncertain, omit it rather than guessing.
 
 {format_block}
+
+Summary Precision:
+- Begin the summary with a strong, specific action verb (e.g., "Binds",
+  "Validates", "Merges", "Wraps", "Delegates", "Returns").
+- NEVER start with generic phrases: "This function is used to...",
+  "Helper function that...", "A function that...", "Used to...".
+- Capture the *what* and *why* in one sentence; omit the *how*.
+
+Brevity Requirement:
+- Maximum 8-15 lines unless complexity demands more.
+- Avoid repeating parameter names in the summary.
+- Prefer direct, technical language.
+- For trivial helpers (single return, simple delegation), limit output
+  to the summary line plus @param/@returns — no extra prose.
+
+Evidence Constraint:
+Every documented behavior must be traceable to visible code.
+If you cannot point to a specific statement in the source code that supports a claim, do not include it.
+A missing section is always preferable to an invented one.
 
 CRITICAL: Your ENTIRE useful output must be wrapped in <DOCSTRING>...</DOCSTRING> tags."""
 
@@ -255,17 +392,30 @@ CRITICAL: Your ENTIRE useful output must be wrapped in <DOCSTRING>...</DOCSTRING
                 extra += f"\n- Path: {component.http_path}"
             return f"""DOCUMENTING AN API ENDPOINT:
 - Summary: What the endpoint does.{extra}
-- Document path parameters, query parameters, request body.
-- Document response model and status codes.
-- Note authentication requirements if visible."""
+- Document path parameters, query parameters, request body ONLY if they appear in the function signature.
+- Document the return value based on what the function actually returns.
+- Include Raises ONLY if the function body explicitly raises an exception (e.g., 'raise HTTPException').
+- Do NOT infer exceptions from imports, decorators, or framework conventions.
+- Do NOT document status codes unless they are explicitly set in the code.
+- Note authentication requirements ONLY if visible in the function body."""
 
         # FUNCTION / METHOD (default)
-        return """DOCUMENTING A FUNCTION / METHOD:
-- Summary: What action it performs and the outcome.
-- Args: all parameters with types.
-- Returns: return value with type (omit if void/None).
-- Raises / Throws: exceptions that may be raised.
-- Side effects if any."""
+        lang = component.language.lower()
+        js_extra = ""
+        if lang in ("javascript", "typescript", "js", "ts"):
+            js_extra = """
+- If the function uses `instanceof` checks or guards constructor invocation,
+  state that in the summary (e.g., "Ensures invocation as a constructor.").
+- If the function modifies `.prototype`, describe the augmentation.
+- For exported module entry points, lead with the module-level purpose."""
+
+        return f"""DOCUMENTING A FUNCTION / METHOD:
+- Summary: Begin with a strong action verb describing the primary operation.
+- Document parameters if present.
+- Document return value if present or explicitly returned.
+- Include @throws / Raises ONLY if the body contains a literal throw/raise.
+- Mention side effects only if the code performs I/O, state mutation, or external calls.
+- Keep documentation minimal and precise.{js_extra}"""
 
     # ------------------------------------------------------------------
     # Context formatting (Reader / Searcher)
@@ -373,6 +523,59 @@ CRITICAL: Your ENTIRE useful output must be wrapped in <DOCSTRING>...</DOCSTRING
 
         type_instructions = self._build_type_instructions(component)
 
+        # --- Static analysis hints ---
+        hints = self._compute_static_hints(component.source_code, component.language)
+        is_trivial = self._is_trivial_function(component.source_code, component.language)
+
+        hint_lines = ["STATIC ANALYSIS HINTS (pre-computed from source):"]
+        hint_lines.append(f"  detects_throw   = {hints['detects_throw']}")
+        hint_lines.append(f"  uses_instanceof = {hints['uses_instanceof']}")
+        hint_lines.append(f"  modifies_prototype = {hints['modifies_prototype']}")
+        hint_lines.append(f"  is_exported     = {hints['is_exported']}")
+        hint_lines.append(f"  uses_await      = {hints['uses_await']}")
+        hint_lines.append(f"  accepts_callback = {hints['accepts_callback']}")
+        hint_lines.append(f"  is_trivial      = {is_trivial}")
+        hint_block = "\n".join(hint_lines)
+
+        # Conditional guidance based on hints
+        hint_guidance_parts: List[str] = []
+        if not hints["detects_throw"]:
+            hint_guidance_parts.append(
+                f">> detects_throw is FALSE — do NOT include a "
+                f"{style.raises_tag} section."
+            )
+        else:
+            hint_guidance_parts.append(
+                f">> detects_throw is TRUE — include a {style.raises_tag} "
+                f"section documenting only the exceptions that are literally thrown."
+            )
+        if hints["uses_instanceof"]:
+            hint_guidance_parts.append(
+                ">> uses_instanceof is TRUE — mention constructor-invocation "
+                "guarding in the summary if applicable."
+            )
+        if hints["modifies_prototype"]:
+            hint_guidance_parts.append(
+                ">> modifies_prototype is TRUE — describe the prototype "
+                "augmentation in the summary."
+            )
+        if hints["is_exported"]:
+            hint_guidance_parts.append(
+                ">> is_exported is TRUE — lead the summary with the "
+                "module-level purpose."
+            )
+        if hints["accepts_callback"]:
+            hint_guidance_parts.append(
+                ">> accepts_callback is TRUE — document the expected "
+                "callback signature if inferable."
+            )
+        if is_trivial:
+            hint_guidance_parts.append(
+                ">> is_trivial is TRUE — keep documentation to a single "
+                "summary line plus @param/@returns. No extra prose."
+            )
+        hint_guidance = "\n".join(hint_guidance_parts)
+
         # Parameter metadata
         param_info = ""
         if component.parameters:
@@ -415,6 +618,10 @@ COMPONENT NAME: {component.name}
 {async_note}
 {param_info}
 
+{hint_block}
+
+{hint_guidance}
+
 AVAILABLE CONTEXT:
 {context_block}
 {refinement_block}
@@ -427,7 +634,10 @@ Generate the documentation now. Remember:
 1. Wrap output in <DOCSTRING> and </DOCSTRING> tags.
 2. Do NOT include comment delimiters ({style.comment_prefix} / {style.comment_suffix}).
 3. Do NOT include triple quotes, code fences, or markdown formatting.
-4. Only document what is visible in the code."""
+4. Only document what is visible in the code.
+5. NEVER add {style.raises_tag} unless detects_throw is TRUE above.
+6. Do NOT infer exceptions from imports, type hints, decorators, or framework behavior.
+7. Start the summary with a strong action verb — no generic preambles."""
 
     # ------------------------------------------------------------------
     # Documentation object factory
@@ -525,12 +735,6 @@ Generate the documentation now. Remember:
             # Wrap in Documentation object
             documentation = self._create_documentation(component, response, style)
             self._save_output(component, documentation)
-
-            # Log the generated docstring
-            self.logger.info(
-                f"Generated docstring for {component.name} ({len(documentation.docstring)} chars): "
-                f"{documentation.docstring[:150]}..."
-            )
 
             return AgentResult(
                 agent_name=self.agent_name,
