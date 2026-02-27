@@ -526,6 +526,12 @@ Generate the documentation now. Remember:
             documentation = self._create_documentation(component, response, style)
             self._save_output(component, documentation)
 
+            # Log the generated docstring
+            self.logger.info(
+                f"Generated docstring for {component.name} ({len(documentation.docstring)} chars): "
+                f"{documentation.docstring[:150]}..."
+            )
+
             return AgentResult(
                 agent_name=self.agent_name,
                 status=AgentStatus.SUCCESS,
@@ -563,6 +569,7 @@ Generate the documentation now. Remember:
             component = context.component
             style = self._get_style(component)
             self.logger.info(f"Refining docs for {component.name}")
+            self.logger.info(f"Verifier feedback: {verifier_feedback}")
 
             reader_ctx = self._format_reader_context(context.get_result('reader'))
             searcher_ctx = self._format_searcher_context(context.get_result('searcher'))
@@ -581,6 +588,12 @@ Generate the documentation now. Remember:
 
             documentation = self._create_documentation(component, response, style)
             self._save_output(component, documentation)
+
+            # Log the refined docstring
+            self.logger.info(
+                f"Refined docstring for {component.name} ({len(documentation.docstring)} chars): "
+                f"{documentation.docstring[:150]}..."
+            )
 
             return AgentResult(
                 agent_name=self.agent_name,
