@@ -1,18 +1,18 @@
 """
-Test Navigator Module on Python The-Stack Dataset
+Test Navigator Module on Java The-Stack Dataset
 
 This script:
-1. Downloads Python code from bigcode/the-stack
+1. Downloads Java code from bigcode/the-stack
 2. Extracts components using your navigator
 3. Validates extraction quality
 4. Generates comprehensive metrics and errors
 
 Usage:
-    python test_navigator_python_codesearchnet.py [max_samples]
+    python test_navigator_java_codesearchnet.py [max_samples]
     
 Example:
-    python test_navigator_python_codesearchnet.py 5  # Test on 5 samples
-    python test_navigator_python_codesearchnet.py 100 # Test on 100 samples
+    python test_navigator_java_codesearchnet.py 5  # Test on 5 samples
+    python test_navigator_java_codesearchnet.py 100 # Test on 100 samples
 """
 
 import sys
@@ -22,13 +22,17 @@ from typing import Dict, List, Any
 from collections import defaultdict
 from datasets import load_dataset
 
+# Add project root to sys.path
+project_root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(project_root))
+
 # Import validators and navigator
 from backend.validators.validation_framework import ValidationFramework
 from backend.navigator.languages.adapter_registry import AdapterRegistry
 
 
-class PythonCodeSearchNetTester:
-    """Test navigator on Python the-stack dataset."""
+class JavaCodeSearchNetTester:
+    """Test navigator on Java CodeSearchNet dataset."""
     
     def __init__(self, max_samples: int = 10):
         self.max_samples = max_samples
@@ -45,10 +49,10 @@ class PythonCodeSearchNetTester:
     def run(self):
         """Execute full test pipeline."""
         print("\n" + "="*80)
-        print("PYTHON NAVIGATOR VALIDATION - THE-STACK DATASET")
+        print("JAVA NAVIGATOR VALIDATION - THE-STACK DATASET")
         print("="*80)
         
-        print(f"\nPhase 1: Downloading Python dataset (max {self.max_samples} samples)...")
+        print(f"\nPhase 1: Downloading Java dataset (max {self.max_samples} samples)...")
         samples = self._download_dataset()
         
         print(f"\nPhase 2: Extracting components with Navigator...")
@@ -64,12 +68,12 @@ class PythonCodeSearchNetTester:
         self._print_summary()
     
     def _download_dataset(self) -> List[Dict[str, Any]]:
-        """Download Python the-stack dataset split."""
+        """Download Java the-stack dataset split."""
         try:
             print(f"Loading the-stack dataset (streaming, max {self.max_samples} samples)...")
             dataset = load_dataset(
                 "bigcode/the-stack",
-                data_dir="data/python",
+                data_dir="data/java",
                 split="train",
                 streaming=True
             )
@@ -81,7 +85,7 @@ class PythonCodeSearchNetTester:
                     break
                 samples.append(sample)
             
-            print(f"✓ Loaded {len(samples)} Python samples from the-stack")
+            print(f"✓ Loaded {len(samples)} Java samples from the-stack")
             return samples
         except Exception as e:
             print(f"✗ Failed to load dataset: {e}")
@@ -91,13 +95,13 @@ class PythonCodeSearchNetTester:
         """Extract components from each sample.
         
         The-stack dataset format has 'content' field for code.
-        Skip non-Python code gracefully (parser will fail, which indicates non-Python).
+        Skip non-Java code gracefully (parser will fail, which indicates non-Java).
         """
         if not samples:
             print("✗ No samples to process")
             return
         
-        python_adapter = self.adapter_registry.get_adapter('python')
+        java_adapter = self.adapter_registry.get_adapter('java')
         
         for i, sample in enumerate(samples, 1):
             try:
@@ -110,34 +114,34 @@ class PythonCodeSearchNetTester:
                     continue
                 
                 # Extract metadata from available fields
-                file_path = sample.get('path', f'sample_{i}.py')
+                file_path = sample.get('path', f'sample_{i}.java')
                 repo = sample.get('repo_name', 'the-stack')
                 comment = sample.get('summary', '')
                 
-                # Ensure file has .py extension
-                if not file_path.endswith('.py'):
-                    file_path = f'{file_path}.py'
+                # Ensure file has .java extension
+                if not file_path.endswith('.java'):
+                    file_path = f'{file_path}.java'
                 
                 # Show progress
                 code_preview = source_code[:50].replace('\n', ' ')
                 print(f"\n[{i}/{len(samples)}] {repo}/{file_path}")
                 print(f"  Code: {code_preview}...")
                 
-                # Parse - if this fails, it's likely not Python, so skip gracefully
-                tree = python_adapter.parse(source_code)
+                # Parse - if this fails, it's likely not Java, so skip gracefully
+                tree = java_adapter.parse(source_code)
                 
-                # Check for parse errors indicating non-Python code
+                # Check for parse errors indicating non-Java code
                 if tree.root_node.has_error:
-                    print(f"  ↷ Not valid Python (skipped)")
+                    print(f"  ↷ Not valid Java (skipped)")
                     self.metrics['failed'] += 1
-                    self.metrics['error_summary']['Not valid Python'] += 1
+                    self.metrics['error_summary']['Not valid Java'] += 1
                     continue
                 
                 # Extract components
-                components = python_adapter.extract_components(tree, source_code, file_path, repo)
+                components = java_adapter.extract_components(tree, source_code, file_path, repo)
                 
                 if not components:
-                    print(f"  ℹ No components extracted (may be incomplete Python snippet)")
+                    print(f"  ℹ No components extracted (may be incomplete Java snippet)")
                     self.metrics['failed'] += 1
                     self.metrics['error_summary']['No components extracted'] += 1
                     continue
@@ -157,7 +161,7 @@ class PythonCodeSearchNetTester:
                 # Extract dependencies for each component
                 for cid, component in components.items():
                     try:
-                        deps = python_adapter.resolve_dependencies(component, tree, source_code, components)
+                        deps = java_adapter.resolve_dependencies(component, tree, source_code, components)
                         component.depends_on = list(deps)
                     except Exception as dep_err:
                         # Log but continue if dependency resolution fails
@@ -216,15 +220,15 @@ class PythonCodeSearchNetTester:
     
     def _save_results(self):
         """Save results to JSON file."""
-        output_dir = Path('data/validation/the-stack')
+        output_dir = project_root / 'data' / 'validation' / 'the-stack'
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        filename = f"python_navigator_results_{self.max_samples}_samples.json"
+        filename = f"java_navigator_results_{self.max_samples}_samples.json"
         filepath = output_dir / filename
         
         output = {
             'metadata': {
-                'language': 'python',
+                'language': 'java',
                 'dataset': 'the-stack',
                 'max_samples': self.max_samples,
                 'total_processed': self.metrics['total_samples'],
@@ -287,7 +291,7 @@ def main():
             print(f"Invalid sample count: {sys.argv[1]}")
             sys.exit(1)
     
-    tester = PythonCodeSearchNetTester(max_samples=max_samples)
+    tester = JavaCodeSearchNetTester(max_samples=max_samples)
     tester.run()
 
 

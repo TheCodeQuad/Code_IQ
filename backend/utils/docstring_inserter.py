@@ -523,7 +523,32 @@ class DocstringInserter:
         comp_type = getattr(component, 'type', 'function')
         if hasattr(comp_type, 'value'):
             comp_type = comp_type.value
-        
+
+        # Skip types that have no valid Python docstring position.
+        # Global variables (and similar field types) are bare assignments; Python
+        # has no docstring syntax for them.  Without this guard,
+        # _find_definition_end scans forward past the assignment until it finds
+        # the next ':'-terminated line (a class/def header), then inserts the
+        # docstring *inside that next definition* – corrupting the output file.
+        # This mirrors the identical guard already present in prepare_insertions()
+        # (batch mode) at line ~581.
+        _SKIP_COMPONENT_TYPES = {'global_variable', 'static_field', 'field'}
+        if comp_type in _SKIP_COMPONENT_TYPES:
+            logger.info(
+                "Skipping docstring insertion for %s '%s' – type '%s' has no "
+                "valid Python docstring position",
+                comp_type,
+                getattr(component, 'id', 'unknown'),
+                comp_type,
+            )
+            return InsertionResult(
+                component_id=getattr(component, 'id', 'unknown'),
+                file_path=file_path,
+                success=True,
+                action='skipped',
+                message=f"Component type '{comp_type}' does not support docstring insertion",
+            )
+
         return self.insert_single_docstring(
             component_id=getattr(component, 'id', 'unknown'),
             docstring=docstring_data.get('docstring', ''),
