@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import Link from "next/link"
 import { useParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
@@ -8,7 +8,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Switch } from "@/components/ui/switch"
 import {
   Code2,
   ArrowLeft,
@@ -21,197 +20,173 @@ import {
   FileText,
   Book,
   BarChart3,
+  Loader2,
+  AlertCircle,
 } from "lucide-react"
-import { useAnalysis, type AnalysisRecord } from "@/lib/analysis-context"
 
-const fileTree = [
-  {
-    name: "api",
-    type: "folder",
-    children: [
-      { name: "gateway.py", type: "file", documented: true },
-      { name: "routes.py", type: "file", documented: true },
-      { name: "middleware.py", type: "file", documented: true },
-    ],
-  },
-  {
-    name: "auth",
-    type: "folder",
-    children: [
-      { name: "handler.py", type: "file", documented: true },
-      { name: "token.py", type: "file", documented: true },
-      { name: "utils.py", type: "file", documented: false },
-    ],
-  },
-  {
-    name: "utils",
-    type: "folder",
-    children: [
-      { name: "validation.py", type: "file", documented: true },
-      { name: "helpers.py", type: "file", documented: true },
-    ],
-  },
-  { name: "config.py", type: "file", documented: true },
-  { name: "main.py", type: "file", documented: true },
-]
+// ── Types ────────────────────────────────────────────────────────────
 
-const codeExamples = {
-  before: `def authenticate_user(username, password, remember_me=False):
-    user = db.query(User).filter_by(username=username).first()
-    if user and verify_password(password, user.password_hash):
-        token = create_token(user.id, remember_me)
-        user.last_login = datetime.now()
-        db.commit()
-        log_auth_attempt(username, True)
-        return token
-    log_auth_attempt(username, False)
-    return None`,
-  after: `def authenticate_user(username, password, remember_me=False):
-    """Authenticate a user and return an authentication token.
-
-    This function validates the provided credentials against the database,
-    implementing secure password verification using bcrypt. Upon successful
-    authentication, it generates a JWT token for subsequent API requests.
-
-    Args:
-        username: The user's unique identifier (email or username).
-        password: The plaintext password to verify.
-        remember_me: If True, extends token expiration to 30 days.
-            Defaults to False.
-
-    Returns:
-        AuthToken: A valid authentication token if credentials are correct.
-        None: If authentication fails due to invalid credentials.
-
-    Raises:
-        DatabaseConnectionError: If unable to connect to the user database.
-        RateLimitExceeded: If too many authentication attempts from this IP.
-
-    Example:
-        >>> token = authenticate_user("john@example.com", "secret123")
-        >>> if token:
-        ...     print(f"Authenticated: {token.user_id}")
-    """
-    user = db.query(User).filter_by(username=username).first()
-    if user and verify_password(password, user.password_hash):
-        token = create_token(user.id, remember_me)
-        user.last_login = datetime.now()
-        db.commit()
-        log_auth_attempt(username, True)
-        return token
-    log_auth_attempt(username, False)
-    return None`,
+interface TreeNode {
+  name: string
+  type: "file" | "folder"
+  path: string
+  size?: number
+  children?: TreeNode[]
 }
 
-const readmeContent = `# API Gateway
-
-A high-performance API gateway service built with Python and FastAPI.
-
-## Overview
-
-This service provides a centralized entry point for all API requests, handling:
-- Request routing and load balancing
-- Authentication and authorization
-- Rate limiting and throttling
-- Request/response transformation
-- Logging and monitoring
-
-## Installation
-
-\`\`\`bash
-pip install -r requirements.txt
-python main.py
-\`\`\`
-
-## Configuration
-
-Configuration is managed through environment variables:
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| \`API_PORT\` | Server port | 8000 |
-| \`DB_URL\` | Database connection string | - |
-| \`JWT_SECRET\` | Secret key for JWT tokens | - |
-
-## API Reference
-
-### Authentication
-
-#### POST /auth/login
-
-Authenticate a user and return an access token.
-
-**Request Body:**
-\`\`\`json
-{
-  "username": "string",
-  "password": "string",
-  "remember_me": false
+interface RepoDetail {
+  id: string
+  repo_name: string
+  repo_url?: string
+  language?: string
+  file_count: number
+  total_lines: number
+  status: string
+  stats?: Record<string, any>
+  evaluation?: {
+    accuracy?: number
+    completeness?: number
+    clarity?: number
+    consistency?: number
+    overall_score?: number
+  }
 }
-\`\`\`
 
-**Response:**
-\`\`\`json
-{
-  "access_token": "string",
-  "token_type": "bearer",
-  "expires_in": 3600
-}
-\`\`\`
-
-## License
-
-MIT License
-`
+// ── Page ─────────────────────────────────────────────────────────────
 
 export default function ResultsPage() {
   const params = useParams()
-  const analysisId = params.id as string
-  const { getAnalysis } = useAnalysis()
-  const analysis = getAnalysis(analysisId)
+  const repoId = params.id as string
 
+  const [repo, setRepo] = useState<RepoDetail | null>(null)
+  const [tree, setTree] = useState<TreeNode[]>([])
   const [selectedFile, setSelectedFile] = useState("")
-  const [showBefore, setShowBefore] = useState(false)
+  const [fileContent, setFileContent] = useState("")
   const [copied, setCopied] = useState(false)
   const [activeTab, setActiveTab] = useState<"code" | "readme" | "metrics">("code")
+  const [loading, setLoading] = useState(true)
+  const [treeLoading, setTreeLoading] = useState(true)
+  const [fileLoading, setFileLoading] = useState(false)
+  const [error, setError] = useState("")
 
-  // Build real file tree from analysis components
-  const realFileTree = analysis?.components ? buildFileTree(analysis.components) : fileTree
-  const repoName = analysis?.repoName || "api-gateway"
-  const analysisStatus = analysis?.status || "completed"
-
-  // Build code examples from real components
-  const realCodeExamples = analysis?.components ? buildCodeExamples(analysis.components, selectedFile) : codeExamples
-
-  // Set default selected file
+  // Fetch repo details
   useEffect(() => {
-    if (analysis?.components) {
-      const firstFile = Object.values(analysis.components)[0]?.file_path
-      if (firstFile && !selectedFile) {
-        setSelectedFile(firstFile)
+    async function fetchRepo() {
+      try {
+        const res = await fetch(`/api/repos/${repoId}`)
+        if (!res.ok) throw new Error("Failed to load repository")
+        const data = await res.json()
+        setRepo(data)
+      } catch (err: any) {
+        setError(err.message || "Failed to load repository")
+      } finally {
+        setLoading(false)
       }
-    } else if (!selectedFile) {
-      setSelectedFile("auth/handler.py")
     }
-  }, [analysis, selectedFile])
+    fetchRepo()
+  }, [repoId])
+
+  // Fetch file tree
+  useEffect(() => {
+    async function fetchTree() {
+      try {
+        const res = await fetch(`/api/repos/${repoId}/tree`)
+        if (!res.ok) throw new Error("Failed to load file tree")
+        const data = await res.json()
+        setTree(data.tree || [])
+
+        // Auto-select first file
+        const first = findFirstFile(data.tree || [])
+        if (first) {
+          setSelectedFile(first.path)
+        }
+      } catch {
+        // tree loading failed, leave empty
+      } finally {
+        setTreeLoading(false)
+      }
+    }
+    fetchTree()
+  }, [repoId])
+
+  // Fetch file content when selection changes
+  const fetchFileContent = useCallback(
+    async (filePath: string) => {
+      if (!filePath) return
+      setFileLoading(true)
+      try {
+        const res = await fetch(
+          `/api/repos/${repoId}/file?path=${encodeURIComponent(filePath)}`
+        )
+        if (!res.ok) throw new Error("Failed to load file")
+        const data = await res.json()
+        setFileContent(data.content || "")
+      } catch {
+        setFileContent("// Could not load file contents")
+      } finally {
+        setFileLoading(false)
+      }
+    },
+    [repoId]
+  )
+
+  useEffect(() => {
+    if (selectedFile) {
+      fetchFileContent(selectedFile)
+    }
+  }, [selectedFile, fetchFileContent])
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(showBefore ? realCodeExamples.before : realCodeExamples.after)
+    navigator.clipboard.writeText(fileContent)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
 
-  const handleExportAll = () => {
-    if (!analysis?.components) return
-    const blob = new Blob([JSON.stringify(analysis.components, null, 2)], {
-      type: "application/json",
-    })
+  const handleExport = () => {
+    const blob = new Blob([fileContent], { type: "text/plain" })
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
     a.href = url
-    a.download = `${repoName}-analysis-${Date.now()}.json`
+    a.download = selectedFile.split("/").pop() || "file.txt"
     a.click()
     URL.revokeObjectURL(url)
+  }
+
+  // Loading state
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="w-10 h-10 animate-spin text-primary mx-auto mb-4" />
+          <p className="text-muted-foreground">Loading analysis results...</p>
+        </div>
+      </div>
+    )
+  }
+
+  // Error state
+  if (error || !repo) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center p-6">
+        <Card className="border-border max-w-md">
+          <CardContent className="p-8 text-center">
+            <AlertCircle className="w-12 h-12 text-destructive mx-auto mb-4" />
+            <h2 className="text-xl font-semibold text-foreground mb-2">
+              {error || "Repository Not Found"}
+            </h2>
+            <p className="text-muted-foreground mb-6">
+              The requested repository could not be found.
+            </p>
+            <Link href="/dashboard">
+              <Button>
+                <ArrowLeft className="w-4 h-4 mr-2" />
+                Back to Dashboard
+              </Button>
+            </Link>
+          </CardContent>
+        </Card>
+      </div>
+    )
   }
 
   return (
@@ -231,20 +206,33 @@ export default function ResultsPage() {
                 <Code2 className="w-5 h-5 text-primary-foreground" />
               </div>
               <div>
-                <span className="text-lg font-semibold text-foreground">{repoName}</span>
-                <Badge className="ml-2 bg-chart-3 text-card">{analysisStatus === "completed" ? "Completed" : analysisStatus}</Badge>
+                <span className="text-lg font-semibold text-foreground">
+                  {repo.repo_name}
+                </span>
+                <Badge className="ml-2 bg-chart-3 text-card">
+                  {repo.status === "completed" ? "Completed" : repo.status}
+                </Badge>
+                {repo.language && (
+                  <Badge variant="outline" className="ml-2">
+                    {repo.language}
+                  </Badge>
+                )}
               </div>
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <Link href={`/dashboard/analysis/${analysisId}/agents`}>
+            <Link href={`/dashboard/analysis/${repoId}/agents`}>
               <Button variant="outline" size="sm" className="border-border bg-transparent">
                 View Agent Reasoning
               </Button>
             </Link>
-            <Button className="bg-foreground text-background hover:bg-foreground/90" onClick={handleExportAll}>
+            <Button
+              className="bg-foreground text-background hover:bg-foreground/90"
+              onClick={handleExport}
+              disabled={!fileContent}
+            >
               <Download className="w-4 h-4 mr-2" />
-              Export All
+              Export File
             </Button>
           </div>
         </div>
@@ -267,77 +255,99 @@ export default function ResultsPage() {
             </TabsTrigger>
           </TabsList>
 
+          {/* ── Documentation Tab ── */}
           <TabsContent value="code">
-            <div className="grid lg:grid-cols-4 gap-6">
-              {/* File Tree */}
-              <Card className="border-border lg:col-span-1">
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-sm flex items-center gap-2">
-                    <FolderOpen className="w-4 h-4" />
-                    File Explorer
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="p-0">
-                  <ScrollArea className="h-[500px]">
-                    <div className="p-4 space-y-1">
-                      {realFileTree.map((item: any) => (
-                        <FileTreeItem
-                          key={item.name}
-                          item={item}
-                          selectedFile={selectedFile}
-                          onSelect={setSelectedFile}
-                        />
-                      ))}
-                    </div>
-                  </ScrollArea>
+            {treeLoading ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="w-8 h-8 animate-spin text-primary" />
+              </div>
+            ) : tree.length === 0 ? (
+              <Card className="border-border">
+                <CardContent className="p-12 text-center">
+                  <FolderOpen className="w-16 h-16 text-muted-foreground mx-auto mb-4" />
+                  <p className="text-muted-foreground">
+                    No files found in this repository
+                  </p>
                 </CardContent>
               </Card>
-
-              {/* Code View */}
-              <Card className="border-border lg:col-span-3">
-                <CardHeader className="pb-3 flex flex-row items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <CardTitle className="text-sm font-mono">{selectedFile}</CardTitle>
-                    <Badge variant="outline" className="border-chart-3 text-chart-3">
-                      Documented
-                    </Badge>
-                  </div>
-                  <div className="flex items-center gap-4">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm text-muted-foreground">Show original</span>
-                      <Switch checked={showBefore} onCheckedChange={setShowBefore} />
-                    </div>
-                    <Button variant="outline" size="sm" className="border-border bg-transparent" onClick={handleCopy}>
-                      {copied ? (
-                        <>
-                          <Check className="w-4 h-4 mr-2" />
-                          Copied
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-4 h-4 mr-2" />
-                          Copy
-                        </>
-                      )}
-                    </Button>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <div className="relative">
-                    <pre className="bg-foreground text-background p-6 rounded-lg text-sm overflow-x-auto font-mono leading-relaxed">
-                      <code>{showBefore ? realCodeExamples.before : realCodeExamples.after}</code>
-                    </pre>
-                    {!showBefore && (
-                      <div className="absolute top-4 right-4">
-                        <Badge className="bg-chart-3 text-card">AI Generated</Badge>
+            ) : (
+              <div className="grid lg:grid-cols-4 gap-6">
+                {/* File Tree */}
+                <Card className="border-border lg:col-span-1">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-sm flex items-center gap-2">
+                      <FolderOpen className="w-4 h-4" />
+                      File Explorer
+                      <Badge variant="outline" className="ml-auto text-xs">
+                        {countFiles(tree)} files
+                      </Badge>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-0">
+                    <ScrollArea className="h-[600px]">
+                      <div className="p-4 space-y-1">
+                        {tree.map((item) => (
+                          <FileTreeItem
+                            key={item.path}
+                            item={item}
+                            selectedFile={selectedFile}
+                            onSelect={setSelectedFile}
+                          />
+                        ))}
                       </div>
+                    </ScrollArea>
+                  </CardContent>
+                </Card>
+
+                {/* Code View */}
+                <Card className="border-border lg:col-span-3">
+                  <CardHeader className="pb-3 flex flex-row items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <CardTitle className="text-sm font-mono truncate max-w-md" title={selectedFile}>
+                        {selectedFile || "No file selected"}
+                      </CardTitle>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="border-border bg-transparent"
+                        onClick={handleCopy}
+                        disabled={!fileContent}
+                      >
+                        {copied ? (
+                          <>
+                            <Check className="w-4 h-4 mr-2" />
+                            Copied
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-4 h-4 mr-2" />
+                            Copy
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    {fileLoading ? (
+                      <div className="flex items-center justify-center py-24">
+                        <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                      </div>
+                    ) : (
+                      <ScrollArea className="h-[600px]">
+                        <pre className="bg-foreground text-background p-6 rounded-lg text-sm font-mono leading-relaxed whitespace-pre-wrap">
+                          <code>{fileContent || "// Select a file to view its contents"}</code>
+                        </pre>
+                      </ScrollArea>
                     )}
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
+                  </CardContent>
+                </Card>
+              </div>
+            )}
           </TabsContent>
 
+          {/* ── README Tab ── */}
           <TabsContent value="readme">
             <Card className="border-border">
               <CardHeader className="pb-3 flex flex-row items-center justify-between">
@@ -345,21 +355,23 @@ export default function ResultsPage() {
                   <FileText className="w-5 h-5" />
                   Generated README.md
                 </CardTitle>
-                <Button variant="outline" size="sm" className="border-border bg-transparent">
+                <Button variant="outline" size="sm" className="border-border bg-transparent" disabled>
                   <Download className="w-4 h-4 mr-2" />
                   Download
                 </Button>
               </CardHeader>
               <CardContent>
-                <div className="prose prose-sm max-w-none bg-card p-6 rounded-lg border border-border">
-                  <pre className="whitespace-pre-wrap font-mono text-sm text-foreground">{readmeContent}</pre>
+                <div className="bg-secondary/50 p-12 rounded-lg border border-border text-center">
+                  <Book className="w-16 h-16 text-muted-foreground mx-auto mb-4" />
+                  <p className="text-muted-foreground">README generation coming soon...</p>
                 </div>
               </CardContent>
             </Card>
           </TabsContent>
 
+          {/* ── Evaluation Tab ── */}
           <TabsContent value="metrics">
-            <EvaluationDashboard />
+            <EvaluationDashboard repo={repo} />
           </TabsContent>
         </Tabs>
       </main>
@@ -367,59 +379,62 @@ export default function ResultsPage() {
   )
 }
 
+// ── File Tree Item ───────────────────────────────────────────────────
+
 function FileTreeItem({
   item,
   selectedFile,
   onSelect,
   depth = 0,
 }: {
-  item: any
+  item: TreeNode
   selectedFile: string
-  onSelect: (file: string) => void
+  onSelect: (path: string) => void
   depth?: number
 }) {
-  const [expanded, setExpanded] = useState(true)
+  const [expanded, setExpanded] = useState(depth < 2)
   const isFolder = item.type === "folder"
-  const fullPath = item.name
+  const isSelected = selectedFile === item.path
 
   return (
     <div style={{ paddingLeft: `${depth * 12}px` }}>
       <button
         type="button"
         className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm transition-colors ${
-          selectedFile === fullPath
-            ? "bg-primary/10 text-foreground"
+          isSelected
+            ? "bg-primary/10 text-foreground font-medium"
             : "text-muted-foreground hover:bg-secondary hover:text-foreground"
         }`}
         onClick={() => {
           if (isFolder) {
             setExpanded(!expanded)
           } else {
-            onSelect(fullPath)
+            onSelect(item.path)
           }
         }}
       >
         {isFolder ? (
           <>
-            <ChevronRight className={`w-4 h-4 transition-transform ${expanded ? "rotate-90" : ""}`} />
-            <FolderOpen className="w-4 h-4" />
+            <ChevronRight
+              className={`w-4 h-4 transition-transform ${expanded ? "rotate-90" : ""}`}
+            />
+            <FolderOpen className="w-4 h-4 text-blue-500" />
           </>
         ) : (
           <>
             <span className="w-4" />
-            <FileCode className="w-4 h-4" />
+            <FileCode className="w-4 h-4 text-purple-500" />
           </>
         )}
-        <span className="flex-1 text-left">{item.name}</span>
-        {!isFolder && item.documented && (
-          <div className="w-2 h-2 rounded-full bg-chart-3" />
-        )}
+        <span className="flex-1 text-left truncate" title={item.name}>
+          {item.name}
+        </span>
       </button>
-      {isFolder && expanded && item.children && (
-        <div>
-          {item.children.map((child: any) => (
+      {isFolder && expanded && item.children && item.children.length > 0 && (
+        <div className="mt-0.5">
+          {item.children.map((child) => (
             <FileTreeItem
-              key={child.name}
+              key={child.path}
               item={child}
               selectedFile={selectedFile}
               onSelect={onSelect}
@@ -432,15 +447,42 @@ function FileTreeItem({
   )
 }
 
-function EvaluationDashboard() {
+// ── Evaluation Dashboard ─────────────────────────────────────────────
+
+function EvaluationDashboard({ repo }: { repo: RepoDetail }) {
+  const evaluation = repo.evaluation
+  const stats = repo.stats
+
   const metrics = [
-    { name: "Completeness", score: 94, description: "Coverage of all functions and classes" },
-    { name: "Helpfulness", score: 91, description: "Quality and usefulness of descriptions" },
-    { name: "Consistency", score: 96, description: "Uniform style across documentation" },
-    { name: "Accuracy", score: 89, description: "Correctness of parameter/return documentation" },
+    {
+      name: "Completeness",
+      score: evaluation?.completeness != null ? Math.round(evaluation.completeness) : null,
+      description: "Coverage of all functions and classes",
+    },
+    {
+      name: "Helpfulness",
+      score: evaluation?.clarity != null ? Math.round(evaluation.clarity) : null,
+      description: "Quality and usefulness of descriptions",
+    },
+    {
+      name: "Consistency",
+      score: evaluation?.consistency != null ? Math.round(evaluation.consistency) : null,
+      description: "Uniform style across documentation",
+    },
+    {
+      name: "Accuracy",
+      score: evaluation?.accuracy != null ? Math.round(evaluation.accuracy) : null,
+      description: "Correctness of parameter/return documentation",
+    },
   ]
 
-  const overallScore = Math.round(metrics.reduce((acc, m) => acc + m.score, 0) / metrics.length)
+  const scoredMetrics = metrics.filter((m) => m.score !== null)
+  const overallScore =
+    evaluation?.overall_score != null
+      ? Math.round(evaluation.overall_score)
+      : scoredMetrics.length > 0
+        ? Math.round(scoredMetrics.reduce((a, m) => a + (m.score || 0), 0) / scoredMetrics.length)
+        : null
 
   return (
     <div className="space-y-6">
@@ -449,11 +491,17 @@ function EvaluationDashboard() {
         <CardContent className="p-8">
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-2xl font-bold text-foreground">Documentation Quality Score</h2>
-              <p className="text-muted-foreground mt-1">Based on completeness, helpfulness, consistency, and accuracy</p>
+              <h2 className="text-2xl font-bold text-foreground">
+                Documentation Quality Score
+              </h2>
+              <p className="text-muted-foreground mt-1">
+                {repo.file_count} files &middot; {repo.total_lines.toLocaleString()} lines analysed
+              </p>
             </div>
             <div className="text-right">
-              <div className="text-6xl font-bold text-primary">{overallScore}</div>
+              <div className="text-6xl font-bold text-primary">
+                {overallScore ?? "\u2014"}
+              </div>
               <p className="text-muted-foreground">out of 100</p>
             </div>
           </div>
@@ -467,21 +515,25 @@ function EvaluationDashboard() {
             <CardContent className="p-6">
               <div className="flex items-center justify-between mb-4">
                 <span className="font-medium text-foreground">{metric.name}</span>
-                <span className="text-2xl font-bold text-foreground">{metric.score}%</span>
+                <span className="text-2xl font-bold text-foreground">
+                  {metric.score != null ? `${metric.score}%` : "\u2014"}
+                </span>
               </div>
               <div className="h-2 bg-secondary rounded-full overflow-hidden">
                 <div
                   className="h-full bg-primary rounded-full transition-all"
-                  style={{ width: `${metric.score}%` }}
+                  style={{ width: `${metric.score ?? 0}%` }}
                 />
               </div>
-              <p className="text-xs text-muted-foreground mt-3">{metric.description}</p>
+              <p className="text-xs text-muted-foreground mt-3">
+                {metric.description}
+              </p>
             </CardContent>
           </Card>
         ))}
       </div>
 
-      {/* Detailed Stats */}
+      {/* Coverage Statistics */}
       <div className="grid md:grid-cols-2 gap-6">
         <Card className="border-border">
           <CardHeader>
@@ -489,19 +541,14 @@ function EvaluationDashboard() {
           </CardHeader>
           <CardContent className="space-y-4">
             {[
-              { label: "Functions Documented", value: "234 / 234", percentage: 100 },
-              { label: "Classes Documented", value: "45 / 45", percentage: 100 },
-              { label: "Modules with README", value: "12 / 12", percentage: 100 },
-              { label: "Parameters Described", value: "512 / 534", percentage: 96 },
+              { label: "Total Files", value: `${repo.file_count}` },
+              { label: "Total Lines", value: repo.total_lines.toLocaleString() },
+              { label: "Language", value: repo.language || "Unknown" },
+              { label: "Status", value: repo.status },
             ].map((stat) => (
               <div key={stat.label} className="flex items-center justify-between">
                 <span className="text-sm text-muted-foreground">{stat.label}</span>
-                <div className="flex items-center gap-3">
-                  <span className="text-sm font-medium text-foreground">{stat.value}</span>
-                  <Badge variant="outline" className="border-chart-3 text-chart-3">
-                    {stat.percentage}%
-                  </Badge>
-                </div>
+                <span className="text-sm font-medium text-foreground">{stat.value}</span>
               </div>
             ))}
           </CardContent>
@@ -509,124 +556,56 @@ function EvaluationDashboard() {
 
         <Card className="border-border">
           <CardHeader>
-            <CardTitle className="text-lg">Verification Results</CardTitle>
+            <CardTitle className="text-lg">Export Options</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-4">
-            {[
-              { label: "Passed Verification", value: 222, color: "bg-chart-3" },
-              { label: "Auto-fixed Issues", value: 10, color: "bg-chart-1" },
-              { label: "Manual Review Needed", value: 2, color: "bg-chart-4" },
-              { label: "Failed Checks", value: 0, color: "bg-destructive" },
-            ].map((stat) => (
-              <div key={stat.label} className="flex items-center justify-between p-3 bg-secondary rounded-lg">
-                <div className="flex items-center gap-3">
-                  <div className={`w-3 h-3 rounded-full ${stat.color}`} />
-                  <span className="text-sm text-foreground">{stat.label}</span>
-                </div>
-                <span className="text-lg font-bold text-foreground">{stat.value}</span>
-              </div>
-            ))}
+          <CardContent>
+            <div className="grid grid-cols-2 gap-4">
+              {[
+                { label: "Documentation Bundle", format: "ZIP", icon: FileCode },
+                { label: "Evaluation Report", format: "PDF", icon: BarChart3 },
+                { label: "README Files", format: "MD", icon: FileText },
+                { label: "Full Export", format: "ZIP", icon: Download },
+              ].map((option) => (
+                <Button
+                  key={option.label}
+                  variant="outline"
+                  className="h-auto py-4 px-4 flex flex-col items-center gap-2 border-border bg-transparent"
+                >
+                  <option.icon className="w-6 h-6 text-muted-foreground" />
+                  <span className="font-medium text-foreground text-xs">
+                    {option.label}
+                  </span>
+                  <Badge variant="outline" className="border-border">
+                    {option.format}
+                  </Badge>
+                </Button>
+              ))}
+            </div>
           </CardContent>
         </Card>
       </div>
-
-      {/* Export Options */}
-      <Card className="border-border">
-        <CardHeader>
-          <CardTitle className="text-lg">Export Options</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid md:grid-cols-4 gap-4">
-            {[
-              { label: "Documentation Bundle", format: "ZIP", icon: FileCode },
-              { label: "Evaluation Report", format: "PDF", icon: BarChart3 },
-              { label: "README Files", format: "MD", icon: FileText },
-              { label: "Full Export", format: "ZIP", icon: Download },
-            ].map((option) => (
-              <Button key={option.label} variant="outline" className="h-auto py-4 px-4 flex flex-col items-center gap-2 border-border bg-transparent">
-                <option.icon className="w-6 h-6 text-muted-foreground" />
-                <span className="font-medium text-foreground">{option.label}</span>
-                <Badge variant="outline" className="border-border">{option.format}</Badge>
-              </Button>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
     </div>
   )
 }
-// ── Helpers to build real data from analysis components ──────────────
 
-function buildFileTree(components: Record<string, any>): any[] {
-  const tree: Record<string, any> = {}
-  
-  for (const comp of Object.values(components)) {
-    const filePath = comp.file_path || ""
-    const parts = filePath.replace(/\\/g, "/").split("/").filter(Boolean)
-    
-    let current = tree
-    for (let i = 0; i < parts.length; i++) {
-      const part = parts[i]
-      if (i === parts.length - 1) {
-        // File
-        if (!current[part]) {
-          current[part] = {
-            name: part,
-            type: "file",
-            documented: comp.has_docstring,
-            fullPath: filePath,
-          }
-        }
-      } else {
-        // Folder
-        if (!current[part]) {
-          current[part] = {
-            name: part,
-            type: "folder",
-            children: {},
-          }
-        }
-        current = current[part].children || {}
-      }
+// ── Helpers ──────────────────────────────────────────────────────────
+
+function findFirstFile(nodes: TreeNode[]): TreeNode | null {
+  for (const node of nodes) {
+    if (node.type === "file") return node
+    if (node.type === "folder" && node.children) {
+      const found = findFirstFile(node.children)
+      if (found) return found
     }
   }
-  
-  function toArray(obj: Record<string, any>): any[] {
-    return Object.values(obj).map((item: any) => {
-      if (item.type === "folder" && item.children) {
-        return { ...item, children: toArray(item.children) }
-      }
-      return item
-    }).sort((a: any, b: any) => {
-      if (a.type === "folder" && b.type !== "folder") return -1
-      if (a.type !== "folder" && b.type === "folder") return 1
-      return a.name.localeCompare(b.name)
-    })
-  }
-  
-  return toArray(tree)
+  return null
 }
 
-function buildCodeExamples(components: Record<string, any>, selectedFile: string): { before: string; after: string } {
-  const matchingComps = Object.values(components).filter(
-    (c: any) => c.file_path === selectedFile || c.file_path?.endsWith(selectedFile)
-  )
-  
-  if (matchingComps.length === 0) {
-    const first = Object.values(components)[0]
-    return {
-      before: first?.source_code || "// No source code available",
-      after: first?.docstring ? `${first.docstring}\n\n${first.source_code || ""}` : first?.source_code || "// No source code available",
-    }
+function countFiles(nodes: TreeNode[]): number {
+  let n = 0
+  for (const node of nodes) {
+    if (node.type === "file") n++
+    else if (node.children) n += countFiles(node.children)
   }
-  
-  const code = matchingComps.map((c: any) => c.source_code || "").join("\n\n")
-  const documented = matchingComps.map((c: any) => {
-    if (c.docstring) {
-      return `${c.docstring}\n\n${c.source_code || ""}`
-    }
-    return c.source_code || ""
-  }).join("\n\n")
-  
-  return { before: code, after: documented }
+  return n
 }
