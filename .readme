@@ -1,58 +1,6 @@
 to run the project 
 backend:
 set PYTHONPATH=%CD%\backend
-// ...existing code...
-
-callbacks: {
-  async signIn({ user, account }) {
-    if (account?.provider === "google" || account?.provider === "github") {
-      try {
-        const client = await clientPromise;
-        const db = client.db("codeiq");
-        const users = db.collection("users");
-
-        const existing = await users.findOne({ email: user.email });
-
-        if (!existing) {
-          const result = await users.insertOne({
-            name: user.name,
-            email: user.email,
-            image: user.image,
-            provider: account.provider,
-            createdAt: new Date(),
-          });
-          // ✅ Set id so jwt callback receives it
-          user.id = result.insertedId.toString();
-        } else {
-          // ✅ Set id from existing record
-          user.id = existing._id.toString();
-        }
-      } catch (error) {
-        console.error("signIn callback error:", error);
-        return false;
-      }
-    }
-    return true;
-  },
-
-  // ✅ jwt callback — runs after signIn, persists id into token
-  async jwt({ token, user }) {
-    if (user?.id) {
-      token.id = user.id; // first login — copy from user object
-    }
-    return token;
-  },
-
-  // ✅ session callback — exposes token.id to frontend session
-  async session({ session, token }) {
-    if (token?.id) {
-      session.user.id = token.id as string;
-    }
-    return session;
-  },
-},
-
-// ...existing code...
  
 frontend:
 cd frontend
