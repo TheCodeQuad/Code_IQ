@@ -426,3 +426,145 @@ async def get_repo_status(repo_id: str):
         "completed_at": doc.get("completed_at"),
         "updated_at": doc.get("updated_at"),
     }
+
+
+# ── File-tree endpoint ───────────────────────────────────────────────
+
+# Directories to skip when building the file tree
+_SKIP_DIRS = {
+    ".git", "node_modules", "__pycache__", ".venv", "venv",
+    "dist", "build", ".next", ".idea", ".vscode", ".mypy_cache",
+    ".pytest_cache", ".tox", "eggs", "*.egg-info",
+}
+
+# Source-code extensions we care about
+_SOURCE_EXTS = {
+    ".py", ".js", ".jsx", ".ts", ".tsx", ".java",
+    ".c", ".cpp", ".h", ".hpp", ".cs", ".go", ".rs",
+    ".rb", ".php", ".swift", ".kt", ".scala",
+    ".css", ".scss", ".html", ".vue", ".svelte",
+    ".json", ".yaml", ".yml", ".toml", ".md", ".txt",
+    ".sh", ".bat", ".ps1", ".dockerfile",
+}
+
+
+def _build_tree(root_path: str, base_path: str | None = None) -> list[dict]:
+    """
+    Recursively walk *root_path* and return a JSON-serialisable tree.
+
+    Each node is either:
+        { "name": str, "type": "folder", "path": str, "children": [...] }
+        { "name": str, "type": "file",   "path": str, "size": int }
+    """
+    if base_path is None:
+        base_path = root_path
+    entries: list[dict] = []
+
+    try:
+        items = sorted(os.listdir(root_path), key=lambda s: (not os.path.isdir(os.path.join(root_path, s)), s.lower()))
+    except PermissionError:
+        return entries
+
+    for name in items:
+        full = os.path.join(root_path, name)
+        rel = os.path.relpath(full, base_path).replace("\\", "/")
+
+        if os.path.isdir(full):
+            if name in _SKIP_DIRS or name.startswith("."):
+                continue
+            children = _build_tree(full, base_path)
+            entries.append({
+                "name": name,
+                "type": "folder",
+                "path": rel,
+                "children": children,
+            })
+        else:
+            ext = os.path.splitext(name)[1].lower()
+            if ext in _SOURCE_EXTS or name.lower() in ("makefile", "dockerfile", "rakefile", "gemfile"):
+                try:
+                    size = os.path.getsize(full)
+                except OSError:
+                    size = 0
+                entries.append({
+                    "name": name,
+                    "type": "file",
+                    "path": rel,
+                    "size": size,
+                })
+
+    return entries
+
+
+@router.get("/{repo_id}/tree")
+async def get_repo_tree(repo_id: str):
+    """
+    Return the directory tree of the cloned repository.
+    The tree only includes source-relevant files and skips common
+    non-source directories (.git, node_modules, etc.).
+    """
+    if not ObjectId.is_valid(repo_id):
+        raise HTTPException(status_code=400, detail="Invalid repo_id")
+
+    collection = await get_repos_collection()
+    doc = await collection.find_one(
+        {"_id": ObjectId(repo_id)},
+        {"repo_local_path": 1, "repo_name": 1},
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="Repository not found")
+
+    repo_path = doc.get("repo_local_path")
+    if not repo_path or not os.path.isdir(repo_path):
+        raise HTTPException(status_code=404, detail="Cloned repository not found on disk")
+
+    tree = _build_tree(repo_path)
+
+    return {
+        "repo_id": repo_id,
+        "repo_name": doc.get("repo_name", ""),
+        "root_path": repo_path,
+        "tree": tree,
+    }
+
+
+@router.get("/{repo_id}/file")
+async def get_repo_file(repo_id: str, path: str = Query(..., description="Relative file path within the repo")):
+    """
+    Return the contents of a single file from the cloned repository.
+    The `path` parameter must be a relative path within the repo root.
+    """
+    if not ObjectId.is_valid(repo_id):
+        raise HTTPException(status_code=400, detail="Invalid repo_id")
+
+    collection = await get_repos_collection()
+    doc = await collection.find_one(
+        {"_id": ObjectId(repo_id)},
+        {"repo_local_path": 1},
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="Repository not found")
+
+    repo_path = doc.get("repo_local_path")
+    if not repo_path or not os.path.isdir(repo_path):
+        raise HTTPException(status_code=404, detail="Cloned repository not found on disk")
+
+    # Resolve and validate that target is within repo_path (prevent path traversal)
+    target = os.path.normpath(os.path.join(repo_path, path))
+    if not target.startswith(os.path.normpath(repo_path)):
+        raise HTTPException(status_code=400, detail="Invalid file path")
+
+    if not os.path.isfile(target):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    try:
+        with open(target, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read(500_000)  # Cap at 500KB
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not read file: {e}")
+
+    return {
+        "path": path,
+        "content": content,
+        "size": os.path.getsize(target),
+    }
