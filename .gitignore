@@ -1,3 +1,4 @@
+node_modules/
 # Virtual envs
 venv
 .env
@@ -37,3 +38,4 @@ Thumbs.db
 models/
 llama_cpp_python-0.3.4-cp311-cp311-win_amd64.whl
 llama.cpp/
+node_modules/bson/src/parser/utils.ts

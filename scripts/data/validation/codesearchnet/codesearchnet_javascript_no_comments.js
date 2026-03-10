@@ -1,3 +1,4 @@
+
 function createTypeScriptLanguageService(options) {
     // Discover referenced files
     const FILES = discoverAndReadFiles(options);
