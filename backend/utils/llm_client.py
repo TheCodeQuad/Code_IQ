@@ -86,7 +86,7 @@ class LocalLlamaClient(BaseLLMClient):
     No HTTP overhead, no rate limiting needed.
     """
     
-    def __init__(self, model_path: str, n_ctx: int = 8192, n_gpu_layers: int = -1, n_threads: int = None):
+    def __init__(self, model_path: str, n_ctx: int = 8192, n_gpu_layers: int = -1, n_threads: int = None, main_gpu: int = 0):
         """
         Initialize with model loaded into memory.
         
@@ -95,6 +95,7 @@ class LocalLlamaClient(BaseLLMClient):
             n_ctx: Context window size
             n_gpu_layers: GPU layers (-1 for all, 0 for CPU only)
             n_threads: Number of CPU threads (None for auto)
+            main_gpu: GPU device index to use (0 = first GPU, 1 = second, etc.)
         """
         try:
             from llama_cpp import Llama
@@ -111,6 +112,11 @@ class LocalLlamaClient(BaseLLMClient):
         
         logger.info(f"Loading local model from {model_path}...")
         start = time.time()
+        
+        # Force CUDA to only see the target GPU before any CUDA initialization
+        # This is required because llama-cpp-python ignores main_gpu on WDDM vs TCC setups
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(main_gpu)
+        logger.info(f"Set CUDA_VISIBLE_DEVICES={main_gpu} to force model onto GPU {main_gpu}")
         
         # Check if CUDA is available (optional - llama-cpp-python handles it)
         try:
@@ -132,6 +138,7 @@ class LocalLlamaClient(BaseLLMClient):
             n_threads=n_threads,
             verbose=False
         )
+        logger.info(f"Model loaded on GPU {main_gpu}")
         
         load_time = time.time() - start
         logger.info(f"Model loaded successfully in {load_time:.2f}s")
@@ -606,14 +613,17 @@ def get_llm_client() -> BaseLLMClient:
                 n_ctx = local_config.get('n_ctx', 8192)
                 n_gpu_layers = local_config.get('n_gpu_layers', -1)
                 n_threads = local_config.get('n_threads', None)
+                main_gpu = local_config.get('main_gpu', 0)
                 
                 logger.info(f"Initializing LocalLlamaClient for direct inference...")
                 logger.info(f"Model path resolved to: {model_path}")
+                logger.info(f"Target GPU: {main_gpu}")
                 _llm_client = LocalLlamaClient(
                     model_path=model_path,
                     n_ctx=n_ctx,
                     n_gpu_layers=n_gpu_layers,
-                    n_threads=n_threads
+                    n_threads=n_threads,
+                    main_gpu=main_gpu
                 )
             else:
                 # Fallback to Ollama HTTP API (mode == 'ollama')
