@@ -44,7 +44,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { isBackendOnline } from "@/lib/api"
 import { useRepos } from "@/hooks/use-repos"
-import { UploadRepoDialog } from "@/components/upload-repo-dialog"
+import { useAnalysis } from "@/lib/analysis-context"
 import type { RepoSummary } from "@/lib/repo-types"
 
 // ── Status → visual config ──────────────────────────────────────────
@@ -305,7 +305,12 @@ export default function DashboardPage() {
             <h1 className="text-2xl font-semibold text-foreground">Projects</h1>
             <p className="text-sm text-muted-foreground mt-0.5">Manage and analyze your repositories</p>
           </div>
-          <UploadRepoDialog onUpload={uploadRepo} />
+          <Link href="/dashboard/analysis/new">
+            <Button className="bg-foreground text-background hover:bg-foreground/90 h-10 px-5 text-sm">
+              <Plus className="w-4 h-4 mr-2" />
+              New Analysis
+            </Button>
+          </Link>
         </div>
 
         {/* Stats */}
@@ -415,7 +420,12 @@ export default function DashboardPage() {
               </div>
               <h3 className="text-xl font-semibold text-foreground mb-2">No projects yet</h3>
               <p className="text-muted-foreground mb-6">Add your first GitHub repository to get started</p>
-              <UploadRepoDialog onUpload={uploadRepo} />
+              <Link href="/dashboard/analysis/new">
+                <Button className="bg-foreground text-background hover:bg-foreground/90 h-10 px-5 text-sm">
+                  <Plus className="w-4 h-4 mr-2" />
+                  New Analysis
+                </Button>
+              </Link>
             </CardContent>
           </Card>
         )}
