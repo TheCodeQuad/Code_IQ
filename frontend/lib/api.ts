@@ -55,6 +55,20 @@ export interface AnalyzeResponse {
   documentation?: any[];
 }
 
+export interface RepoUploadRequest {
+  repo_url: string;
+  user_id: string;
+}
+
+export interface RepoUploadResponse {
+  success: boolean;
+  repo_id: string;
+  repo_name: string;
+  language: string;
+  file_count: number;
+  total_lines: number;
+}
+
 export interface HealthResponse {
   status: string;
   timestamp: string;
@@ -131,6 +145,17 @@ export async function analyzeRepo(
     body: JSON.stringify(request),
   });
   return handleResponse<AnalyzeResponse>(res);
+}
+
+export async function uploadRepo(
+  request: RepoUploadRequest
+): Promise<RepoUploadResponse> {
+  const res = await fetch(`${API_BASE}/api/repos/upload`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+  return handleResponse<RepoUploadResponse>(res);
 }
 
 /** List all saved analysis files */

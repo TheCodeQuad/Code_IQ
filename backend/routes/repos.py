@@ -529,10 +529,16 @@ async def get_repo_tree(repo_id: str):
 
 
 @router.get("/{repo_id}/file")
-async def get_repo_file(repo_id: str, path: str = Query(..., description="Relative file path within the repo")):
+async def get_repo_file(
+    repo_id: str, 
+    path: str = Query(..., description="Relative file path within the repo"),
+    documented: bool = Query(False, description="Return documented version if available")
+):
     """
     Return the contents of a single file from the cloned repository.
     The `path` parameter must be a relative path within the repo root.
+    If `documented=true`, returns the documented version from the analysis results (if available).
+    Otherwise returns the original file from disk.
     """
     if not ObjectId.is_valid(repo_id):
         raise HTTPException(status_code=400, detail="Invalid repo_id")
@@ -540,7 +546,7 @@ async def get_repo_file(repo_id: str, path: str = Query(..., description="Relati
     collection = await get_repos_collection()
     doc = await collection.find_one(
         {"_id": ObjectId(repo_id)},
-        {"repo_local_path": 1},
+        {"repo_local_path": 1, "documentation": 1},
     )
     if not doc:
         raise HTTPException(status_code=404, detail="Repository not found")
@@ -563,8 +569,19 @@ async def get_repo_file(repo_id: str, path: str = Query(..., description="Relati
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Could not read file: {e}")
 
+    # If documented=true, try to find the documented version in the documentation array
+    documented_content = None
+    if documented and doc.get("documentation"):
+        # Search for this file in the documentation array
+        for doc_item in doc["documentation"]:
+            if doc_item.get("file_path") == path or doc_item.get("path") == path:
+                documented_content = doc_item.get("content") or doc_item.get("documented_content")
+                break
+
     return {
         "path": path,
-        "content": content,
+        "content": documented_content if documented else content,
+        "original": content if documented else None,
         "size": os.path.getsize(target),
+        "has_documented": documented_content is not None if documented else False,
     }

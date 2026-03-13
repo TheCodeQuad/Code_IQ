@@ -1,8 +1,9 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
+import { useSession } from "next-auth/react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
@@ -26,6 +27,8 @@ import {
   LogOut,
   Loader2,
   AlertCircle,
+  Check,
+  Globe,
 } from "lucide-react"
 import {
   Select,
@@ -35,12 +38,29 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { useAnalysis, responseToRecord } from "@/lib/analysis-context"
-import { analyzeRepo, type AnalyzeResponse } from "@/lib/api"
+import { analyzeRepo, uploadRepo, type AnalyzeResponse } from "@/lib/api"
+
+const LANGUAGE_EXTENSIONS: Record<string, string[]> = {
+  python: [".py"],
+  javascript: [".js", ".jsx"],
+  typescript: [".ts", ".tsx"],
+  java: [".java"],
+}
+
+const COMMON_LANGUAGE_PATTERNS: Record<string, string> = {
+  "requirements.txt": "python",
+  "package.json": "javascript",
+  "tsconfig.json": "typescript",
+  "pom.xml": "java",
+  "gradle": "java",
+  ".py": "python",
+}
 
 export default function NewAnalysisPage() {
   const router = useRouter()
+  const { data: session } = useSession()
   const { addAnalysis, setCurrentAnalysis } = useAnalysis()
-  const [uploadMethod, setUploadMethod] = useState<"upload" | "git">("upload")
+  const [uploadMethod, setUploadMethod] = useState<"upload" | "git">("git")
   const [repoUrl, setRepoUrl] = useState("")
   const [selectedLanguages, setSelectedLanguages] = useState<string[]>(["python"])
   const [config, setConfig] = useState({
@@ -51,6 +71,10 @@ export default function NewAnalysisPage() {
   const [dragActive, setDragActive] = useState(false)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [analysisError, setAnalysisError] = useState<string | null>(null)
+  const [repoValidating, setRepoValidating] = useState(false)
+  const [repoValid, setRepoValid] = useState(false)
+  const [extractedRepoName, setExtractedRepoName] = useState("")
+  const [repoValidationMessage, setRepoValidationMessage] = useState("")
 
   const languages = [
     { id: "python", label: "Python" },
@@ -59,6 +83,46 @@ export default function NewAnalysisPage() {
     { id: "java", label: "Java" },
   ]
 
+  const validateAndExtractRepo = (url: string) => {
+    if (!url.trim()) {
+      setRepoValid(false)
+      setRepoValidationMessage("")
+      setExtractedRepoName("")
+      return
+    }
+
+    setRepoValidating(true)
+    setRepoValidationMessage("")
+
+    // Basic URL validation
+    const gitUrlPattern = /^(https?:\/\/)?(github\.com|gitlab\.com|bitbucket\.org|gitea|git)\/[\w\-\.]+\/[\w\-\.]+(\/.+)?(\.git)?\/?$/i
+    const isValidUrl = gitUrlPattern.test(url) || url.includes("github.com") || url.includes("gitlab.com") || url.includes("bitbucket.org")
+
+    if (isValidUrl) {
+      // Extract repo name
+      const cleanUrl = url.replace(/\/+$/, "").replace(/\.git$/, "")
+      const name = cleanUrl.split("/").pop() || "unknown"
+      setExtractedRepoName(name)
+      setRepoValid(true)
+      setRepoValidationMessage(`Repository: ${name}`)
+      setRepoValidating(false)
+    } else {
+      setRepoValid(false)
+      setRepoValidationMessage("Invalid Git URL format")
+      setExtractedRepoName("")
+      setRepoValidating(false)
+    }
+  }
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (repoUrl.trim()) {
+        validateAndExtractRepo(repoUrl)
+      }
+    }, 500)
+    return () => clearTimeout(timer)
+  }, [repoUrl])
+
   const toggleLanguage = (langId: string) => {
     setSelectedLanguages((prev) =>
       prev.includes(langId) ? prev.filter((l) => l !== langId) : [...prev, langId]
@@ -66,83 +130,103 @@ export default function NewAnalysisPage() {
   }
 
   const handleStartAnalysis = async () => {
-    if (uploadMethod === "git" && !repoUrl.trim()) {
-      setAnalysisError("Please enter a repository URL")
+    // Validate inputs
+    if (uploadMethod === "git") {
+      if (!repoUrl.trim()) {
+        setAnalysisError("Please enter a repository URL")
+        return
+      }
+      if (!repoValid) {
+        setAnalysisError("Please enter a valid Git repository URL")
+        return
+      }
+    }
+
+    if (selectedLanguages.length === 0) {
+      setAnalysisError("Please select at least one programming language")
+      return
+    }
+
+    if (!session?.user?.id) {
+      setAnalysisError("User session not found")
       return
     }
 
     setIsAnalyzing(true)
     setAnalysisError(null)
 
-    // Create a placeholder record immediately
-    const placeholderId = `analysis_${Date.now()}`
-    const repoName = repoUrl.replace(/\/+$/, "").replace(/\.git$/, "").split("/").pop() || "unknown"
-    addAnalysis({
-      id: placeholderId,
-      repoUrl,
-      repoName,
-      timestamp: new Date().toISOString(),
-      status: "in-progress",
-      language: selectedLanguages[0] || "python",
-    })
-
-    // Navigate to pipeline view while analysis runs
-    setCurrentAnalysis({
-      id: placeholderId,
-      repoUrl,
-      repoName,
-      timestamp: new Date().toISOString(),
-      status: "in-progress",
-      language: selectedLanguages[0] || "python",
-    })
-    router.push(`/dashboard/analysis/${placeholderId}/pipeline`)
-
     try {
-      const response: AnalyzeResponse = await analyzeRepo({
+      // Step 1: Upload the repository to MongoDB
+      const uploadResponse = await uploadRepo({
         repo_url: repoUrl,
-        save_json: true,
-        include_source: true,
+        user_id: session.user.id,
       })
 
-      const record = responseToRecord(response, repoUrl)
-      record.id = placeholderId // keep the same id
+      const repoId = uploadResponse.repo_id
+      const repoName = uploadResponse.repo_name
 
-      // Update the record with the full results
-      const { updateAnalysis } = await import("@/lib/analysis-context").then(() => {
-        // Since we're in the same context, the update is done via the hook
-        return { updateAnalysis: null }
-      })
+      // Create a local context record
+      const analysisRecord = {
+        id: repoId,
+        repoUrl,
+        repoName,
+        timestamp: new Date().toISOString(),
+        status: "in-progress" as const,
+        language: uploadResponse.language,
+      }
 
-      // Store the result in localStorage directly too
-      if (typeof window !== "undefined") {
-        try {
-          const stored = localStorage.getItem("codeiq_analyses")
-          const records = stored ? JSON.parse(stored) : []
-          const idx = records.findIndex((r: any) => r.id === placeholderId)
-          if (idx >= 0) {
-            records[idx] = record
-          } else {
-            records.unshift(record)
+      addAnalysis(analysisRecord)
+      setCurrentAnalysis(analysisRecord)
+
+      // Step 2: Navigate to pipeline view immediately
+      router.push(`/dashboard/analysis/${repoId}/pipeline`)
+
+      // Step 3: Start the analysis in the background
+      try {
+        const response: AnalyzeResponse = await analyzeRepo({
+          repo_url: repoUrl,
+          save_json: true,
+          include_source: true,
+        })
+
+        // Update the record with the full results
+        if (typeof window !== "undefined") {
+          try {
+            const stored = localStorage.getItem("codeiq_analyses")
+            const records = stored ? JSON.parse(stored) : []
+            const idx = records.findIndex((r: any) => r.id === repoId)
+            if (idx >= 0) {
+              records[idx] = {
+                ...records[idx],
+                status: "completed",
+                stats: response.stats,
+              }
+              localStorage.setItem("codeiq_analyses", JSON.stringify(records))
+            }
+          } catch (e) {
+            console.error("Failed to update analysis in localStorage:", e)
           }
-          localStorage.setItem("codeiq_analyses", JSON.stringify(records))
-        } catch {}
+        }
+      } catch (err: any) {
+        console.error("Analysis failed:", err)
+        // Optionally update status in localStorage
+        if (typeof window !== "undefined") {
+          try {
+            const stored = localStorage.getItem("codeiq_analyses")
+            const records = stored ? JSON.parse(stored) : []
+            const idx = records.findIndex((r: any) => r.id === repoId)
+            if (idx >= 0) {
+              records[idx].status = "failed"
+              records[idx].error = err.message
+              localStorage.setItem("codeiq_analyses", JSON.stringify(records))
+            }
+          } catch (e) {
+            console.error("Failed to update analysis status:", e)
+          }
+        }
       }
     } catch (err: any) {
-      setAnalysisError(err.message || "Analysis failed")
-      // Update status in localStorage
-      if (typeof window !== "undefined") {
-        try {
-          const stored = localStorage.getItem("codeiq_analyses")
-          const records = stored ? JSON.parse(stored) : []
-          const idx = records.findIndex((r: any) => r.id === placeholderId)
-          if (idx >= 0) {
-            records[idx].status = "failed"
-            records[idx].error = err.message
-            localStorage.setItem("codeiq_analyses", JSON.stringify(records))
-          }
-        } catch {}
-      }
-    } finally {
+      setAnalysisError(err.message || "Failed to upload repository. Please check the URL and try again.")
       setIsAnalyzing(false)
     }
   }
@@ -297,13 +381,36 @@ export default function NewAnalysisPage() {
                     <div className="space-y-3">
                       <div>
                         <Label htmlFor="repo-url" className="text-sm text-foreground">Repository URL</Label>
-                        <Input
-                          id="repo-url"
-                          placeholder="https://github.com/username/repository"
-                          className="mt-1.5 border-border h-9 text-sm"
-                          value={repoUrl}
-                          onChange={(e) => setRepoUrl(e.target.value)}
-                        />
+                        <div className="mt-1.5 relative">
+                          <Input
+                            id="repo-url"
+                            placeholder="https://github.com/username/repository"
+                            className={`border-border h-10 text-sm pr-10 ${
+                              repoUrl && (repoValid ? "border-emerald-500/50 focus:border-emerald-500" : "border-red-500/50 focus:border-red-500")
+                            }`}
+                            value={repoUrl}
+                            onChange={(e) => setRepoUrl(e.target.value)}
+                          />
+                          {repoUrl && (
+                            <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                              {repoValidating ? (
+                                <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                              ) : repoValid ? (
+                                <Check className="w-4 h-4 text-emerald-500" />
+                              ) : (
+                                <AlertCircle className="w-4 h-4 text-red-500" />
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        {repoValidationMessage && (
+                          <p className={`text-xs mt-1.5 ${repoValid ? "text-emerald-600" : "text-red-600"}`}>
+                            {repoValidationMessage}
+                          </p>
+                        )}
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Supports GitHub, GitLab, Bitbucket, and other Git hosting services
+                        </p>
                       </div>
                       <div>
                         <Label htmlFor="branch" className="text-sm text-foreground">Branch</Label>
@@ -311,7 +418,7 @@ export default function NewAnalysisPage() {
                           id="branch"
                           placeholder="main"
                           defaultValue="main"
-                          className="mt-1.5 border-border h-9 text-sm"
+                          className="mt-1.5 border-border h-10 text-sm"
                         />
                       </div>
                     </div>

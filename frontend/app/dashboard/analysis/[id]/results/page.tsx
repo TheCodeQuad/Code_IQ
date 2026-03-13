@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react"
 import Link from "next/link"
+import Image from "next/image"
 import { useParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -22,6 +23,8 @@ import {
   BarChart3,
   Loader2,
   AlertCircle,
+  Eye,
+  EyeOff,
 } from "lucide-react"
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -52,6 +55,65 @@ interface RepoDetail {
   }
 }
 
+// ── Helper Functions ────────────────────────────────────────────────
+
+function stripDocstrings(content: string, language: string): string {
+  const lines = content.split("\n")
+  const result: string[] = []
+  let inBlockComment = false
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+
+    // If we're already in a block comment, look for the end
+    if (inBlockComment) {
+      if (trimmed.includes("*/") || trimmed.includes('"""') || trimmed.includes("'''")) {
+        inBlockComment = false
+      }
+      continue // Skip all lines inside block comment
+    }
+
+    // Check for single-line comments
+    if (trimmed.startsWith("//") || trimmed.startsWith("#")) {
+      continue // Skip single-line comments
+    }
+
+    // Check for block comment start - JavaScript/TypeScript
+    if (trimmed.startsWith("/*") || trimmed.startsWith("/**")) {
+      if (trimmed.includes("*/")) {
+        // Single-line block comment, skip it
+        continue
+      } else {
+        // Multi-line block comment starts
+        inBlockComment = true
+        continue
+      }
+    }
+
+    // Check for docstring start - Python
+    if (language === "python" && (trimmed.startsWith('"""') || trimmed.startsWith("'''"))) {
+      const quote = trimmed.startsWith('"""') ? '"""' : "'''"
+      // Count occurrences of the quote
+      const firstIndex = trimmed.indexOf(quote)
+      const lastIndex = trimmed.lastIndexOf(quote)
+      
+      if (firstIndex !== lastIndex) {
+        // Opens and closes on same line, skip it
+        continue
+      } else {
+        // Multi-line docstring starts
+        inBlockComment = true
+        continue
+      }
+    }
+
+    // Keep this line if not in a comment block
+    result.push(line)
+  }
+
+  return result.join("\n")
+}
+
 // ── Page ─────────────────────────────────────────────────────────────
 
 export default function ResultsPage() {
@@ -62,6 +124,8 @@ export default function ResultsPage() {
   const [tree, setTree] = useState<TreeNode[]>([])
   const [selectedFile, setSelectedFile] = useState("")
   const [fileContent, setFileContent] = useState("")
+  const [originalContent, setOriginalContent] = useState("")
+  const [showOriginal, setShowOriginal] = useState(false)
   const [copied, setCopied] = useState(false)
   const [activeTab, setActiveTab] = useState<"code" | "readme" | "metrics">("code")
   const [loading, setLoading] = useState(true)
@@ -115,14 +179,27 @@ export default function ResultsPage() {
       if (!filePath) return
       setFileLoading(true)
       try {
-        const res = await fetch(
-          `/api/repos/${repoId}/file?path=${encodeURIComponent(filePath)}`
+        // Get original file from disk
+        const originalRes = await fetch(
+          `/api/repos/${repoId}/file?path=${encodeURIComponent(filePath)}&documented=false`
         )
-        if (!res.ok) throw new Error("Failed to load file")
-        const data = await res.json()
-        setFileContent(data.content || "")
+        if (!originalRes.ok) throw new Error("Failed to load file")
+        const originalData = await originalRes.json()
+        
+        // Detect language from file extension
+        const lang = filePath.split(".").pop()?.toLowerCase() || "text"
+        
+        // Original is the raw file with docstrings STRIPPED
+        const originalWithoutDocs = stripDocstrings(originalData.content || "", lang)
+        setOriginalContent(originalWithoutDocs)
+        
+        // Documented version is the full file with all docstrings
+        setFileContent(originalData.content || "")
+        
+        setShowOriginal(false) // Default to showing documented version
       } catch {
         setFileContent("// Could not load file contents")
+        setOriginalContent("")
       } finally {
         setFileLoading(false)
       }
@@ -242,7 +319,7 @@ export default function ResultsPage() {
         <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)}>
           <TabsList className="mb-6 bg-secondary">
             <TabsTrigger value="code" className="flex items-center gap-2">
-              <FileCode className="w-4 h-4" />
+              <Image src="/COEIQ.png" alt="CodeIQ" width={16} height={16} />
               Documentation
             </TabsTrigger>
             <TabsTrigger value="readme" className="flex items-center gap-2">
@@ -308,12 +385,32 @@ export default function ResultsPage() {
                       </CardTitle>
                     </div>
                     <div className="flex items-center gap-2">
+                      {originalContent && (
+                        <Button
+                          variant={showOriginal ? "default" : "outline"}
+                          size="sm"
+                          className={showOriginal ? "bg-amber-600 hover:bg-amber-700" : "border-border bg-transparent"}
+                          onClick={() => setShowOriginal(!showOriginal)}
+                        >
+                          {showOriginal ? (
+                            <>
+                              <Eye className="w-4 h-4 mr-2" />
+                              Viewing Original
+                            </>
+                          ) : (
+                            <>
+                              <Eye className="w-4 h-4 mr-2" />
+                              See Original
+                            </>
+                          )}
+                        </Button>
+                      )}
                       <Button
                         variant="outline"
                         size="sm"
                         className="border-border bg-transparent"
                         onClick={handleCopy}
-                        disabled={!fileContent}
+                        disabled={!fileContent && !originalContent}
                       >
                         {copied ? (
                           <>
@@ -336,9 +433,12 @@ export default function ResultsPage() {
                       </div>
                     ) : (
                       <ScrollArea className="h-[600px]">
-                        <pre className="bg-foreground text-background p-6 rounded-lg text-sm font-mono leading-relaxed whitespace-pre-wrap">
-                          <code>{fileContent || "// Select a file to view its contents"}</code>
-                        </pre>
+                        <CodeViewer
+                          content={showOriginal ? originalContent : fileContent}
+                          isOriginal={showOriginal}
+                          language={selectedFile.split(".").pop()?.toLowerCase() || "text"}
+                          showOriginal={showOriginal}
+                        />
                       </ScrollArea>
                     )}
                   </CardContent>
@@ -584,6 +684,171 @@ function EvaluationDashboard({ repo }: { repo: RepoDetail }) {
           </CardContent>
         </Card>
       </div>
+    </div>
+  )
+}
+
+// ── Code Viewer Component ────────────────────────────────────────────
+
+function CodeViewer({
+  content,
+  isOriginal,
+  language,
+  showOriginal,
+}: {
+  content: string
+  isOriginal: boolean
+  language: string
+  showOriginal: boolean
+}) {
+  const lines = content.split("\n")
+
+  // Python/JavaScript keywords for syntax highlighting
+  const keywords = {
+    python: ["def", "class", "if", "else", "elif", "for", "while", "return", "import", "from", "try", "except", "finally", "with", "as", "async", "await", "yield", "lambda", "pass", "break", "continue", "raise", "assert", "del", "global", "nonlocal", "is", "in", "not", "and", "or"],
+    javascript: ["function", "const", "let", "var", "if", "else", "for", "while", "return", "import", "export", "class", "extends", "try", "catch", "finally", "async", "await", "yield", "new", "this", "super", "static", "throw", "break", "continue", "switch", "case", "default", "typeof", "instanceof", "delete", "void", "in", "of"],
+  }
+
+  const currentKeywords = language === "python" ? keywords.python : keywords.javascript
+
+  const isDocstring = (line: string): boolean => {
+    const trimmed = line.trim()
+    return (
+      trimmed.startsWith('"""') ||
+      trimmed.startsWith("'''") ||
+      trimmed.startsWith("/**") ||
+      trimmed.startsWith("*")
+    )
+  }
+
+  const isComment = (line: string): boolean => {
+    const trimmed = line.trim()
+    return trimmed.startsWith("//") || trimmed.startsWith("#")
+  }
+
+  const isDoc = (line: string): boolean => isDocstring(line) || isComment(line)
+
+  // Tokenize a line for syntax highlighting
+  const highlightLine = (line: string, isDocLine: boolean) => {
+    // Check if this line is part of a docstring - if so, render it all in yellow
+    const isDocstringLine = line.trim().startsWith("*") || line.trim().startsWith("/**") || line.trim().startsWith('"""') || line.trim().startsWith("'''")
+
+    if (isDocstringLine) {
+      return <span className="text-yellow-400">{line || "\u00A0"}</span>
+    }
+
+    const parts: React.ReactNode[] = []
+    let lastIndex = 0
+
+    // Match strings, comments, keywords, function calls, and identifiers
+    const regex = /("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`|\/\/.*|#.*|\/\*\*?.*?\*?\/?|\b\w+\b|\d+(?:\.\d+)?|[+\-*/%=<>!&|^~()[\]{}.,;:])/g
+    let match
+
+    while ((match = regex.exec(line)) !== null) {
+      const token = match[0]
+      const index = match.index
+
+      // Add text before token
+      if (index > lastIndex) {
+        parts.push(
+          <span key={`text-${lastIndex}`}>
+            {line.substring(lastIndex, index)}
+          </span>
+        )
+      }
+
+      let color = ""
+
+      // String literals
+      if (token.startsWith('"') || token.startsWith("'") || token.startsWith("`")) {
+        color = "text-orange-400"
+      }
+      // Comments
+      else if (token.startsWith("//") || token.startsWith("#") || token.startsWith("/*") || token.startsWith("*")) {
+        color = "text-green-400"
+      }
+      // Keywords
+      else if (currentKeywords.includes(token.toLowerCase())) {
+        color = "text-purple-400"
+      }
+      // Numbers
+      else if (/^\d+(?:\.\d+)?$/.test(token)) {
+        color = "text-yellow-400"
+      }
+      // Function calls (identifier followed by space and parenthesis)
+      else if (/^\w+$/.test(token)) {
+        // Check if next non-whitespace char is (
+        const afterToken = line.substring(index + token.length).match(/^\s*[({]/)
+        if (afterToken && afterToken[0].includes("(")) {
+          color = "text-blue-400"
+        } else {
+          color = "text-gray-100"
+        }
+      }
+      // Operators and punctuation
+      else if (/^[+\-*/%=<>!&|^~()[\]{}.,;:]/.test(token)) {
+        color = "text-gray-300"
+      }
+
+      if (color) {
+        parts.push(
+          <span key={`token-${index}`} className={color}>
+            {token}
+          </span>
+        )
+      } else {
+        parts.push(
+          <span key={`token-${index}`}>
+            {token}
+          </span>
+        )
+      }
+
+      lastIndex = index + token.length
+    }
+
+    // Add remaining text
+    if (lastIndex < line.length) {
+      parts.push(
+        <span key={`text-end`}>
+          {line.substring(lastIndex)}
+        </span>
+      )
+    }
+
+    return parts.length > 0 ? parts : <span>{line || "\u00A0"}</span>
+  }
+
+  return (
+    <div className="bg-foreground text-background p-6 rounded-lg text-sm font-mono leading-relaxed overflow-x-auto">
+      {lines.length === 0 ? (
+        <span className="text-muted-foreground">// Select a file to view its contents</span>
+      ) : (
+        <div className="space-y-0">
+          {lines.map((line, idx) => {
+            const isDocLine = isDoc(line)
+            return (
+              <div
+                key={idx}
+                className={`px-4 py-1 flex items-start gap-4 ${
+                  isDocLine && !isOriginal ? "bg-slate-900/40" : ""
+                }`}
+              >
+                <span className="inline-block w-12 text-right text-muted-foreground select-none shrink-0">
+                  {idx + 1}
+                </span>
+                <span
+                  className={`flex-1 ${
+                    isDocLine && !isOriginal ? "text-amber-300" : ""
+                  }`}
+                >
+                  {highlightLine(line, isDocLine)}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
