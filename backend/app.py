@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +22,24 @@ from .navigator.core.ir_export import export_ir
 from .navigator.core.dag_export import export_dag
 from backend.utils.file_handler import FileHandler
 from backend.unified_evaluator import UnifiedEvaluator
+from backend.utils.db import close_connection, ping as db_ping
+from backend.routes.repos import router as repos_router
+
+# ============================================================================
+# APP LIFESPAN (startup / shutdown)
+# ============================================================================
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: verify MongoDB is reachable
+    if await db_ping():
+        print("✅ MongoDB connected")
+    else:
+        print("⚠️  MongoDB not reachable – repo endpoints will fail")
+    yield
+    # Shutdown: close MongoDB connection pool
+    await close_connection()
+    print("🛑 MongoDB connection closed")
 # ============================================================================
 # FASTAPI APP SETUP
 # ============================================================================
@@ -28,21 +47,26 @@ from backend.unified_evaluator import UnifiedEvaluator
 app = FastAPI(
     title="Code Dependency Analyzer API",
     description="Analyze code repositories and extract dependency graphs",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
-# CORS Configuration
+# CORS Configuration – allows codeiq_ui (Next.js) frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
         "http://localhost:3001",
-        "http://127.0.0.1:3000"
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Register API routers
+app.include_router(repos_router)
 
 # ============================================================================
 # OUTPUT DIRECTORY
@@ -265,13 +289,15 @@ def root():
     }
 
 @app.get("/health")
-def health_check():
+async def health_check():
     """Detailed health check"""
+    mongo_ok = await db_ping()
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "output_dir": str(OUTPUT_DIR),
-        "output_dir_exists": OUTPUT_DIR.exists()
+        "output_dir_exists": OUTPUT_DIR.exists(),
+        "mongodb": "connected" if mongo_ok else "disconnected",
     }
 
 @app.post("/analyze", response_model=AnalyzeResponse)

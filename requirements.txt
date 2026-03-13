@@ -15,8 +15,8 @@ langchain-anthropic>=0.1.0
 # llama-cpp-python>=0.2.0
 
 # Language parsers
-tree-sitter==0.20.4
-tree-sitter-languages==1.7.0
+tree-sitter==0.21.3
+tree-sitter-languages==1.10.2
 
 # Code analysis
 # ast-parser>=0.1.0
@@ -81,3 +81,7 @@ gitpython>=3.1.40
 
 pydantic
 fastapi
+
+# MongoDB (async driver for FastAPI)
+motor>=3.3.0
+pymongo>=4.6.0

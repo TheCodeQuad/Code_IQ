@@ -2,7 +2,7 @@
 Main Orchestrator
 Coordinates the multi-agent workflow with parallel processing support
 """
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Callable
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
@@ -81,6 +81,28 @@ class Orchestrator:
             f"max_reader_search_attempts={self._max_reader_search_attempts})"
         )
     
+    # ─── Status callback helper ────────────────────────────────────────
+
+    def _fire_cb(self, agent: str, status: str, message: str = ""):
+        """Fire the status callback with an auto-calculated progress %."""
+        cb = getattr(self, '_status_callback', None)
+        if not cb:
+            return
+        total = getattr(self, '_total_to_process', 1) or 1
+        done = getattr(self, '_processed_so_far', 0)
+        # Map agent to a base progress range within 20-90%
+        agent_weights = {
+            'reader': 0.0, 'searcher': 0.20, 'writer': 0.45, 'verifier': 0.70
+        }
+        base_weight = agent_weights.get(agent, 0.0)
+        per_component = 0.70 / total  # 70% of bar (20% to 90%) spread across components
+        progress = int(20 + (done * per_component + base_weight * per_component) * 100)
+        progress = min(progress, 90)
+        try:
+            cb(agent, status, progress, message)
+        except Exception as e:
+            self.logger.warning(f"status_callback error: {e}")
+
     # ─── Reader output parsing & normalization ───────────────────────────
     
     def _parse_reader_xml_output(self, xml_string: str) -> Dict[str, Any]:
@@ -453,6 +475,7 @@ class Orchestrator:
             )
             
             # ── Phase 2: Writer generates documentation ──
+            self._fire_cb("writer", "in_progress", f"Writer generating doc for {component.name}")
             self.logger.info(f"Writer generating documentation for {component.name}")
             writer_result = self.writer.execute(context)
             if not writer_result.is_success():
@@ -471,6 +494,7 @@ class Orchestrator:
             cal_hist['rejection_count'] = verifier_rejection_count
             
             while verifier_rejection_count <= self._max_verifier_rejections:
+                self._fire_cb("verifier", "in_progress", f"Verifier validating {component.name}")
                 self.logger.info(f"Verifier validating documentation for {component.name}")
                 verifier_result = self.verifier.execute(context)
                 
@@ -553,7 +577,8 @@ class Orchestrator:
     
     def process_components(
         self,
-        components: List[CodeComponent]
+        components: List[CodeComponent],
+        status_callback: Optional[Callable] = None
     ) -> List[Documentation]:
         """
         Process all components through the agent pipeline.
@@ -565,6 +590,9 @@ class Orchestrator:
         """
         self.logger.info(f"Processing {len(components)} components (parallel={self._parallel_enabled})")
         start_time = datetime.now()
+        self._status_callback = status_callback
+        self._total_to_process = len(components)
+        self._processed_so_far = 0
 
         component_map = {c.id: c for c in components}  # For dependency lookup
         
@@ -668,6 +696,7 @@ class Orchestrator:
             ]
             
             # BATCH READER CALL (1 LLM call for entire batch)
+            self._fire_cb("reader", "in_progress", f"Reader analysing batch {batch_start // batch_size + 1}")
             try:
                 reader_batch_results = self.reader.process_batch(batch_contexts)
                 self.logger.info(f"Reader batch completed successfully")
@@ -684,8 +713,9 @@ class Orchestrator:
 
             # Process each component through the unified pipeline
             for idx, component in enumerate(batch):
+                comp_idx = batch_start + idx + 1
                 self.logger.info(
-                    f"Processing component {batch_start + idx + 1}/{len(components)}: "
+                    f"Processing component {comp_idx}/{len(components)}: "
                     f"{component.name} ({component.type})"
                 )
 
@@ -758,6 +788,7 @@ class Orchestrator:
                     self.failed_docs += 1
                 
                 self.total_components_processed += 1
+                self._processed_so_far = self.total_components_processed
         
         return documented_components
     
@@ -965,14 +996,12 @@ class Orchestrator:
         """
         self.logger.info(f"Creating fallback documentation for {component.name}")
         return Documentation(
-            id=f"fallback-{component.id}",
-            name=f"Fallback Documentation for {component.name}",
             component_id=component.id,
+            component_name=component.name,
+            component_type=str(component.type),
+            summary=f"Fallback documentation for {component.name}.",
+            description="Documentation could not be generated due to Writer failure.",
             docstring="Fallback documentation due to Writer failure.",
-            source="orchestrator",
-            type=component.type,
-            created_at=datetime.now(),
-            updated_at=datetime.now()
         )
     
     def get_statistics(self) -> Dict[str, Any]:

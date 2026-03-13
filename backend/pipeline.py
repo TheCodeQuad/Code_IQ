@@ -2,7 +2,7 @@
 Main pipeline orchestrator
 """
 
-from typing import List,Dict
+from typing import List, Dict, Callable, Optional
 import networkx as nx
 from backend.navigator.core.dag_export import PROJECT_ROOT
 from backend.navigator.core.repository_parser import RepositoryParser
@@ -21,14 +21,35 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 logger = get_logger(__name__)
 
-def run_pipeline(repo_path: str):
+
+# Type alias for the optional status callback.
+# Signature: callback(agent_name, status, progress_percent, message)
+StatusCallback = Optional[Callable[[str, str, int, str], None]]
+
+
+def run_pipeline(repo_path: str, status_callback: StatusCallback = None):
     """
     Run the documentation pipeline for a given repository path.
     Returns a dict with components, graph, orders, and documentation.
+
+    Args:
+        repo_path: Path to the cloned repository.
+        status_callback: Optional callback invoked after each major stage.
+            Signature: callback(agent_name, status, progress_percent, message)
     """
+    def _cb(agent: str, status: str, progress: int, msg: str):
+        """Fire the callback if one was provided."""
+        if status_callback:
+            try:
+                status_callback(agent, status, progress, msg)
+            except Exception as cb_err:
+                logger.warning(f"status_callback error: {cb_err}")
+
     logger.info(f"Starting pipeline for repository: {repo_path}")
+    _cb("navigator", "in_progress", 2, "Starting pipeline…")
     
     # Stage 1: Parse repository and extract components
+    _cb("navigator", "in_progress", 5, "Parsing repository and extracting components…")
     logger.info("Stage 1: Parsing repository and extracting components...")
     parser = RepositoryParser(repo_path)
     components = parser.parse()  # {id: CodeComponent}
@@ -73,6 +94,8 @@ def run_pipeline(repo_path: str):
                 metadata=getattr(nav_comp, 'metadata', {}),
             )
 
+    _cb("navigator", "in_progress", 10, f"Extracted {len(components)} components")
+
     # Stage 2: Build dependency graph and orders
     logger.info("Stage 2: Building dependency graph...")
     graph = build_graph_from_components(components)
@@ -81,6 +104,7 @@ def run_pipeline(repo_path: str):
     dfs_order = dependency_first_dfs(graph)
     
     logger.info(f"Built dependency graph with {len(graph)} nodes and {sum(len(v) for v in graph.values())} edges")
+    _cb("navigator", "completed", 15, f"Dependency graph built: {len(graph)} nodes")
 
     # Stage 3: Order components for orchestrator
     logger.info("Stage 3: Ordering components...")
@@ -123,7 +147,8 @@ def run_pipeline(repo_path: str):
 
     # Stage 6: Run multi-agent pipeline
     logger.info("Stage 6: Running multi-agent pipeline...")
-    docs = orchestrator.process_components(ordered_components)
+    _cb("reader", "in_progress", 20, "Starting multi-agent pipeline…")
+    docs = orchestrator.process_components(ordered_components, status_callback=_cb)
     
     logger.info(
         f"Pipeline complete: "
@@ -131,6 +156,8 @@ def run_pipeline(repo_path: str):
         f"{orchestrator.failed_docs} failed"
     )
     
+    _cb("evaluator", "in_progress", 92, "Saving documentation output…")
+
     # Stage 7: Save writer output (documentation) to disk
     logger.info("Stage 7: Saving writer agent output to disk...")
     repo_path_obj = Path(repo_path)
@@ -152,6 +179,8 @@ def run_pipeline(repo_path: str):
     # Extract module globals and inject into component metadata
     _extract_module_globals(components)
     logger.info(f"Populated module_globals metadata for components")
+
+    _cb("evaluator", "completed", 100, "Pipeline complete")
 
     # Return all relevant results as a dict
     return {
