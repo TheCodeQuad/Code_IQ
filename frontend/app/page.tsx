@@ -187,12 +187,12 @@ export default function LandingPage() {
         </div>
       </nav>
 
-      {/* Hero Section */}
-      <section className="pt-28 pb-16 px-6 relative">
+      {/* Hero Section - Full Screen */}
+      <section className="min-h-screen flex items-center justify-center px-6 relative">
         <FloatingCode />
         
-        <div className="max-w-3xl mx-auto text-center relative z-10">
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-foreground/5 border border-foreground/10 mb-6">
+        <div className="max-w-4xl mx-auto text-center relative z-10">
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-foreground/5 border border-foreground/10 mb-8">
             <span className="relative flex h-1.5 w-1.5">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-500 opacity-75" />
               <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500" />
@@ -200,11 +200,11 @@ export default function LandingPage() {
             <span className="text-xs font-medium text-muted-foreground">Agentic AI Documentation</span>
           </div>
           
-          <h1 className="text-5xl md:text-6xl lg:text-7xl font-semibold text-foreground leading-[1.1] tracking-tight">
+          <h1 className="text-6xl md:text-7xl lg:text-8xl font-semibold text-foreground leading-[1.1] tracking-tight">
             Code that{" "}
             <span className="relative inline-block">
               <span className="relative z-10">documents</span>
-              <svg className="absolute -bottom-1 md:-bottom-2 left-0 w-full h-3 md:h-4 overflow-visible" viewBox="0 0 200 20" preserveAspectRatio="none">
+              <svg className="absolute -bottom-2 md:-bottom-3 left-0 w-full h-4 md:h-5 overflow-visible" viewBox="0 0 200 20" preserveAspectRatio="none">
                 <path
                   d="M0 10 Q50 2, 100 10 T200 10"
                   fill="none"
@@ -218,20 +218,20 @@ export default function LandingPage() {
             itself
           </h1>
           
-          <p className="mt-5 text-base text-muted-foreground max-w-lg mx-auto leading-relaxed">
+          <p className="mt-8 text-lg text-muted-foreground max-w-2xl mx-auto leading-relaxed">
             Transform your codebase with AI that understands context, reasons like developers, 
             and generates documentation that actually helps.
           </p>
           
-          <div className="mt-6 flex flex-col sm:flex-row items-center justify-center gap-3">
+          <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
             <Link href={getStartedHref}>
-              <Button className="bg-foreground text-background hover:bg-foreground/90 h-10 px-5 text-sm font-medium group">
+              <Button className="bg-foreground text-background hover:bg-foreground/90 h-11 px-6 text-base font-medium group">
                 Get Started
                 <ArrowRight className="ml-2 w-4 h-4 group-hover:translate-x-1 transition-transform" />
               </Button>
             </Link>
             <Link href="#pipeline">
-              <Button variant="outline" className="h-10 px-5 text-sm font-medium border-border bg-transparent hover:bg-secondary group">
+              <Button variant="outline" className="h-11 px-6 text-base font-medium border-border bg-transparent hover:bg-secondary group">
                 <Play className="w-4 h-4 mr-2" />
                 Watch Demo
               </Button>
@@ -239,15 +239,15 @@ export default function LandingPage() {
           </div>
           
           {/* Quick stats - centered */}
-          <div className="mt-12 flex items-center justify-center gap-10 md:gap-12">
+          <div className="mt-16 flex items-center justify-center gap-12 md:gap-16">
             {[
               { value: "10x", label: "Faster docs" },
               { value: "97%", label: "Accuracy" },
               { value: "4", label: "AI Agents" },
             ].map((stat) => (
               <div key={stat.label} className="text-center">
-                <div className="text-2xl md:text-3xl font-semibold text-foreground">{stat.value}</div>
-                <div className="text-xs text-muted-foreground mt-0.5">{stat.label}</div>
+                <div className="text-3xl md:text-4xl font-semibold text-foreground">{stat.value}</div>
+                <div className="text-sm text-muted-foreground mt-1">{stat.label}</div>
               </div>
             ))}
           </div>
