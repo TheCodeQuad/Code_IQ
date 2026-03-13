@@ -1,11 +1,13 @@
 "use client";
 import { useState } from "react";
-import { Search, GitBranch, FileCode, Download, CheckCircle, AlertCircle } from "lucide-react";
+import { Search, GitBranch, FileCode, Download, CheckCircle, AlertCircle, BarChart3 } from "lucide-react";
 
 export default function Home() {
   const [repoUrl, setRepoUrl] = useState("");
   const [result, setResult] = useState<any>(null);
+  const [evalResult, setEvalResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [evaluating, setEvaluating] = useState(false);
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState("formatted");
 
@@ -17,6 +19,7 @@ export default function Home() {
 
     setLoading(true);
     setResult(null);
+    setEvalResult(null);
     setError("");
 
     try {
@@ -51,6 +54,35 @@ export default function Home() {
     a.download = `analysis-${Date.now()}.json`;
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  async function evaluateDocumentation() {
+    if (!result) return;
+    const repoName = repoUrl.split("/").pop()?.replace(".git", "") || "unknown";
+
+    setEvaluating(true);
+    setEvalResult(null);
+    setError("");
+
+    try {
+      const res = await fetch("http://localhost:8000/evaluate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repo_name: repoName }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || `HTTP error! status: ${res.status}`);
+      }
+
+      const data = await res.json();
+      setEvalResult(data);
+    } catch (err: any) {
+      setError(err.message || "Evaluation failed");
+    } finally {
+      setEvaluating(false);
+    }
   }
 
   return (
@@ -96,6 +128,25 @@ export default function Home() {
                   "Analyze"
                 )}
               </button>
+              {result && (
+                <button
+                  onClick={evaluateDocumentation}
+                  disabled={evaluating}
+                  className="px-8 py-4 bg-gradient-to-r from-blue-600 to-cyan-600 text-white font-semibold rounded-xl hover:from-blue-700 hover:to-cyan-700 disabled:opacity-50 disabled:cursor-not-allowed transition shadow-lg hover:shadow-xl transform hover:scale-105"
+                >
+                  {evaluating ? (
+                    <span className="flex items-center gap-2">
+                      <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      Evaluating...
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-2">
+                      <BarChart3 className="w-5 h-5" />
+                      Evaluate
+                    </span>
+                  )}
+                </button>
+              )}
             </div>
 
             {error && (
@@ -291,6 +342,148 @@ export default function Home() {
                 )}
               </div>
             </div>
+          </div>
+        )}
+
+        {/* ==================== EVALUATION RESULTS ==================== */}
+        {evalResult && (
+          <div className="space-y-6 mt-8">
+            {/* Overall Quality Score */}
+            <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-8 border border-white/20 shadow-2xl text-center">
+              <div className="text-sm uppercase tracking-widest text-purple-300 mb-2">Overall Quality Score</div>
+              <div className="text-6xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-green-400 to-emerald-400">
+                {(evalResult.overall_quality_score * 100).toFixed(1)}%
+              </div>
+              <div className="text-purple-200/60 mt-2 text-sm">Weighted: 35% Completeness + 35% Helpfulness + 30% Truthfulness</div>
+            </div>
+
+            {/* Three Metric Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* Completeness */}
+              <div className="bg-gradient-to-br from-purple-500/20 to-pink-500/20 backdrop-blur-lg rounded-xl p-6 border border-white/20">
+                <h3 className="text-lg font-bold text-white mb-1">Completeness</h3>
+                <p className="text-purple-200/60 text-xs mb-4">Are all docstring sections present?</p>
+                <div className="text-4xl font-bold text-purple-300 mb-4">
+                  {(evalResult.completeness.summary.overall_score * 100).toFixed(1)}%
+                </div>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between text-purple-200">
+                    <span>Components</span>
+                    <span className="font-semibold">{evalResult.completeness.summary.total_components}</span>
+                  </div>
+                  <div className="flex justify-between text-purple-200">
+                    <span>With Docstrings</span>
+                    <span className="font-semibold">{evalResult.completeness.summary.components_with_docstrings}</span>
+                  </div>
+                  {evalResult.completeness.summary.criteria_percentages && (
+                    <>
+                      {Object.entries(evalResult.completeness.summary.criteria_percentages).map(([key, val]: [string, any]) => (
+                        <div key={key} className="flex justify-between text-purple-200/70">
+                          <span className="capitalize">{key.replace(/has_/g, "")}</span>
+                          <span>{(val * 100).toFixed(0)}%</span>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Helpfulness */}
+              <div className="bg-gradient-to-br from-blue-500/20 to-cyan-500/20 backdrop-blur-lg rounded-xl p-6 border border-white/20">
+                <h3 className="text-lg font-bold text-white mb-1">Helpfulness</h3>
+                <p className="text-blue-200/60 text-xs mb-4">How useful are the docstrings? (LLM-judged)</p>
+                <div className="text-4xl font-bold text-blue-300 mb-4">
+                  {evalResult.helpfulness.summary.average_score.toFixed(2)}<span className="text-xl text-blue-200/50">/5</span>
+                </div>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between text-blue-200">
+                    <span>Evaluated</span>
+                    <span className="font-semibold">{evalResult.helpfulness.summary.total_components}</span>
+                  </div>
+                  <div className="flex justify-between text-blue-200">
+                    <span>Min Score</span>
+                    <span className="font-semibold">{evalResult.helpfulness.summary.min_score}</span>
+                  </div>
+                  <div className="flex justify-between text-blue-200">
+                    <span>Max Score</span>
+                    <span className="font-semibold">{evalResult.helpfulness.summary.max_score}</span>
+                  </div>
+                  <div className="flex justify-between text-blue-200">
+                    <span>Skipped (no doc)</span>
+                    <span className="font-semibold">{evalResult.helpfulness.summary.skipped_no_docstring}</span>
+                  </div>
+                  {evalResult.helpfulness.by_aspect && Object.keys(evalResult.helpfulness.by_aspect).length > 0 && (
+                    <>
+                      <div className="border-t border-white/10 mt-2 pt-2 text-xs text-blue-200/50 uppercase">By Aspect</div>
+                      {Object.entries(evalResult.helpfulness.by_aspect).map(([aspect, data]: [string, any]) => (
+                        <div key={aspect} className="flex justify-between text-blue-200/70">
+                          <span className="capitalize">{aspect}</span>
+                          <span>{data.average.toFixed(2)}/5</span>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Truthfulness */}
+              <div className="bg-gradient-to-br from-green-500/20 to-emerald-500/20 backdrop-blur-lg rounded-xl p-6 border border-white/20">
+                <h3 className="text-lg font-bold text-white mb-1">Truthfulness</h3>
+                <p className="text-green-200/60 text-xs mb-4">Do mentioned components actually exist?</p>
+                <div className="text-4xl font-bold text-green-300 mb-4">
+                  {(evalResult.truthfulness.summary.overall_accuracy * 100).toFixed(1)}%
+                </div>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between text-green-200">
+                    <span>Components Checked</span>
+                    <span className="font-semibold">{evalResult.truthfulness.summary.total_components}</span>
+                  </div>
+                  <div className="flex justify-between text-green-200">
+                    <span>Accurate</span>
+                    <span className="font-semibold">{evalResult.truthfulness.summary.accurate_components}</span>
+                  </div>
+                  <div className="flex justify-between text-green-200">
+                    <span>With Issues</span>
+                    <span className="font-semibold">{evalResult.truthfulness.summary.components_with_issues}</span>
+                  </div>
+                  <div className="flex justify-between text-green-200">
+                    <span>Total Mentions</span>
+                    <span className="font-semibold">{evalResult.truthfulness.summary.total_mentions}</span>
+                  </div>
+                  <div className="flex justify-between text-green-200">
+                    <span>Existing</span>
+                    <span className="font-semibold">{evalResult.truthfulness.summary.existing_mentions}</span>
+                  </div>
+                  {evalResult.truthfulness.summary.issue_types && Object.keys(evalResult.truthfulness.summary.issue_types).length > 0 && (
+                    <>
+                      <div className="border-t border-white/10 mt-2 pt-2 text-xs text-green-200/50 uppercase">Issue Types</div>
+                      {Object.entries(evalResult.truthfulness.summary.issue_types).map(([type, count]: [string, any]) => (
+                        <div key={type} className="flex justify-between text-green-200/70">
+                          <span className="capitalize">{type.replace(/_/g, " ")}</span>
+                          <span className="px-2 py-0.5 bg-red-500/30 rounded-full text-xs text-red-200">{count}</span>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Language Breakdown */}
+            {evalResult.completeness.by_language && Object.keys(evalResult.completeness.by_language).length > 0 && (
+              <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-6 border border-white/20 shadow-2xl">
+                <h3 className="text-lg font-bold text-white mb-4">Scores by Language</h3>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  {Object.entries(evalResult.completeness.by_language).map(([lang, data]: [string, any]) => (
+                    <div key={lang} className="bg-white/5 rounded-lg p-4 border border-white/10 text-center">
+                      <div className="text-purple-300 font-semibold capitalize mb-1">{lang}</div>
+                      <div className="text-2xl font-bold text-white">{(data.average * 100).toFixed(0)}%</div>
+                      <div className="text-purple-200/50 text-xs">{data.total} components</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

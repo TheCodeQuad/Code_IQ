@@ -20,6 +20,7 @@ from .navigator.core.topo import (
 from .navigator.core.ir_export import export_ir
 from .navigator.core.dag_export import export_dag
 from backend.utils.file_handler import FileHandler
+from backend.unified_evaluator import UnifiedEvaluator
 # ============================================================================
 # FASTAPI APP SETUP
 # ============================================================================
@@ -400,6 +401,45 @@ def analyze_repo(req: AnalyzeRequest):
             detail=f"Analysis failed: {str(e)}"
         )
         
+
+class EvaluationRequest(BaseModel):
+    repo_name: str = Field(..., description="Name of the analyzed repository")
+
+@app.post("/evaluate")
+def evaluate_documentation(req: EvaluationRequest):
+    """
+    Evaluate generated documentation quality across three dimensions:
+    - Completeness: structural completeness of docstrings
+    - Helpfulness: LLM-based quality assessment (1-5)
+    - Truthfulness: verifies mentioned components actually exist
+    """
+    try:
+        print(f"🔍 Starting evaluation for: {req.repo_name}")
+
+        evaluator = UnifiedEvaluator(repo_name=req.repo_name)
+        results = evaluator.evaluate_all()
+
+        return JSONResponse(content={
+            "success": True,
+            "repo_name": req.repo_name,
+            "timestamp": datetime.now().isoformat(),
+            "overall_quality_score": results["overall_quality_score"],
+            "completeness": results["completeness"],
+            "helpfulness": results["helpfulness"],
+            "truthfulness": results["truthfulness"],
+            "output_file": results.get("output_file"),
+            "message": "Evaluation completed successfully",
+        })
+
+    except FileNotFoundError as e:
+        print(f"❌ File not found: {e}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        print(f"❌ Evaluation error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
+
 
 @app.get("/download/{filename}")
 def download_file(filename: str):
