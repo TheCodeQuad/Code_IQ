@@ -298,11 +298,6 @@ export default function ResultsPage() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <Link href={`/dashboard/analysis/${repoId}/agents`}>
-              <Button variant="outline" size="sm" className="border-border bg-transparent">
-                View Agent Reasoning
-              </Button>
-            </Link>
             <Button
               className="bg-foreground text-background hover:bg-foreground/90"
               onClick={handleExport}
@@ -317,20 +312,27 @@ export default function ResultsPage() {
 
       <main className="max-w-7xl mx-auto px-6 py-8">
         <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)}>
-          <TabsList className="mb-6 bg-secondary">
-            <TabsTrigger value="code" className="flex items-center gap-2">
-              <Image src="/COEIQ.png" alt="CodeIQ" width={16} height={16} />
-              Documentation
-            </TabsTrigger>
-            <TabsTrigger value="readme" className="flex items-center gap-2">
-              <Book className="w-4 h-4" />
-              README
-            </TabsTrigger>
-            <TabsTrigger value="metrics" className="flex items-center gap-2">
-              <BarChart3 className="w-4 h-4" />
-              Evaluation
-            </TabsTrigger>
-          </TabsList>
+          <div className="mb-6 flex items-center justify-between gap-4">
+            <TabsList className="bg-secondary">
+              <TabsTrigger value="code" className="flex items-center gap-2">
+                <Image src="/COEIQ.png" alt="CodeIQ" width={16} height={16} />
+                Documentation
+              </TabsTrigger>
+              <TabsTrigger value="readme" className="flex items-center gap-2">
+                <Book className="w-4 h-4" />
+                README
+              </TabsTrigger>
+              <TabsTrigger value="metrics" className="flex items-center gap-2">
+                <BarChart3 className="w-4 h-4" />
+                Evaluation
+              </TabsTrigger>
+            </TabsList>
+            <Link href={`/dashboard/analysis/${repoId}/agents`}>
+              <Button variant="outline" size="sm" className="border-border bg-transparent">
+                View Agent Reasoning
+              </Button>
+            </Link>
+          </div>
 
           {/* ── Documentation Tab ── */}
           <TabsContent value="code">

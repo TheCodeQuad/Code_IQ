@@ -30,6 +30,7 @@ from backend.agents.base_agent import BaseAgent, AgentContext, AgentResult, Agen
 from backend.models.code_component import CodeComponent, ComponentType
 from backend.utils.logger import get_logger
 from backend.utils.file_handler import FileHandler
+from backend.utils.paths import DATA_ROOT
 
 logger = get_logger(__name__)
 
@@ -70,7 +71,7 @@ class ReaderAgent(BaseAgent):
     def __init__(self):
         super().__init__("reader")
         # Initialize output directory for XML persistence
-        self.output_dir = Path("data/intermediate/agent_output/reader")
+        self.output_dir = DATA_ROOT / "intermediate" / "agent_output" / "reader"
         self.output_dir.mkdir(parents=True, exist_ok=True)
         # Consolidated XML output tracking
         self.consolidated_outputs = []  # List of (component_id, xml_output) tuples

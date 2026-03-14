@@ -1,9 +1,9 @@
 ﻿import json
 import os
 
-# Get the absolute path to the project root (one level up from backend/)
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
-DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+from backend.utils.paths import DATA_ROOT
+
+DATA_DIR = str(DATA_ROOT)
 
 def export_dag(dag, repo_id: str | None = None, out_dir=os.path.join(DATA_DIR, "intermediate", "navigator_output")):
     os.makedirs(out_dir, exist_ok=True)

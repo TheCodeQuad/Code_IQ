@@ -175,11 +175,7 @@ export default function DashboardPage() {
   }
 
   async function handleGenerate(repoId: string) {
-    try {
-      await generateDocs(repoId)
-    } catch (err: any) {
-      alert(err.message)
-    }
+    router.push(`/dashboard/analysis/${repoId}/pipeline?autostart=1`)
   }
 
   return (
@@ -550,7 +546,7 @@ function RepoCard({
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => onGenerate(repo.id)}>
                 <Play className="w-4 h-4 mr-2" />
-                Run Analysis
+                Start Analysis
               </DropdownMenuItem>
               <DropdownMenuItem className="text-destructive" onClick={() => onDelete(repo.id)}>
                 <Trash2 className="w-4 h-4 mr-2" />
@@ -621,7 +617,7 @@ function RepoCard({
             onClick={() => onGenerate(repo.id)}
           >
             <Play className="w-4 h-4 mr-2" />
-            Analyze
+            Start Analysis
           </Button>
         )}
       </CardContent>

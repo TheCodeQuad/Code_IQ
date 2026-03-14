@@ -252,6 +252,7 @@ export default function SignupPage() {
 
               <div className="grid grid-cols-2 gap-4">
                 <Button
+                  type="button"
                   variant="outline"
                   className="h-12 border-border bg-transparent rounded-xl"
                   onClick={() => signIn("github", { callbackUrl: "/" })}
@@ -260,6 +261,7 @@ export default function SignupPage() {
                   GitHub
                 </Button>
                 <Button
+                  type="button"
                   variant="outline"
                   className="h-12 border-border bg-transparent rounded-xl"
                   onClick={() => signIn("google", { callbackUrl: "/" })}

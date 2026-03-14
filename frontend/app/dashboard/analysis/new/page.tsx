@@ -37,8 +37,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { useAnalysis, responseToRecord } from "@/lib/analysis-context"
-import { analyzeRepo, uploadRepo, type AnalyzeResponse } from "@/lib/api"
+import { uploadRepo } from "@/lib/api"
 
 const LANGUAGE_EXTENSIONS: Record<string, string[]> = {
   python: [".py"],
@@ -59,7 +58,6 @@ const COMMON_LANGUAGE_PATTERNS: Record<string, string> = {
 export default function NewAnalysisPage() {
   const router = useRouter()
   const { data: session } = useSession()
-  const { addAnalysis, setCurrentAnalysis } = useAnalysis()
   const [uploadMethod, setUploadMethod] = useState<"upload" | "git">("git")
   const [repoUrl, setRepoUrl] = useState("")
   const [selectedLanguages, setSelectedLanguages] = useState<string[]>(["python"])
@@ -156,75 +154,14 @@ export default function NewAnalysisPage() {
     setAnalysisError(null)
 
     try {
-      // Step 1: Upload the repository to MongoDB
+      // Step 1: Upload/clone the repository and persist metadata.
       const uploadResponse = await uploadRepo({
         repo_url: repoUrl,
         user_id: session.user.id,
       })
 
-      const repoId = uploadResponse.repo_id
-      const repoName = uploadResponse.repo_name
-
-      // Create a local context record
-      const analysisRecord = {
-        id: repoId,
-        repoUrl,
-        repoName,
-        timestamp: new Date().toISOString(),
-        status: "in-progress" as const,
-        language: uploadResponse.language,
-      }
-
-      addAnalysis(analysisRecord)
-      setCurrentAnalysis(analysisRecord)
-
-      // Step 2: Navigate to pipeline view immediately
-      router.push(`/dashboard/analysis/${repoId}/pipeline`)
-
-      // Step 3: Start the analysis in the background
-      try {
-        const response: AnalyzeResponse = await analyzeRepo({
-          repo_url: repoUrl,
-          save_json: true,
-          include_source: true,
-        })
-
-        // Update the record with the full results
-        if (typeof window !== "undefined") {
-          try {
-            const stored = localStorage.getItem("codeiq_analyses")
-            const records = stored ? JSON.parse(stored) : []
-            const idx = records.findIndex((r: any) => r.id === repoId)
-            if (idx >= 0) {
-              records[idx] = {
-                ...records[idx],
-                status: "completed",
-                stats: response.stats,
-              }
-              localStorage.setItem("codeiq_analyses", JSON.stringify(records))
-            }
-          } catch (e) {
-            console.error("Failed to update analysis in localStorage:", e)
-          }
-        }
-      } catch (err: any) {
-        console.error("Analysis failed:", err)
-        // Optionally update status in localStorage
-        if (typeof window !== "undefined") {
-          try {
-            const stored = localStorage.getItem("codeiq_analyses")
-            const records = stored ? JSON.parse(stored) : []
-            const idx = records.findIndex((r: any) => r.id === repoId)
-            if (idx >= 0) {
-              records[idx].status = "failed"
-              records[idx].error = err.message
-              localStorage.setItem("codeiq_analyses", JSON.stringify(records))
-            }
-          } catch (e) {
-            console.error("Failed to update analysis status:", e)
-          }
-        }
-      }
+      // Step 2: Return to dashboard. User will start analysis explicitly there.
+      router.push("/dashboard")
     } catch (err: any) {
       setAnalysisError(err.message || "Failed to upload repository. Please check the URL and try again.")
       setIsAnalyzing(false)
@@ -535,7 +472,7 @@ export default function NewAnalysisPage() {
                     ) : (
                       <>
                         <Play className="w-3.5 h-3.5 mr-1.5" />
-                        Start Analysis
+                        Clone Repository
                       </>
                     )}
                   </Button>

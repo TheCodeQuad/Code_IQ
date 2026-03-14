@@ -25,6 +25,7 @@ from backend.agents.verifier_calibration import (
 from backend.models.code_component import CodeComponent
 from backend.models.documentation import Documentation
 from backend.utils.logger import get_logger
+from backend.utils.paths import DATA_ROOT
 
 logger = get_logger(__name__)
 
@@ -67,7 +68,7 @@ class VerifierAgent(BaseAgent):
         ])
 
         # Output persistence
-        self.output_dir = Path("data/intermediate/agent_output/verifier")
+        self.output_dir = DATA_ROOT / "intermediate" / "agent_output" / "verifier"
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.consolidated_outputs: List[Dict[str, Any]] = []
 
