@@ -80,14 +80,46 @@ export const authOptions: NextAuthOptions = {
       return true;
     },
     async jwt({ token, user }) {
-      if (user) {
+      if (user?.id) {
         token.id = user.id;
       }
+
+      // Backfill token.id for old/legacy sessions where id was not persisted.
+      if (!token.id && token.email) {
+        try {
+          await connectDB();
+          const dbUser = await User.findOne({ email: token.email }).select("_id");
+          if (dbUser?._id) {
+            token.id = dbUser._id.toString();
+          }
+        } catch (error) {
+          console.error("JWT callback id backfill error:", error);
+        }
+      }
+
       return token;
     },
     async session({ session, token }) {
       if (session.user) {
-        (session.user as any).id = token.id as string;
+        let resolvedId = token.id as string | undefined;
+
+        // Backfill during session creation if token is missing id but email exists.
+        if (!resolvedId && session.user.email) {
+          try {
+            await connectDB();
+            const dbUser = await User.findOne({ email: session.user.email }).select("_id");
+            if (dbUser?._id) {
+              resolvedId = dbUser._id.toString();
+              if (resolvedId) {
+                token.id = resolvedId;
+              }
+            }
+          } catch (error) {
+            console.error("Session callback id backfill error:", error);
+          }
+        }
+
+        (session.user as any).id = resolvedId as string;
       }
       return session;
     },

@@ -22,6 +22,7 @@ from .navigator.core.ir_export import export_ir
 from .navigator.core.dag_export import export_dag
 from backend.utils.file_handler import FileHandler
 from backend.utils.db import close_connection, ping as db_ping
+from backend.utils.paths import DATA_ROOT
 from backend.routes.repos import router as repos_router
 
 # ============================================================================
@@ -81,7 +82,7 @@ def find_project_root(marker="requirements.txt"):
     return current.parents[2]
 
 PROJECT_ROOT = find_project_root()
-OUTPUT_DIR = PROJECT_ROOT / "data" / "intermediate" / "navigator_output"
+OUTPUT_DIR = DATA_ROOT / "intermediate" / "navigator_output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -394,7 +395,7 @@ def analyze_repo(req: AnalyzeRequest):
             docs = result.get("documentation", [])
             
             # Save reader output
-            reader_output_path = PROJECT_ROOT / "data" / "intermediate" / "agent_output" / "reader" / f"{repo_name}_reader_output.json"
+            reader_output_path = DATA_ROOT / "intermediate" / "agent_output" / "reader" / f"{repo_name}_reader_output.json"
             reader_output_path.parent.mkdir(parents=True, exist_ok=True)
             pipeline_components = result.get("components", {})
             FileHandler.write_json(reader_output_path, {k: FileHandler.serialize_component(v) for k, v in pipeline_components.items()})
