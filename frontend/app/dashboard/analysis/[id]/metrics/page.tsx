@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Progress } from "@/components/ui/progress"
+import { useToast } from "@/hooks/use-toast"
 import {
   Code2,
   ArrowLeft,
@@ -25,6 +26,7 @@ import {
   Target,
   Zap,
   Shield,
+  Loader,
 } from "lucide-react"
 import {
   BarChart,
@@ -48,7 +50,8 @@ import {
 const mockSummaryMetrics = {
   overallScore: 92,
   completeness: 94,
-  consistency: 96,
+  helpfulness: 91,
+  truthfulness: 96,
   filesVerified: 42,
   totalFiles: 45,
 }
@@ -102,21 +105,181 @@ const historyData = [
   { run: "Run 5", date: "Jan 28", score: 92, completeness: 94 },
 ]
 
+type EvaluationStep = "idle" | "completeness" | "helpfulness" | "truthfulness" | "complete"
+
 export default function MetricsPage() {
   const [activeTab, setActiveTab] = useState<"overview" | "files" | "history">("overview")
+  const [isEvaluating, setIsEvaluating] = useState(false)
+  const [evaluationStep, setEvaluationStep] = useState<EvaluationStep>("idle")
+  const [evaluationResults, setEvaluationResults] = useState<any>(null)
+  const [stageResults, setStageResults] = useState<Record<string, any>>({})
+  const [evaluationError, setEvaluationError] = useState<string | null>(null)
+  const { toast } = useToast()
+  
   const params = useParams()
   const analysisId = params.id as string
   const { getAnalysis } = useAnalysis()
   const analysis = getAnalysis(analysisId)
 
+  const handleEvaluate = async () => {
+    if (!analysis?.repoName) {
+      toast({
+        title: "Error",
+        description: "Repository name not found",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsEvaluating(true)
+    setEvaluationError(null)
+    setEvaluationResults(null)
+    setStageResults({})
+    setEvaluationStep("completeness")
+    
+    try {
+      console.log("🔍 Starting streaming evaluation for:", analysis.repoName)
+      
+      const response = await fetch(
+        `http://localhost:8000/evaluate/stream?repo_name=${encodeURIComponent(analysis.repoName)}`,
+        {
+          method: "GET",
+          headers: {
+            Accept: "text/event-stream",
+          },
+        }
+      )
+
+      if (!response.ok) {
+        let errorMsg = `HTTP ${response.status}`
+        try {
+          const errorData = await response.json()
+          errorMsg = errorData.detail || errorMsg
+        } catch {
+          const text = await response.text()
+          errorMsg = text || errorMsg
+        }
+        throw new Error(errorMsg)
+      }
+
+      if (!response.body) {
+        throw new Error("Streaming response body is not available")
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ""
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const events = buffer.split("\n\n")
+        buffer = events.pop() || ""
+
+        for (const eventBlock of events) {
+          if (!eventBlock.trim()) continue
+          
+          const lines = eventBlock.split("\n")
+          let eventType = ""
+          const dataLines: string[] = []
+
+          for (const line of lines) {
+            if (line.startsWith("event:")) {
+              eventType = line.slice(6).trim()
+            } else if (line.startsWith("data:")) {
+              dataLines.push(line.slice(5).trim())
+            }
+          }
+
+          if (!dataLines.length || !eventType) continue
+
+          try {
+            const payload = JSON.parse(dataLines.join(""))
+
+            if (eventType === "stage_started") {
+              console.log(`📍 Started: ${payload.stage}`)
+              setEvaluationStep(payload.stage)
+            }
+
+            if (eventType === "stage_complete") {
+              console.log(`✅ Completed: ${payload.stage}`)
+              setStageResults((prev) => ({
+                ...prev,
+                [payload.stage]: payload,
+              }))
+
+              setEvaluationResults((prev: any) => ({
+                ...(prev || {}),
+                [`${payload.stage}_score`]: payload.score,
+                [`${payload.stage}_full`]: payload,
+              }))
+            }
+
+            if (eventType === "overall_complete") {
+              console.log("🎉 Overall complete")
+              const results = payload.results
+              setEvaluationResults(results)
+              setStageResults((prev) => ({
+                ...prev,
+                overall: results,
+              }))
+              setEvaluationStep("complete")
+
+              toast({
+                title: "Evaluation Complete",
+                description: `Overall Score: ${Math.round(results.overall_quality_score * 100)}%`,
+              })
+            }
+
+            if (eventType === "error") {
+              throw new Error(payload.message || "Stream error")
+            }
+          } catch (e) {
+            console.error("Failed to parse event:", e, eventBlock)
+          }
+        }
+      }
+    } catch (error: any) {
+      const errorMsg = error.message || "An error occurred during evaluation"
+      console.error("❌ Evaluation error:", error)
+      setEvaluationError(errorMsg)
+
+      toast({
+        title: "Evaluation Failed",
+        description: errorMsg,
+        variant: "destructive",
+      })
+    } finally {
+      setIsEvaluating(false)
+      setTimeout(() => setEvaluationStep("idle"), 2000)
+    }
+  }
+
   // Use real analysis data when available, fall back to mock
-  const summaryMetrics = analysis?.stats ? {
+  const summaryMetrics = evaluationResults ? {
+    overallScore: Math.round((evaluationResults.overall_quality_score || 0) * 100),
+    completeness: Math.round((evaluationResults.completeness || 0) * 100),
+    helpfulness: Math.round((evaluationResults.helpfulness || 0) * 100),
+    truthfulness: Math.round((evaluationResults.truthfulness || 0) * 100),
+    filesVerified: analysis?.stats?.components_with_docstrings || 0,
+    totalFiles: analysis?.stats?.total_components || 0,
+  } : analysis?.stats ? {
     overallScore: Math.round((analysis.stats.components_with_docstrings / Math.max(analysis.stats.total_components, 1)) * 100),
     completeness: Math.round((analysis.stats.components_with_docstrings / Math.max(analysis.stats.total_components, 1)) * 100),
-    consistency: 96,
+    helpfulness: 0,
+    truthfulness: 0,
     filesVerified: analysis.stats.components_with_docstrings,
     totalFiles: analysis.stats.total_components,
   } : mockSummaryMetrics
+
+  const metricBreakdownData = evaluationResults ? [
+    { name: "Completeness", score: Math.round((evaluationResults.completeness || 0) * 100), fill: "var(--chart-1)" },
+    { name: "Helpfulness", score: Math.round((evaluationResults.helpfulness || 0) * 100), fill: "var(--chart-2)" },
+    { name: "Truthfulness", score: Math.round((evaluationResults.truthfulness || 0) * 100), fill: "var(--chart-3)" },
+    { name: "Overall", score: Math.round((evaluationResults.overall_quality_score || 0) * 100), fill: "var(--chart-4)" },
+  ] : metricBreakdown
 
   const fileMetrics = analysis?.components ? (() => {
     const fileMap = new Map<string, { lang: string; total: number; documented: number }>()
@@ -142,6 +305,13 @@ export default function MetricsPage() {
     failed: { icon: XCircle, color: "text-destructive", bg: "bg-destructive/10" },
   }
 
+  const helpfulnessSummary = stageResults.helpfulness?.summary || {}
+  const helpfulnessAverage = helpfulnessSummary.average_score ?? helpfulnessSummary.average ?? 0
+  const helpfulnessMin = helpfulnessSummary.min_score ?? helpfulnessSummary.min
+  const helpfulnessMax = helpfulnessSummary.max_score ?? helpfulnessSummary.max
+  const helpfulnessSkipped = helpfulnessSummary.skipped_no_docstring ?? helpfulnessSummary.skipped
+  const helpfulnessComponents = stageResults.helpfulness?.components || []
+
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
@@ -165,9 +335,26 @@ export default function MetricsPage() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <Button variant="outline" size="sm" className="border-border bg-transparent">
-              <RefreshCw className="w-4 h-4 mr-2" />
-              Re-evaluate
+            {isEvaluating && (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader className="w-4 h-4 animate-spin" />
+                <span>
+                  {evaluationStep === "completeness" && "Checking Completeness..."}
+                  {evaluationStep === "helpfulness" && "Evaluating Helpfulness..."}
+                  {evaluationStep === "truthfulness" && "Verifying Truthfulness..."}
+                  {evaluationStep === "complete" && "Complete!"}
+                </span>
+              </div>
+            )}
+            <Button 
+              variant="outline" 
+              size="sm" 
+              className="border-border bg-transparent" 
+              onClick={handleEvaluate}
+              disabled={isEvaluating}
+            >
+              <RefreshCw className={`w-4 h-4 mr-2 ${isEvaluating ? "animate-spin" : ""}`} />
+              {isEvaluating ? "Evaluating..." : "Re-evaluate"}
             </Button>
             <Button variant="outline" size="sm" className="border-border bg-transparent">
               <Download className="w-4 h-4 mr-2" />
@@ -178,6 +365,47 @@ export default function MetricsPage() {
       </header>
 
       <main className="max-w-7xl mx-auto px-6 py-8">
+        {/* Error Display */}
+        {evaluationError && (
+          <Card className="border-destructive/50 bg-destructive/5 mb-6">
+            <CardContent className="p-4">
+              <div className="flex items-start gap-3">
+                <XCircle className="w-5 h-5 text-destructive mt-0.5" />
+                <div className="flex-1">
+                  <h4 className="font-semibold text-destructive mb-1">Evaluation Error</h4>
+                  <p className="text-sm text-destructive/90 mb-3">{evaluationError}</p>
+                  <div className="bg-destructive/10 rounded p-3 text-xs text-destructive/80 space-y-1 mb-3">
+                    <p><strong>Troubleshooting:</strong></p>
+                    <ul className="list-disc list-inside space-y-1">
+                      <li>Check if backend is running: <code className="bg-black/20 px-1 rounded">python -m uvicorn backend.app:app --reload</code></li>
+                      <li>Verify backend is on http://localhost:8000</li>
+                      <li>Check browser console (F12) for more details</li>
+                      <li>Ensure repo has been analyzed first</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* No Results Message */}
+        {!evaluationResults && !isEvaluating && (
+          <Card className="border-border/50 bg-secondary/30 mb-6">
+            <CardContent className="p-6 text-center">
+              <BarChart3 className="w-12 h-12 text-muted-foreground mx-auto mb-3 opacity-50" />
+              <h3 className="text-lg font-semibold text-foreground mb-2">No Evaluation Data Yet</h3>
+              <p className="text-sm text-muted-foreground mb-4">
+                Click the "Re-evaluate" button above to run completeness, helpfulness, and truthfulness evaluations.
+              </p>
+              <Button onClick={handleEvaluate} disabled={isEvaluating}>
+                <BarChart3 className="w-4 h-4 mr-2" />
+                Run Evaluation Now
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Summary Cards */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
           <Card className="border-border">
@@ -202,8 +430,8 @@ export default function MetricsPage() {
           <Card className="border-border">
             <CardContent className="p-6">
               <div className="flex items-center gap-3 mb-3">
-                <div className="w-10 h-10 rounded-lg bg-chart-2/10 flex items-center justify-center">
-                  <Zap className="w-5 h-5 text-chart-2" />
+                <div className="w-10 h-10 rounded-lg bg-chart-1/10 flex items-center justify-center">
+                  <FileCheck className="w-5 h-5 text-chart-1" />
                 </div>
                 <span className="text-sm text-muted-foreground">Completeness</span>
               </div>
@@ -217,34 +445,204 @@ export default function MetricsPage() {
           <Card className="border-border">
             <CardContent className="p-6">
               <div className="flex items-center gap-3 mb-3">
-                <div className="w-10 h-10 rounded-lg bg-chart-3/10 flex items-center justify-center">
-                  <Shield className="w-5 h-5 text-chart-3" />
+                <div className="w-10 h-10 rounded-lg bg-chart-2/10 flex items-center justify-center">
+                  <Zap className="w-5 h-5 text-chart-2" />
                 </div>
-                <span className="text-sm text-muted-foreground">Consistency</span>
+                <span className="text-sm text-muted-foreground">Helpfulness</span>
               </div>
               <div className="flex items-end gap-2">
-                <span className="text-4xl font-bold text-foreground">{summaryMetrics.consistency}%</span>
+                <span className="text-4xl font-bold text-foreground">{summaryMetrics.helpfulness}%</span>
               </div>
-              <Progress value={summaryMetrics.consistency} className="mt-3 h-2" />
+              <Progress value={summaryMetrics.helpfulness} className="mt-3 h-2" />
             </CardContent>
           </Card>
 
           <Card className="border-border">
             <CardContent className="p-6">
               <div className="flex items-center gap-3 mb-3">
-                <div className="w-10 h-10 rounded-lg bg-chart-1/10 flex items-center justify-center">
-                  <FileCheck className="w-5 h-5 text-chart-1" />
+                <div className="w-10 h-10 rounded-lg bg-chart-3/10 flex items-center justify-center">
+                  <Shield className="w-5 h-5 text-chart-3" />
                 </div>
-                <span className="text-sm text-muted-foreground">Files Verified</span>
+                <span className="text-sm text-muted-foreground">Truthfulness</span>
               </div>
               <div className="flex items-end gap-2">
-                <span className="text-4xl font-bold text-foreground">{summaryMetrics.filesVerified}</span>
-                <span className="text-muted-foreground mb-1">/ {summaryMetrics.totalFiles}</span>
+                <span className="text-4xl font-bold text-foreground">{summaryMetrics.truthfulness}%</span>
               </div>
-              <Progress value={(summaryMetrics.filesVerified / summaryMetrics.totalFiles) * 100} className="mt-3 h-2" />
+              <Progress value={summaryMetrics.truthfulness} className="mt-3 h-2" />
             </CardContent>
           </Card>
         </div>
+
+        {/* Evaluation Pipeline Output */}
+        {Object.keys(stageResults).length > 0 && (
+          <Card className="border-border mb-8 bg-secondary/20">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Zap className="w-5 h-5 text-chart-2" />
+                Evaluation Pipeline Output
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-6">
+                {/* Completeness Results */}
+                {stageResults.completeness && (
+                  <div className="border-l-4 border-chart-1 pl-6 py-4 bg-chart-1/5 rounded-r-lg">
+                    <div className="flex items-center gap-2 mb-4">
+                      <FileCheck className="w-5 h-5 text-chart-1" />
+                      <h4 className="font-semibold text-foreground">Completeness Analysis</h4>
+                      <Badge className="bg-chart-1/20 text-chart-1">{Math.round(stageResults.completeness.score * 100)}%</Badge>
+                    </div>
+                    {stageResults.completeness.summary && (
+                      <div className="text-sm text-muted-foreground space-y-3 mb-4">
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <span className="text-foreground font-medium">Total Components:</span>
+                            <span className="ml-2">{stageResults.completeness.summary.total_components}</span>
+                          </div>
+                          <div>
+                            <span className="text-foreground font-medium">Documented:</span>
+                            <span className="ml-2">{stageResults.completeness.summary.components_with_docstrings}</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    {stageResults.completeness.summary?.criteria_percentages && (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b border-chart-1/20">
+                              <th className="text-left py-2 px-2 font-medium">Criteria</th>
+                              <th className="text-right py-2 px-2 font-medium">Coverage</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {Object.entries(stageResults.completeness.summary.criteria_percentages).map(([key, val]) => (
+                              <tr key={key} className="border-b border-chart-1/10 hover:bg-chart-1/5">
+                                <td className="py-2 px-2 capitalize">{key.replace(/_/g, " ")}</td>
+                                <td className="py-2 px-2 text-right font-medium">{Math.round((val as number) * 100)}%</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Helpfulness Results */}
+                {stageResults.helpfulness && (
+                  <div className="border-l-4 border-chart-2 pl-6 py-4 bg-chart-2/5 rounded-r-lg">
+                    <div className="flex items-center gap-2 mb-4">
+                      <Zap className="w-5 h-5 text-chart-2" />
+                      <h4 className="font-semibold text-foreground">Helpfulness Evaluation</h4>
+                      <Badge className="bg-chart-2/20 text-chart-2">{Math.round((helpfulnessAverage || 0) / 5 * 100)}%</Badge>
+                    </div>
+                    {helpfulnessSummary && (
+                      <div className="text-sm text-muted-foreground space-y-3 mb-4">
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <span className="text-foreground font-medium">Average Score:</span>
+                            <span className="ml-2">{(helpfulnessAverage || 0).toFixed(2)}/5</span>
+                          </div>
+                          <div>
+                            <span className="text-foreground font-medium">Normalized:</span>
+                            <span className="ml-2">{Math.round((helpfulnessAverage || 0) / 5 * 100)}%</span>
+                          </div>
+                        </div>
+                        {helpfulnessMin !== undefined && (
+                          <div>
+                            <span className="text-foreground font-medium">Range:</span>
+                            <span className="ml-2">{helpfulnessMin?.toFixed(2)} - {helpfulnessMax?.toFixed(2)}</span>
+                          </div>
+                        )}
+                        {helpfulnessSkipped !== undefined && (
+                          <div>
+                            <span className="text-foreground font-medium">Skipped:</span>
+                            <span className="ml-2">{helpfulnessSkipped} components</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {helpfulnessComponents.length > 0 && (
+                      <div className="mt-4 overflow-x-auto">
+                        <div className="text-foreground font-medium text-sm mb-2">
+                          Component-wise Helpfulness
+                        </div>
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b border-chart-2/20">
+                              <th className="text-left py-2 px-2 font-medium">Component</th>
+                              <th className="text-left py-2 px-2 font-medium">Language</th>
+                              <th className="text-left py-2 px-2 font-medium">Type</th>
+                              <th className="text-right py-2 px-2 font-medium">Avg</th>
+                              <th className="text-right py-2 px-2 font-medium">Summary</th>
+                              <th className="text-right py-2 px-2 font-medium">Description</th>
+                              <th className="text-right py-2 px-2 font-medium">Parameters</th>
+                              <th className="text-right py-2 px-2 font-medium">Attributes</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {helpfulnessComponents.map((component: any) => (
+                              <tr key={component.id} className="border-b border-chart-2/10 hover:bg-chart-2/5">
+                                <td className="py-2 px-2 text-foreground">{component.name}</td>
+                                <td className="py-2 px-2 capitalize">{component.language}</td>
+                                <td className="py-2 px-2 capitalize">{component.type}</td>
+                                <td className="py-2 px-2 text-right font-medium">{(component.average || 0).toFixed(2)}</td>
+                                <td className="py-2 px-2 text-right">{component.aspects?.summary?.score ?? "-"}</td>
+                                <td className="py-2 px-2 text-right">{component.aspects?.description?.score ?? "-"}</td>
+                                <td className="py-2 px-2 text-right">{component.aspects?.parameters?.score ?? "-"}</td>
+                                <td className="py-2 px-2 text-right">{component.aspects?.attributes?.score ?? "-"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Truthfulness Results */}
+                {stageResults.truthfulness && (
+                  <div className="border-l-4 border-chart-3 pl-6 py-4 bg-chart-3/5 rounded-r-lg">
+                    <div className="flex items-center gap-2 mb-4">
+                      <Shield className="w-5 h-5 text-chart-3" />
+                      <h4 className="font-semibold text-foreground">Truthfulness Verification</h4>
+                      <Badge className="bg-chart-3/20 text-chart-3">{Math.round((stageResults.truthfulness.summary?.overall_accuracy || 0) * 100)}%</Badge>
+                    </div>
+                    {stageResults.truthfulness.summary && (
+                      <div className="text-sm text-muted-foreground space-y-3 mb-4">
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <span className="text-foreground font-medium">Overall Accuracy:</span>
+                            <span className="ml-2">{Math.round((stageResults.truthfulness.summary.overall_accuracy || 0) * 100)}%</span>
+                          </div>
+                          <div>
+                            <span className="text-foreground font-medium">Total Components:</span>
+                            <span className="ml-2">{stageResults.truthfulness.summary.total_components}</span>
+                          </div>
+                        </div>
+                        {stageResults.truthfulness.summary.issue_types && Object.keys(stageResults.truthfulness.summary.issue_types).length > 0 && (
+                          <div className="mt-3">
+                            <span className="text-foreground font-medium block mb-2">Issue Types:</span>
+                            <div className="space-y-1">
+                              {Object.entries(stageResults.truthfulness.summary.issue_types as Record<string, number>).map(([type, count]) => (
+                                <div key={type} className="text-xs">
+                                  <span className="capitalize">{type}:</span>
+                                  <span className="ml-2 font-medium">{String(count)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)}>
           <TabsList className="mb-6 bg-secondary">
@@ -263,7 +661,7 @@ export default function MetricsPage() {
                 <CardContent>
                   <div className="h-[300px]">
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={metricBreakdown} layout="vertical">
+                      <BarChart data={metricBreakdownData} layout="vertical">
                         <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} />
                         <XAxis type="number" domain={[0, 100]} />
                         <YAxis type="category" dataKey="name" width={100} />
