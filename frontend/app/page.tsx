@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import Link from "next/link"
 import { useSession } from "next-auth/react"
 import { Button } from "@/components/ui/button"
@@ -35,30 +35,152 @@ const codeSnippets = [
   "class Navigator:",
   "  def traverse(self):",
   "    yield from self.nodes",
+  "function compile(src) {",
+  "  const tokens = lex(src)",
+  "  return parse(tokens)",
+  "impl CodeGraph {",
+  "  fn new() -> Self {",
+  "    Self { nodes: vec![] }",
+  "const pipeline = async () =>",
+  "  await Promise.all(tasks)",
+  "SELECT * FROM graphs",
 ]
 
-function FloatingCode() {
+function SpatialZoomCode() {
+  // Seeded random for consistent positions (avoids hydration mismatch)
+  const seededRandom = (seed: number) => {
+    const x = Math.sin(seed * 9999) * 10000
+    return x - Math.floor(x)
+  }
+
+  // Keep generated style values stable between SSR and client hydration.
+  const items = useMemo(() => {
+    const fmt = (n: number, digits = 3) => Number(n.toFixed(digits))
+
+    return Array.from({ length: 25 }, (_, i) => {
+      // Random angle for circular distribution (full 360 degrees)
+      const angle = seededRandom(i * 7.3) * Math.PI * 2
+      // Random distance from center (varying radius)
+      const distance = 20 + seededRandom(i * 3.7) * 50 // 20-70 units from center
+      // Convert polar to cartesian
+      const x = fmt(Math.cos(angle) * distance)
+      const y = fmt(Math.sin(angle) * distance * 0.6) // Slightly squashed vertically
+      // Random delay spread across the animation duration
+      const delay = fmt(seededRandom(i * 5.1) * 18)
+      // Random duration for variety (slower)
+      const duration = fmt(20 + seededRandom(i * 2.9) * 12) // 20-32s
+
+      return {
+        snippet: codeSnippets[i % codeSnippets.length],
+        x,
+        y,
+        delay,
+        duration,
+      }
+    })
+  }, [])
+
   return (
-    <div className="absolute inset-0 overflow-hidden pointer-events-none">
-      {codeSnippets.map((snippet, i) => (
-        <div
-          key={snippet}
-          className="absolute text-sm font-mono text-foreground/15 whitespace-nowrap"
-          style={{
-            left: `${5 + (i % 3) * 35}%`,
-            top: `${15 + Math.floor(i / 3) * 30}%`,
-            animation: `float ${6 + (i % 3)}s ease-in-out infinite`,
-            animationDelay: `${i * 0.5}s`,
-          }}
-        >
-          {snippet}
-        </div>
-      ))}
+    <div 
+      className="absolute inset-0 overflow-hidden pointer-events-none"
+      style={{ 
+        perspective: '620px',
+        perspectiveOrigin: '50% 50%',
+      }}
+    >
+      <div 
+        className="absolute inset-0"
+        style={{ 
+          transformStyle: 'preserve-3d',
+        }}
+      >
+        {items.map((item, i) => (
+          <div
+            key={`code-${i}`}
+            className="absolute left-1/2 top-1/2 text-[10px] md:text-xs font-mono text-foreground/30 whitespace-nowrap"
+            style={{
+              animationName: 'spatialZoom',
+              animationDuration: `${item.duration}s`,
+              animationTimingFunction: 'linear',
+              animationIterationCount: 'infinite',
+              animationDelay: `-${item.delay}s`,
+              willChange: 'transform, opacity',
+              backfaceVisibility: 'hidden',
+              ['--tx' as string]: `${item.x}vw`,
+              ['--ty' as string]: `${item.y}vh`,
+            }}
+          >
+            {item.snippet}
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
 
+const heroTexts = [
+  ["Code that", "documents itself"],
+  ["Agentic AI", "Code Documentation"],
+  ["AI that understands", "your codebase"],
+  ["Turn complex code", "into clear docs"],
+]
 
+const LANDING_GRADIENT = `
+  radial-gradient(ellipse 80% 60% at 20% 80%, rgba(245, 208, 200, 0.6) 0%, transparent 50%),
+  radial-gradient(ellipse 70% 50% at 80% 30%, rgba(240, 200, 150, 0.5) 0%, transparent 50%),
+  radial-gradient(ellipse 60% 40% at 10% 20%, rgba(235, 220, 230, 0.4) 0%, transparent 40%),
+  radial-gradient(ellipse 90% 70% at 50% 50%, rgba(255, 250, 245, 0.8) 0%, transparent 60%),
+  linear-gradient(to bottom right, #fdf8f5, #fef9f3, #fdf6f0)
+`
+
+function SliceSlider() {
+  const [currentIndex, setCurrentIndex] = useState(0)
+  const [showFirst, setShowFirst] = useState(true)
+  const [showSecond, setShowSecond] = useState(true)
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      // Hide current lines
+      setShowFirst(false)
+      setTimeout(() => setShowSecond(false), 100)
+      
+      // Change index and show new lines
+      setTimeout(() => {
+        setCurrentIndex((prev) => (prev + 1) % heroTexts.length)
+        setShowFirst(true)
+        setTimeout(() => setShowSecond(true), 150)
+      }, 500)
+    }, 3500)
+    
+    return () => clearInterval(interval)
+  }, [])
+
+  return (
+    <div className="flex flex-col items-center">
+      {/* First line */}
+      <div className="h-[48px] md:h-[56px] lg:h-[72px] overflow-hidden">
+        <div
+          className={`transition-transform duration-400 ease-[cubic-bezier(0.77,0,0.175,1)] ${
+            showFirst ? "translate-y-0" : "translate-y-full"
+          }`}
+        >
+          <span className="block">{heroTexts[currentIndex][0]}</span>
+        </div>
+      </div>
+      
+      {/* Second line */}
+      <div className="h-[48px] md:h-[56px] lg:h-[72px] overflow-hidden">
+        <div
+          className={`transition-transform duration-400 ease-[cubic-bezier(0.77,0,0.175,1)] ${
+            showSecond ? "translate-y-0" : "translate-y-full"
+          }`}
+        >
+          <span className="block">{heroTexts[currentIndex][1]}</span>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function AgentOrbit() {
   const agents = [
@@ -134,7 +256,7 @@ export default function LandingPage() {
   ]
 
   return (
-    <div className="min-h-screen bg-background relative overflow-hidden">
+    <div className="min-h-screen relative overflow-hidden" style={{ background: LANDING_GRADIENT }}>
       {/* Background */}
       <div className="fixed inset-0 grid-pattern pointer-events-none opacity-50" />
 
@@ -188,8 +310,10 @@ export default function LandingPage() {
       </nav>
 
       {/* Hero Section - Full Screen */}
-      <section className="min-h-screen flex items-center justify-center px-6 relative">
-        <FloatingCode />
+      <section 
+        className="min-h-screen pt-28 pb-10 px-6 relative flex items-center"
+      >
+        <SpatialZoomCode />
         
         <div className="max-w-4xl mx-auto text-center relative z-10">
           <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-foreground/5 border border-foreground/10 mb-8">
@@ -200,7 +324,7 @@ export default function LandingPage() {
             <span className="text-xs font-medium text-muted-foreground">Agentic AI Documentation</span>
           </div>
           
-          <h1 className="text-6xl md:text-7xl lg:text-8xl font-semibold text-foreground leading-[1.1] tracking-tight">
+          {/* <h1 className="text-6xl md:text-7xl lg:text-8xl font-semibold text-foreground leading-[1.1] tracking-tight">
             Code that{" "}
             <span className="relative inline-block">
               <span className="relative z-10">documents</span>
@@ -216,9 +340,14 @@ export default function LandingPage() {
               </svg>
             </span>{" "}
             itself
-          </h1>
+          </h1> */}
+
+          <div className="text-6xl md:text-5xl lg:text-6xl font-semibold text-foreground leading-[1.15] tracking-tight">
+            <SliceSlider />
+          </div>
           
-          <p className="mt-8 text-lg text-muted-foreground max-w-2xl mx-auto leading-relaxed">
+          
+          <p className="mt-5 text-lg text-muted-foreground max-w-2xl mx-auto leading-relaxed">
             Transform your codebase with AI that understands context, reasons like developers, 
             and generates documentation that actually helps.
           </p>
@@ -255,9 +384,7 @@ export default function LandingPage() {
       </section>
 
       {/* Pipeline Section */}
-      <section id="pipeline" className="py-20 px-6 relative">
-        <div className="absolute inset-0 bg-secondary/30" />
-        
+      <section id="pipeline" className="min-h-screen py-20 px-6 relative flex items-center">
         <div className="max-w-6xl mx-auto relative">
           <div className="text-center mb-12">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">How it works</p>
@@ -387,8 +514,6 @@ export default function LandingPage() {
 
       {/* Agents Section */}
       <section id="agents" className="py-20 px-6 relative">
-        <div className="absolute inset-0 bg-secondary/20" />
-        
         <div className="max-w-6xl mx-auto relative">
           <div className="text-center mb-12">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">AI Agents</p>
