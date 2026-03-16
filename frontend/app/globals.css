@@ -175,6 +175,49 @@
   50% { border-radius: 30% 60% 70% 40% / 50% 60% 30% 60%; }
 }
 
+@keyframes spatialZoom {
+  /* 0% {
+    transform: translate3d(-50%, -50%, -1200px) scale(0.18);
+    opacity: 0;
+  }
+  12% {
+    opacity: 0.12;
+  }
+  55% {
+    opacity: 0.34;
+  }
+  100% {
+    transform: translate3d(calc(-50% + var(--tx, 0vw)), calc(-50% + var(--ty, 0vh)), 1400px) scale(3.2);
+    opacity: 0;
+  } */
+   0% {
+    transform: translate(-50%, -50%) translate(0px, 0px) translateZ(-1500px) scale(0.1);
+    opacity: 0;
+    filter: blur(8px);
+  }
+  15% {
+    opacity: 0.4;
+    filter: blur(4px);
+  }
+  35% {
+    opacity: 0.5;
+    filter: blur(0px);
+  }
+  75% {
+    opacity: 0.4;
+    filter: blur(0px);
+  }
+  93% {
+    opacity: 0.2;
+    filter: blur(2px);
+  }
+  100% {
+    transform: translate(-50%, -50%) translate(var(--tx), var(--ty)) translateZ(500px) scale(2.5);
+    opacity: 0;
+    filter: blur(5px);
+  }
+}
+
 .animate-float { animation: float 6s ease-in-out infinite; }
 .animate-float-delayed { animation: float 6s ease-in-out infinite 2s; }
 .animate-pulse-glow { animation: pulse-glow 3s ease-in-out infinite; }
