@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useCallback, useRef, useEffect } from "react"
+import { useParams } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -25,9 +26,11 @@ import {
   CheckCircle2,
   Circle,
   GripVertical,
+  AlertCircle,
+  Loader,
 } from "lucide-react"
 
-type GraphType = "agents-flow" | "cfg" | "pdg" | "hpg" | "gfg"
+type GraphType = "agents-flow" | "cfg" | "pdg" | "hpg" | "dag"
 type ComponentType = "function" | "class" | "method"
 
 interface Component {
@@ -46,7 +49,32 @@ interface DraggableNode {
   type: string
 }
 
-const components: Component[] = [
+interface AgentExecution {
+  timestamp: string
+  agent_name: string
+  component_id?: string
+  component_name?: string
+  action: string
+  message: string
+  status: "success" | "failed"
+  metadata: Record<string, any>
+}
+
+interface ComponentFlow {
+  component_id: string
+  executions: AgentExecution[]
+  agents_involved: string[]
+  total_executions: number
+  status: string
+}
+
+interface DAGNode {
+  id: string
+  name?: string
+  dependencies: string[]
+}
+
+const DEFAULT_COMPONENTS: Component[] = [
   { id: "comp-1", name: "authenticate_user", type: "function", filePath: "auth/login.py" },
   { id: "comp-2", name: "validate_credentials", type: "function", filePath: "auth/login.py" },
   { id: "comp-3", name: "UserModel", type: "class", filePath: "models/user.py" },
@@ -66,7 +94,7 @@ const graphTypes: { id: GraphType; label: string; description: string; fullName:
   { id: "cfg", label: "CFG", fullName: "Control Flow Graph", description: "Represents all paths that might be traversed through a program during its execution. Each node represents a basic block of code." },
   { id: "pdg", label: "PDG", fullName: "Program Dependency Graph", description: "Shows data and control dependencies between statements. Useful for program slicing and understanding data flow." },
   { id: "hpg", label: "HPG", fullName: "Hybrid Program Graph", description: "Combines CFG and PDG information into a unified representation for comprehensive code analysis." },
-  { id: "gfg", label: "GFG", fullName: "Graph Flow Graph", description: "Graph-based program analysis representation used for advanced static analysis techniques." },
+  { id: "dag", label: "DAG", fullName: "Repository Dependency Graph", description: "Shows the dependency relationships between all components in the repository. Each node represents a code component (function, class, method) and edges show dependencies." },
 ]
 
 const ComponentTypeIcon = ({ type }: { type: ComponentType }) => {
@@ -81,9 +109,143 @@ const ComponentTypeIcon = ({ type }: { type: ComponentType }) => {
 }
 
 export default function GraphsPage() {
-  const [selectedComponent, setSelectedComponent] = useState<Component>(components[0])
+  const params = useParams<{ id?: string | string[] }>()
+  const routeId = Array.isArray(params?.id) ? params.id[0] : params?.id
+  const [components, setComponents] = useState<Component[]>([])
+  const [selectedComponent, setSelectedComponent] = useState<Component | null>(null)
   const [selectedGraphType, setSelectedGraphType] = useState<GraphType>("agents-flow")
   const [zoom, setZoom] = useState(100)
+  const [componentFlows, setComponentFlows] = useState<Record<string, ComponentFlow>>({})
+  const [stats, setStats] = useState<any>(null)
+  const [dagData, setDagData] = useState<Record<string, string[]> | null>(null)
+  const [dagLoading, setDagLoading] = useState(false)
+
+  // Fetch agent execution data (optional - won't block UI)
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        let repoScope = routeId
+
+        if (routeId && /^[a-f0-9]{24}$/i.test(routeId)) {
+          try {
+            const repoResponse = await fetch(`/api/repos/${routeId}`)
+            if (repoResponse.ok) {
+              const repoData = await repoResponse.json()
+              repoScope = repoData.repo_name || routeId
+            }
+          } catch (repoErr) {
+            console.error("Error resolving repo ID:", repoErr)
+          }
+        }
+
+        // Try to fetch all component flows
+        const query = new URLSearchParams({ limit: "100" })
+        if (repoScope) {
+          query.set("repo_id", repoScope)
+        }
+
+        const flowsResponse = await fetch(`/api/agents/component/all-flows?${query.toString()}`)
+        if (flowsResponse.ok) {
+          const flowsData = await flowsResponse.json()
+          const flows: Record<string, ComponentFlow> = {}
+          const fetchedComponents: Component[] = []
+          
+          if (flowsData.data && Array.isArray(flowsData.data)) {
+            flowsData.data.forEach((flow: ComponentFlow) => {
+              flows[flow.component_id] = flow
+              
+              // Extract component info from flow if available
+              const component: Component = {
+                id: flow.component_id,
+                name: flow.component_id, // Use component_id as default, may be overridden by executions data
+                type: "function",
+                filePath: "",
+              }
+              
+              // Try to get component details from executions
+              if (flow.executions && flow.executions.length > 0) {
+                const firstExecution = flow.executions[0]
+                if (firstExecution.component_name) {
+                  component.name = firstExecution.component_name
+                }
+                if (firstExecution.metadata?.type) {
+                  component.type = firstExecution.metadata.type
+                }
+                if (firstExecution.metadata?.filePath) {
+                  component.filePath = firstExecution.metadata.filePath
+                }
+              }
+              
+              fetchedComponents.push(component)
+            })
+            
+            setComponentFlows(flows)
+            
+            // Use only fetched components from API, not defaults
+            if (fetchedComponents.length > 0) {
+              setComponents(fetchedComponents)
+              // Auto-select first component
+              if (selectedComponent === null) {
+                setSelectedComponent(fetchedComponents[0])
+              }
+            }
+          }
+        }
+
+        // Try to fetch statistics
+        const statsQuery = new URLSearchParams()
+        if (repoScope) {
+          statsQuery.set("repo_id", repoScope)
+        }
+
+        const statsResponse = await fetch(
+          statsQuery.toString() ? `/api/agents/statistics?${statsQuery.toString()}` : "/api/agents/statistics"
+        )
+        if (statsResponse.ok) {
+          const statsData = await statsResponse.json()
+          setStats(statsData.data)
+        }
+
+        // Try to fetch DAG data
+        try {
+          console.log("Fetching DAG from /api/navigator/dag...")
+          const dagResponse = await fetch("/api/navigator/dag")
+          console.log("DAG response status:", dagResponse.status)
+          
+          if (dagResponse.ok) {
+            const dagDataBlob = await dagResponse.json()
+            console.log("DAG data received:", {
+              file: dagDataBlob.file,
+              nodes: dagDataBlob.nodes,
+              edges: dagDataBlob.edges,
+              message: dagDataBlob.message
+            })
+            const dagToSet = dagDataBlob.data || dagDataBlob
+            console.log("Setting DAG data:", Object.keys(dagToSet).length, "components")
+            setDagData(dagToSet)
+          } else {
+            console.warn("DAG response not ok:", dagResponse.status, dagResponse.statusText)
+            const errorText = await dagResponse.text()
+            console.error("DAG error details:", errorText)
+          }
+        } catch (dagErr: any) {
+          console.error("Error fetching DAG:", dagErr.message || dagErr)
+        }
+      } catch (err) {
+        console.error("Error fetching agent data:", err)
+        // Show empty state - don't fallback to hardcoded defaults
+      }
+    }
+
+    fetchData()
+  }, [routeId])
+
+  // Ensure a component is selected when components are fetched
+  useEffect(() => {
+    if (selectedComponent === null && components.length > 0) {
+      setSelectedComponent(components[0])
+    }
+  }, [components, selectedComponent])
 
   const currentGraph = graphTypes.find((g) => g.id === selectedGraphType)
 
@@ -100,46 +262,52 @@ export default function GraphsPage() {
             <Network className="w-4 h-4" />
             Components
           </CardTitle>
-          <p className="text-xs text-stone-500 mt-1">{components.length} total components</p>
+          <p className="text-xs text-stone-500 mt-1">{components.length} executed components</p>
         </CardHeader>
         <CardContent className="p-0">
           <ScrollArea className="h-[calc(100vh-320px)] min-h-[550px]">
             <div className="p-2 space-y-1">
-              {components.map((component) => (
-                <button
-                  key={component.id}
-                  onClick={() => setSelectedComponent(component)}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-all ${
-                    selectedComponent.id === component.id
-                      ? "bg-amber-50 border border-amber-200"
-                      : "hover:bg-stone-50 border border-transparent"
-                  }`}
-                >
-                  <div
-                    className={`w-8 h-8 rounded-md flex items-center justify-center ${
-                      component.type === "function"
-                        ? "bg-blue-100 text-blue-600"
-                        : component.type === "class"
-                          ? "bg-purple-100 text-purple-600"
-                          : "bg-amber-100 text-amber-600"
+              {components.length > 0 ? (
+                components.map((component) => (
+                  <button
+                    key={component.id}
+                    onClick={() => setSelectedComponent(component)}
+                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-all ${
+                      selectedComponent?.id === component.id
+                        ? "bg-amber-50 border border-amber-200"
+                        : "hover:bg-stone-50 border border-transparent"
                     }`}
                   >
-                    <ComponentTypeIcon type={component.type} />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className={`font-medium text-sm truncate ${selectedComponent.id === component.id ? "text-amber-900" : "text-stone-700"}`}>
-                      {component.name}
-                    </p>
-                    <p className="text-xs text-stone-400 truncate">
-                      {component.parentClass ? `${component.parentClass}.` : ""}
-                      {component.filePath}
-                    </p>
-                  </div>
-                  {selectedComponent.id === component.id && (
-                    <ChevronRight className="w-4 h-4 flex-shrink-0 text-amber-500" />
-                  )}
-                </button>
-              ))}
+                    <div
+                      className={`w-8 h-8 rounded-md flex items-center justify-center flex-shrink-0 ${
+                        component.type === "function"
+                          ? "bg-blue-100 text-blue-600"
+                          : component.type === "class"
+                            ? "bg-purple-100 text-purple-600"
+                            : "bg-amber-100 text-amber-600"
+                      }`}
+                    >
+                      <ComponentTypeIcon type={component.type} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className={`font-medium text-sm truncate ${selectedComponent?.id === component.id ? "text-amber-900" : "text-stone-700"}`}>
+                        {component.name}
+                      </p>
+                      <p className="text-xs text-stone-400 truncate">
+                        {component.parentClass ? `${component.parentClass}.` : ""}
+                        {component.filePath}
+                      </p>
+                    </div>
+                    {selectedComponent?.id === component.id && (
+                      <ChevronRight className="w-4 h-4 flex-shrink-0 text-amber-500" />
+                    )}
+                  </button>
+                ))
+              ) : (
+                <div className="p-4 text-center">
+                  <p className="text-xs text-stone-500">No executed components yet</p>
+                </div>
+              )}
             </div>
           </ScrollArea>
         </CardContent>
@@ -193,10 +361,19 @@ export default function GraphsPage() {
             className="w-full h-full flex items-center justify-center bg-stone-50/50"
             style={{ transform: `scale(${zoom / 100})`, transformOrigin: "center center" }}
           >
-            {selectedGraphType === "agents-flow" ? (
-              <AgentsFlowGraph component={selectedComponent} />
-            ) : (
+            {selectedComponent && selectedGraphType === "agents-flow" ? (
+              <AgentsFlowGraph 
+                component={selectedComponent}
+                componentFlow={componentFlows[selectedComponent.id]}
+              />
+            ) : selectedComponent && selectedGraphType === "dag" ? (
+              <DAGGraph dagData={dagData} selectedComponentId={selectedComponent.id} />
+            ) : selectedComponent ? (
               <DraggableGraph type={selectedGraphType} component={selectedComponent} />
+            ) : (
+              <div className="flex items-center justify-center h-full">
+                <p className="text-stone-400 text-sm">Select a component to view</p>
+              </div>
             )}
           </div>
         </CardContent>
@@ -227,88 +404,122 @@ export default function GraphsPage() {
             </div>
 
             {/* Component Info */}
-            <div className="space-y-3">
-              <h4 className="text-xs font-semibold text-stone-400 uppercase tracking-wider">
-                Selected Component
-              </h4>
-              <div className="p-3 bg-stone-50 rounded-lg border border-stone-100">
-                <div className="flex items-center gap-2 mb-3">
-                  <div
-                    className={`w-8 h-8 rounded-md flex items-center justify-center ${
-                      selectedComponent.type === "function"
-                        ? "bg-blue-100 text-blue-600"
-                        : selectedComponent.type === "class"
-                          ? "bg-purple-100 text-purple-600"
-                          : "bg-amber-100 text-amber-600"
-                    }`}
-                  >
-                    <ComponentTypeIcon type={selectedComponent.type} />
-                  </div>
-                  <div>
-                    <p className="font-medium text-sm text-stone-800">{selectedComponent.name}</p>
-                    <p className="text-xs text-stone-400 capitalize">{selectedComponent.type}</p>
-                  </div>
-                </div>
-                <div className="text-xs space-y-2 pt-2 border-t border-stone-200">
-                  <div className="flex justify-between">
-                    <span className="text-stone-400">File</span>
-                    <span className="font-mono text-stone-600">{selectedComponent.filePath}</span>
-                  </div>
-                  {selectedComponent.parentClass && (
-                    <div className="flex justify-between">
-                      <span className="text-stone-400">Parent Class</span>
-                      <span className="font-mono text-stone-600">{selectedComponent.parentClass}</span>
+            {selectedComponent && (
+              <div className="space-y-3">
+                <h4 className="text-xs font-semibold text-stone-400 uppercase tracking-wider">
+                  Selected Component
+                </h4>
+                <div className="p-3 bg-stone-50 rounded-lg border border-stone-100">
+                  <div className="flex items-center gap-2 mb-3">
+                    <div
+                      className={`w-8 h-8 rounded-md flex items-center justify-center flex-shrink-0 ${
+                        selectedComponent.type === "function"
+                          ? "bg-blue-100 text-blue-600"
+                          : selectedComponent.type === "class"
+                            ? "bg-purple-100 text-purple-600"
+                            : "bg-amber-100 text-amber-600"
+                      }`}
+                    >
+                      <ComponentTypeIcon type={selectedComponent.type} />
                     </div>
-                  )}
+                    <div>
+                      <p className="font-medium text-sm text-stone-800">{selectedComponent.name}</p>
+                      <p className="text-xs text-stone-400 capitalize">{selectedComponent.type}</p>
+                    </div>
+                  </div>
+                  <div className="text-xs space-y-2 pt-2 border-t border-stone-200">
+                    <div className="flex justify-between">
+                      <span className="text-stone-400">File</span>
+                      <span className="font-mono text-stone-600">{selectedComponent.filePath}</span>
+                    </div>
+                    {selectedComponent.parentClass && (
+                      <div className="flex justify-between">
+                        <span className="text-stone-400">Parent Class</span>
+                        <span className="font-mono text-stone-600">{selectedComponent.parentClass}</span>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
 
-            {/* Repository Info */}
-            <div className="space-y-3">
-              <h4 className="text-xs font-semibold text-stone-400 uppercase tracking-wider">
-                Repository
-              </h4>
-              <div className="space-y-2 text-sm">
-                <div className="flex items-center justify-between py-1.5 border-b border-stone-100">
-                  <span className="text-stone-400 text-xs">Name</span>
-                  <span className="font-medium text-stone-700 text-xs">api-gateway</span>
-                </div>
-                <div className="flex items-center justify-between py-1.5 border-b border-stone-100">
-                  <span className="text-stone-400 text-xs">Language</span>
-                  <Badge variant="outline" className="text-xs border-stone-200">Python</Badge>
-                </div>
-                <div className="flex items-center justify-between py-1.5">
-                  <span className="text-stone-400 text-xs">Total Components</span>
-                  <span className="font-medium text-stone-700 text-xs">{components.length}</span>
+            {/* Execution Flow Info - Only show if data is available */}
+            {selectedComponent && componentFlows[selectedComponent.id] && (
+              <div className="space-y-3">
+                <h4 className="text-xs font-semibold text-stone-400 uppercase tracking-wider">
+                  Execution Flow
+                </h4>
+                <div className="p-3 bg-emerald-50 rounded-lg border border-emerald-100">
+                  <div className="space-y-2 text-xs">
+                    <div className="flex justify-between">
+                      <span className="text-stone-600">Total Executions</span>
+                      <span className="font-semibold text-emerald-700">{componentFlows[selectedComponent.id].total_executions}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-stone-600">Agents Involved</span>
+                      <span className="font-semibold text-emerald-700">{componentFlows[selectedComponent.id].agents_involved.length}</span>
+                    </div>
+                    <div className="flex flex-wrap gap-1 pt-2 border-t border-emerald-200">
+                      {componentFlows[selectedComponent.id].agents_involved.map((agent) => (
+                        <Badge key={agent} variant="outline" className="text-xs bg-emerald-100 border-emerald-200 text-emerald-700">
+                          {agent}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
 
-            {/* Graph Stats */}
-            <div className="space-y-3">
-              <h4 className="text-xs font-semibold text-stone-400 uppercase tracking-wider">
-                Graph Statistics
-              </h4>
-              <div className="grid grid-cols-2 gap-2">
-                <div className="p-2.5 bg-stone-50 rounded-lg text-center border border-stone-100">
-                  <p className="text-lg font-semibold text-stone-800">5</p>
-                  <p className="text-xs text-stone-400">Nodes</p>
-                </div>
-                <div className="p-2.5 bg-stone-50 rounded-lg text-center border border-stone-100">
-                  <p className="text-lg font-semibold text-stone-800">8</p>
-                  <p className="text-xs text-stone-400">Edges</p>
-                </div>
-                <div className="p-2.5 bg-stone-50 rounded-lg text-center border border-stone-100">
-                  <p className="text-lg font-semibold text-stone-800">3</p>
-                  <p className="text-xs text-stone-400">Depth</p>
-                </div>
-                <div className="p-2.5 bg-stone-50 rounded-lg text-center border border-stone-100">
-                  <p className="text-lg font-semibold text-stone-800">2</p>
-                  <p className="text-xs text-stone-400">Branches</p>
+            {/* Statistics - Only show if available */}
+            {stats && (
+              <div className="space-y-3">
+                <h4 className="text-xs font-semibold text-stone-400 uppercase tracking-wider">
+                  Overall Statistics
+                </h4>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="p-2.5 bg-stone-50 rounded-lg text-center border border-stone-100">
+                    <p className="text-lg font-semibold text-stone-800">{stats.total_executions || 0}</p>
+                    <p className="text-xs text-stone-400">Total Executions</p>
+                  </div>
+                  <div className="p-2.5 bg-stone-50 rounded-lg text-center border border-stone-100">
+                    <p className="text-lg font-semibold text-emerald-600">{stats.success_rate || 0}%</p>
+                    <p className="text-xs text-stone-400">Success Rate</p>
+                  </div>
+                  <div className="p-2.5 bg-stone-50 rounded-lg text-center border border-stone-100">
+                    <p className="text-lg font-semibold text-stone-800">{stats.success_count || 0}</p>
+                    <p className="text-xs text-stone-400">Successes</p>
+                  </div>
+                  <div className="p-2.5 bg-stone-50 rounded-lg text-center border border-stone-100">
+                    <p className="text-lg font-semibold text-red-600">{stats.failure_count || 0}</p>
+                    <p className="text-xs text-stone-400">Failures</p>
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
+
+            {/* Agent Breakdown */}
+            {stats?.by_agent && (
+              <div className="space-y-3">
+                <h4 className="text-xs font-semibold text-stone-400 uppercase tracking-wider">
+                  Agent Breakdown
+                </h4>
+                <div className="space-y-2">
+                  {Object.entries(stats.by_agent).map(([agent, data]: [string, any]) => (
+                    <div key={agent} className="p-2 bg-stone-50 rounded-lg border border-stone-100">
+                      <div className="flex justify-between items-center mb-1">
+                        <p className="text-xs font-semibold text-stone-700 capitalize">{agent}</p>
+                        <Badge variant="outline" className="text-xs">{data.total}</Badge>
+                      </div>
+                      <div className="flex gap-2 text-xs text-stone-500">
+                        <span>✓ {data.completed}</span>
+                        <span>✗ {data.errors}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Tips */}
             <div className="p-3 bg-blue-50 rounded-lg border border-blue-100">
@@ -327,8 +538,69 @@ export default function GraphsPage() {
   )
 }
 
-// Agents Flow Graph (similar to pipeline visualization)
-function AgentsFlowGraph({ component }: { component: Component }) {
+// Agents Flow Graph - Shows default agent flow with highlighting for executed agents
+function AgentsFlowGraph({ component, componentFlow }: { component: Component; componentFlow?: ComponentFlow }) {
+  // Determine which agents were involved in this component's execution
+  const executedAgents = componentFlow?.agents_involved.map(a => a.toLowerCase()) || []
+  const executionMessages = componentFlow?.executions?.map((e) => (e.message || "").toLowerCase()) || []
+
+  const hasMessage = (patterns: RegExp[]) =>
+    executionMessages.some((message) => patterns.some((pattern) => pattern.test(message)))
+
+  const readerNeedsContext = hasMessage([
+    /reader-searcher converged/,
+    /need_context\s*=\s*true/,
+    /need context/,
+    /needs more context/,
+  ])
+
+  const readerContextNotNeeded = hasMessage([
+    /context not needed/,
+    /need_context\s*=\s*false/,
+  ])
+
+  const searcherContextFound = hasMessage([
+    /reader-searcher converged/,
+    /context found/,
+  ])
+
+  const searcherContextNotFound = hasMessage([
+    /context not found/,
+    /need_context\s*=\s*true.*more_context\s*=\s*true/,
+  ])
+
+  const verifierToWriterLoop = hasMessage([
+    /verifier rejected/,
+    /needs revision/,
+    /writer refining with feedback/,
+    /need_revision\s*=\s*true/,
+  ])
+
+  const verifierToReaderLoop = hasMessage([
+    /verifier needs more context/,
+    /returning to reader-searcher/,
+    /more_context\s*=\s*true/,
+    /needs more context/,
+  ])
+
+  const verifierAccepted = hasMessage([
+    /verifier accepted/,
+    /need_revision\s*=\s*false,?\s*more_context\s*=\s*false/,
+  ]) || (componentFlow?.status === "success" && executedAgents.length > 0)
+  
+  // Only highlight if we have actual execution data
+  const isAgentExecuted = (agentName: string) => {
+    if (executedAgents.length === 0) return false // No data = don't highlight
+    return executedAgents.includes(agentName.toLowerCase())
+  }
+
+  // Check if connection should be highlighted (both agents were executed)
+  const isConnectionHighlighted = (agent1: string, agent2: string) => {
+    return executedAgents.length > 0 && 
+           executedAgents.includes(agent1.toLowerCase()) && 
+           executedAgents.includes(agent2.toLowerCase())
+  }
+
   return (
     <div className="relative w-full h-full flex items-center justify-center p-8">
       <svg
@@ -350,55 +622,118 @@ function AgentsFlowGraph({ component }: { component: Component }) {
           </marker>
         </defs>
 
-        {/* Arrows */}
-        <path d="M 140 60 L 300 60" fill="none" className="stroke-emerald-400" strokeWidth="2" markerEnd="url(#arrowhead-emerald)" />
-        <text x="220" y="50" textAnchor="middle" className="text-[10px] font-medium fill-emerald-600">Need Context</text>
+        {/* Arrows - KEY EXECUTION PATH */}
+        <path 
+          d="M 140 60 L 300 60" 
+          fill="none" 
+          stroke={readerNeedsContext ? "#10b981" : "#d1d5db"} 
+          strokeWidth="2" 
+          markerEnd={readerNeedsContext ? "url(#arrowhead-emerald)" : "url(#arrowhead-gray)"} 
+        />
+        <text x="220" y="50" textAnchor="middle" className="text-[10px] font-medium" fill={readerNeedsContext ? "#059669" : "#9ca3af"}>Need Context</text>
 
-        <path d="M 400 80 Q 445 115, 400 155" fill="none" className="stroke-emerald-400" strokeWidth="2" markerEnd="url(#arrowhead-emerald)" />
-        <text x="475" y="95" textAnchor="middle" className="text-[10px] font-medium fill-emerald-600">
+        {/* Searcher to Writer arrow */}
+        <path 
+          d="M 400 80 Q 445 115, 400 155" 
+          fill="none" 
+          stroke={searcherContextFound ? "#10b981" : "#d1d5db"} 
+          strokeWidth="2" 
+          markerEnd={searcherContextFound ? "url(#arrowhead-emerald)" : "url(#arrowhead-gray)"} 
+        />
+        <text x="475" y="95" textAnchor="middle" className="text-[10px] font-medium" fill={searcherContextFound ? "#059669" : "#9ca3af"}>
           <tspan x="475" dy="0">Context</tspan>
           <tspan x="475" dy="13">Found</tspan>
         </text>
 
-        <path d="M 95 82 C 95 130, 240 105, 305 160" fill="none" className="stroke-gray-300" strokeWidth="2" markerEnd="url(#arrowhead-gray)" />
-        <text x="155" y="125" textAnchor="middle" className="text-[10px] font-medium fill-gray-400">
+        {/* Alternative path - Reader bypass */}
+        <path 
+          d="M 95 82 C 95 130, 240 105, 305 160" 
+          fill="none" 
+          stroke={readerContextNotNeeded ? "#10b981" : "#d1d5db"} 
+          strokeWidth="2" 
+          markerEnd={readerContextNotNeeded ? "url(#arrowhead-emerald)" : "url(#arrowhead-gray)"} 
+        />
+        <text x="155" y="125" textAnchor="middle" className="text-[10px] font-medium" fill={readerContextNotNeeded ? "#059669" : "#9ca3af"}>
           <tspan x="155" dy="0">Context</tspan>
           <tspan x="155" dy="13">Not Needed</tspan>
         </text>
 
-        <path d="M 355 195 L 355 220" fill="none" className="stroke-emerald-400" strokeWidth="2" markerEnd="url(#arrowhead-emerald)" />
-        <text x="295" y="205" textAnchor="middle" className="text-[10px] font-medium fill-emerald-600">
+        {/* Writer to Verifier */}
+        <path 
+          d="M 355 195 L 355 220" 
+          fill="none" 
+          stroke={isConnectionHighlighted("writer", "verifier") ? "#10b981" : "#d1d5db"} 
+          strokeWidth="2" 
+          markerEnd={isConnectionHighlighted("writer", "verifier") ? "url(#arrowhead-emerald)" : "url(#arrowhead-gray)"} 
+        />
+        <text x="295" y="205" textAnchor="middle" className="text-[10px] font-medium" fill={isConnectionHighlighted("writer", "verifier") ? "#059669" : "#9ca3af"}>
           <tspan x="295" dy="0">Docstring</tspan>
           <tspan x="295" dy="13">Generated</tspan>
         </text>
 
-        <path d="M 400 230 Q 455 195, 400 165" fill="none" className="stroke-gray-300" strokeWidth="2" markerEnd="url(#arrowhead-gray)" />
-        <text x="478" y="195" textAnchor="middle" className="text-[10px] font-medium fill-gray-400">
+        {/* Alternative path - Needs Revision */}
+        <path d="M 400 230 Q 455 195, 400 165" fill="none" stroke={verifierToWriterLoop ? "#10b981" : "#d1d5db"} strokeWidth="2" markerEnd={verifierToWriterLoop ? "url(#arrowhead-emerald)" : "url(#arrowhead-gray)"} />
+        <text x="478" y="195" textAnchor="middle" className="text-[10px] font-medium" fill={verifierToWriterLoop ? "#059669" : "#9ca3af"}>
           <tspan x="478" dy="0">Needs</tspan>
           <tspan x="478" dy="13">Revision</tspan>
         </text>
 
-        <path d="M 305 255 C 170 290, 50 215, 50 120 C 50 75, 70 60, 95 60" fill="none" className="stroke-gray-300" strokeWidth="2" markerEnd="url(#arrowhead-gray)" />
-        <text x="100" y="270" textAnchor="middle" className="text-[10px] font-medium fill-gray-400">
+        {/* Alternative path - Needs More Context */}
+        <path d="M 305 255 C 170 290, 50 215, 50 120 C 50 75, 70 60, 95 60" fill="none" stroke={verifierToReaderLoop ? "#10b981" : "#d1d5db"} strokeWidth="2" markerEnd={verifierToReaderLoop ? "url(#arrowhead-emerald)" : "url(#arrowhead-gray)"} />
+        <text x="100" y="270" textAnchor="middle" className="text-[10px] font-medium" fill={verifierToReaderLoop ? "#059669" : "#9ca3af"}>
           <tspan x="100" dy="0">Needs More</tspan>
           <tspan x="100" dy="13">Context</tspan>
         </text>
 
-        <path d="M 355 262 L 355 290" fill="none" className="stroke-emerald-400" strokeWidth="2" markerEnd="url(#arrowhead-emerald)" />
-        <text x="400" y="280" textAnchor="middle" className="text-[10px] font-medium fill-emerald-600">Accepted</text>
+        {/* Verifier to completion */}
+        <path 
+          d="M 355 262 L 355 290" 
+          fill="none" 
+          stroke={verifierAccepted ? "#10b981" : "#d1d5db"} 
+          strokeWidth="2" 
+          markerEnd={verifierAccepted ? "url(#arrowhead-emerald)" : "url(#arrowhead-gray)"} 
+        />
+        <text x="400" y="280" textAnchor="middle" className="text-[10px] font-medium" fill={verifierAccepted ? "#059669" : "#9ca3af"}>Accepted</text>
 
-        <path d="M 300 40 Q 220 15, 140 40" fill="none" className="stroke-gray-300" strokeWidth="2" markerEnd="url(#arrowhead-gray)" />
-        <text x="220" y="8" textAnchor="middle" className="text-[10px] font-medium fill-gray-400">
+        {/* Alternative - Context Not Found */}
+        <path d="M 300 40 Q 220 15, 140 40" fill="none" stroke={searcherContextNotFound ? "#10b981" : "#d1d5db"} strokeWidth="2" markerEnd={searcherContextNotFound ? "url(#arrowhead-emerald)" : "url(#arrowhead-gray)"} />
+        <text x="220" y="8" textAnchor="middle" className="text-[10px] font-medium" fill={searcherContextNotFound ? "#059669" : "#9ca3af"}>
           <tspan x="220" dy="0">Context</tspan>
           <tspan x="220" dy="13">Not Found</tspan>
         </text>
 
         {/* Agent Nodes */}
-        <AgentNode label="Reader" x={95} y={60} status="completed" />
-        <AgentNode label="Searcher" x={355} y={60} status="completed" />
-        <AgentNode label="Writer" x={355} y={175} status="completed" />
-        <AgentNode label="Verifier" x={355} y={240} status="completed" />
-        <AgentNode label="Docstring Inserted" x={355} y={315} status="completed" isLarge />
+        <AgentNode 
+          label="Reader" 
+          x={95} 
+          y={60} 
+          status={isAgentExecuted("reader") ? "completed" : "pending"} 
+        />
+        <AgentNode 
+          label="Searcher" 
+          x={355} 
+          y={60} 
+          status={isAgentExecuted("searcher") ? "completed" : "pending"} 
+        />
+        <AgentNode 
+          label="Writer" 
+          x={355} 
+          y={175} 
+          status={isAgentExecuted("writer") ? "completed" : "pending"} 
+        />
+        <AgentNode 
+          label="Verifier" 
+          x={355} 
+          y={240} 
+          status={isAgentExecuted("verifier") ? "completed" : "pending"} 
+        />
+        <AgentNode 
+          label="Docstring Inserted" 
+          x={355} 
+          y={315} 
+          status={componentFlow?.status === "success" && executedAgents.length > 0 ? "completed" : "pending"} 
+          isLarge 
+        />
       </svg>
     </div>
   )
@@ -422,20 +757,366 @@ function AgentNode({
   const ry = isLarge ? 26 : 20
   const foreignWidth = isLarge ? 156 : 100
 
+  const getStatusStyles = () => {
+    switch (status) {
+      case "completed":
+        return {
+          fill: "#dcfce7",
+          stroke: "#10b981",
+          textColor: "#166534",
+          iconColor: "#10b981",
+        }
+      case "running":
+        return {
+          fill: "#fef3c3",
+          stroke: "#f59e0b",
+          textColor: "#92400e",
+          iconColor: "#f59e0b",
+        }
+      default: // pending
+        return {
+          fill: "#f3f4f6",
+          stroke: "#9ca3af",
+          textColor: "#4b5563",
+          iconColor: "#9ca3af",
+        }
+    }
+  }
+
+  const styles = getStatusStyles()
+
   return (
     <g transform={`translate(${x}, ${y})`}>
-      <ellipse cx="0" cy="0" rx={rx} ry={ry} className="fill-emerald-50 stroke-emerald-500 transition-all duration-300" strokeWidth="1.5" />
+      <ellipse cx="0" cy="0" rx={rx} ry={ry} fill={styles.fill} stroke={styles.stroke} strokeWidth="1.5" />
       <foreignObject x={-foreignWidth / 2} y="-14" width={foreignWidth} height="28">
         <div className="w-full h-full flex items-center justify-center gap-1.5">
-          <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-          <span className="text-[11px] font-semibold leading-none text-emerald-700">{label}</span>
+          {status === "completed" ? (
+            <CheckCircle2 className="w-4 h-4 flex-shrink-0" style={{ color: styles.iconColor }} />
+          ) : status === "running" ? (
+            <Circle className="w-4 h-4 flex-shrink-0 animate-pulse" style={{ color: styles.iconColor }} />
+          ) : (
+            <Circle className="w-4 h-4 flex-shrink-0" style={{ color: styles.iconColor }} />
+          )}
+          <span className="text-[11px] font-semibold leading-none" style={{ color: styles.textColor }}>
+            {label}
+          </span>
         </div>
       </foreignObject>
     </g>
   )
 }
 
-// Draggable Graph Component for CFG, PDG, HPG, GFG
+// DAG Graph Component - Shows repository dependency graph
+function DAGGraph({ dagData, selectedComponentId }: { dagData: Record<string, string[]> | null; selectedComponentId: string }) {
+  const svgRef = useRef<SVGSVGElement>(null)
+  const [nodes, setNodes] = useState<DraggableNode[]>([])
+  const [dragging, setDragging] = useState<string | null>(null)
+  const [offset, setOffset] = useState({ x: 0, y: 0 })
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set([selectedComponentId]))
+
+  // Generate hierarchical layout for DAG
+  useEffect(() => {
+    if (!dagData || Object.keys(dagData).length === 0) return
+
+    // Build a graph structure
+    const allNodes = new Set<string>()
+    const reverseEdges: Record<string, Set<string>> = {}
+    
+    Object.entries(dagData).forEach(([key, deps]) => {
+      allNodes.add(key)
+      if (!reverseEdges[key]) reverseEdges[key] = new Set()
+      deps?.forEach((dep) => {
+        allNodes.add(dep)
+        if (!reverseEdges[dep]) reverseEdges[dep] = new Set()
+        reverseEdges[dep].add(key) // Track reverse edges for layout
+      })
+    })
+
+    // Calculate levels using topological sort (BFS from leaves)
+    const levels: Map<string, number> = new Map()
+    const visited = new Set<string>()
+    
+    // Find all leaf nodes (nodes with no dependencies)
+    const leaves = Array.from(allNodes).filter(node => 
+      !dagData[node] || dagData[node].length === 0
+    )
+    
+    // Assign levels starting from leaves
+    const queue: [string, number][] = leaves.map(leaf => [leaf, 0])
+    
+    while (queue.length > 0) {
+      const [node, level] = queue.shift()!
+      if (visited.has(node)) continue
+      visited.add(node)
+      levels.set(node, Math.max(levels.get(node) || 0, level))
+      
+      // Add dependent nodes to queue
+      reverseEdges[node]?.forEach(dependent => {
+        if (!visited.has(dependent)) {
+          queue.push([dependent, level + 1])
+        }
+      })
+    }
+
+    // Group nodes by level
+    const levelGroups: Map<number, string[]> = new Map()
+    levels.forEach((level, node) => {
+      if (!levelGroups.has(level)) levelGroups.set(level, [])
+      levelGroups.get(level)!.push(node)
+    })
+
+    // Position nodes
+    const canvasWidth = 750
+    const canvasHeight = 550
+    const horizontalPadding = 60
+    const verticalPadding = 80
+    const usableWidth = canvasWidth - horizontalPadding * 2
+    const usableHeight = canvasHeight - verticalPadding * 2
+    
+    const maxLevel = Math.max(...levels.values(), 0)
+    const levelHeight = maxLevel > 0 ? usableHeight / (maxLevel + 1) : usableHeight / 2
+
+    const layoutNodes: DraggableNode[] = Array.from(allNodes).map((nodeId) => {
+      const level = levels.get(nodeId) || 0
+      const levelNodes = levelGroups.get(level) || []
+      const indexInLevel = levelNodes.indexOf(nodeId)
+      const nodeCountInLevel = levelNodes.length
+      
+      // Distribute horizontally within the level
+      let x: number
+      if (nodeCountInLevel === 1) {
+        x = canvasWidth / 2
+      } else {
+        x = horizontalPadding + (indexInLevel / (nodeCountInLevel - 1)) * usableWidth
+      }
+      
+      const y = verticalPadding + level * levelHeight
+
+      return {
+        id: nodeId,
+        x,
+        y,
+        label: nodeId.split(".").pop() || nodeId,
+        type: nodeId === selectedComponentId ? "selected" : "dependency",
+      }
+    })
+
+    setNodes(layoutNodes)
+  }, [dagData, selectedComponentId])
+
+  const getEdges = (): [string, string][] => {
+    if (!dagData) return []
+    const edges: [string, string][] = []
+    Object.entries(dagData).forEach(([source, dependencies]) => {
+      dependencies?.forEach((target) => {
+        edges.push([source, target])
+      })
+    })
+    return edges
+  }
+
+  const handleMouseDown = (e: React.MouseEvent, nodeId: string) => {
+    const node = nodes.find((n) => n.id === nodeId)
+    if (!node) return
+    setDragging(nodeId)
+    setOffset({
+      x: e.clientX - node.x,
+      y: e.clientY - node.y,
+    })
+  }
+
+  const handleMouseMove = useCallback(
+    (e: React.MouseEvent) => {
+      if (!dragging) return
+      setNodes((prev) =>
+        prev.map((node) =>
+          node.id === dragging
+            ? { ...node, x: e.clientX - offset.x, y: e.clientY - offset.y }
+            : node
+        )
+      )
+    },
+    [dragging, offset]
+  )
+
+  const handleMouseUp = () => {
+    setDragging(null)
+  }
+
+  const toggleNodeExpansion = (nodeId: string) => {
+    setExpandedNodes((prev) => {
+      const newSet = new Set(prev)
+      if (newSet.has(nodeId)) {
+        newSet.delete(nodeId)
+      } else {
+        newSet.add(nodeId)
+      }
+      return newSet
+    })
+  }
+
+  const edges = getEdges()
+
+  if (!dagData || Object.keys(dagData).length === 0) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="text-center">
+          <Network className="w-12 h-12 text-stone-300 mx-auto mb-2" />
+          <p className="text-stone-400 text-sm">No DAG data available</p>
+          <p className="text-xs text-stone-300 mt-1">Run the navigator to generate the dependency graph</p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <svg
+      ref={svgRef}
+      viewBox="0 0 800 650"
+      className="w-full h-full max-w-[900px] max-h-[700px]"
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+      onMouseLeave={handleMouseUp}
+    >
+      <defs>
+        <marker id="arrow-dag" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+          <polygon points="0 0, 8 3, 0 6" fill="#9ca3af" />
+        </marker>
+        <marker id="arrow-dag-highlight" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+          <polygon points="0 0, 8 3, 0 6" fill="#3b82f6" />
+        </marker>
+      </defs>
+
+      {/* Background */}
+      <rect width="800" height="650" fill="#fafafa" />
+
+      {/* Edges */}
+      {edges.map(([from, to], i) => {
+        const fromNode = nodes.find((n) => n.id === from)
+        const toNode = nodes.find((n) => n.id === to)
+        if (!fromNode || !toNode) return null
+
+        const isHighlighted =
+          fromNode.id === selectedComponentId || toNode.id === selectedComponentId
+
+        return (
+          <g key={i}>
+            <path
+              d={`M ${fromNode.x} ${fromNode.y + 18} Q ${(fromNode.x + toNode.x) / 2} ${(fromNode.y + toNode.y) / 2} ${toNode.x} ${toNode.y - 18}`}
+              fill="none"
+              stroke={isHighlighted ? "#3b82f6" : "#d1d5db"}
+              strokeWidth={isHighlighted ? "2.5" : "1.5"}
+              markerEnd={isHighlighted ? "url(#arrow-dag-highlight)" : "url(#arrow-dag)"}
+              opacity={isHighlighted ? 1 : 0.6}
+              className="transition-all"
+            />
+          </g>
+        )
+      })}
+
+      {/* Nodes */}
+      {nodes.map((node) => {
+        const isSelected = node.id === selectedComponentId
+        const hasDependants = Object.entries(dagData || {}).some(([_, deps]) =>
+          deps?.includes(node.id)
+        )
+        const hasDependencies = (dagData?.[node.id]?.length || 0) > 0
+
+        return (
+          <g
+            key={node.id}
+            transform={`translate(${node.x}, ${node.y})`}
+            onMouseDown={(e) => handleMouseDown(e, node.id)}
+            style={{ cursor: dragging === node.id ? "grabbing" : "grab" }}
+            onClick={() => toggleNodeExpansion(node.id)}
+          >
+            {/* Node Background */}
+            <rect
+              x="-50"
+              y="-22"
+              width="100"
+              height="44"
+              rx="6"
+              fill={
+                isSelected
+                  ? "#dbeafe"
+                  : hasDependencies || hasDependants
+                    ? "#f0fdf4"
+                    : "#f9fafb"
+              }
+              stroke={isSelected ? "#3b82f6" : hasDependencies ? "#22c55e" : "#d1d5db"}
+              strokeWidth={isSelected ? "2.5" : "1.5"}
+              className="transition-all cursor-pointer"
+            />
+
+            {/* Node Label */}
+            <text
+              textAnchor="middle"
+              dy="0"
+              fontSize="11"
+              fontWeight={isSelected ? "600" : "500"}
+              fill={isSelected ? "#1e40af" : "#374151"}
+              pointerEvents="none"
+            >
+              {node.label.length > 15 ? node.label.substring(0, 12) + "..." : node.label}
+            </text>
+
+            {/* Dependency Indicator */}
+            {(hasDependencies || hasDependants) && (
+              <circle
+                cx="45"
+                cy="-18"
+                r="6"
+                fill={hasDependencies && hasDependants ? "#f59e0b" : hasDependencies ? "#22c55e" : "#3b82f6"}
+                opacity="0.9"
+                stroke="white"
+                strokeWidth="1"
+              />
+            )}
+          </g>
+        )
+      })}
+
+      {/* Legend */}
+      <g transform="translate(10, 10)">
+        <text fontSize="11" fontWeight="600" fill="#374151" y="0">
+          Legend:
+        </text>
+        <circle cx="15" cy="18" r="4" fill="#3b82f6" />
+        <text fontSize="9" fill="#536e7b" x="25" y="22">
+          Selected
+        </text>
+
+        <circle cx="15" cy="35" r="4" fill="#22c55e" />
+        <text fontSize="9" fill="#536e7b" x="25" y="39">
+          Has Dependencies
+        </text>
+
+        <circle cx="15" cy="52" r="4" fill="#3b82f6" opacity="0.6" />
+        <text fontSize="9" fill="#536e7b" x="25" y="56">
+          Dependant
+        </text>
+
+        <circle cx="15" cy="69" r="4" fill="#f59e0b" opacity="0.8" />
+        <text fontSize="9" fill="#536e7b" x="25" y="73">
+          Both
+        </text>
+      </g>
+
+      {/* Stats */}
+      <g transform="translate(10, 120)">
+        <text fontSize="10" fontWeight="600" fill="#374151" y="0">
+          {nodes.length} components
+        </text>
+        <text fontSize="10" fontWeight="600" fill="#374151" y="15">
+          {edges.length} dependencies
+        </text>
+      </g>
+    </svg>
+  )
+}
+
+// Draggable Graph Component for CFG, PDG, HPG
 function DraggableGraph({ type, component }: { type: GraphType; component: Component }) {
   const svgRef = useRef<SVGSVGElement>(null)
   const [nodes, setNodes] = useState<DraggableNode[]>([])
@@ -480,19 +1161,6 @@ function DraggableGraph({ type, component }: { type: GraphType; component: Compo
             { id: "error", x: 380, y: 320, label: "Error Path", type: "error" },
             { id: "log", x: 120, y: 390, label: "Log Result", type: "io" },
             { id: "end", x: 250, y: 460, label: "End", type: "end" },
-          ]
-        case "gfg":
-          return [
-            { id: "root", x: 250, y: 50, label: "Root", type: "root" },
-            { id: "n1", x: 130, y: 130, label: "Node 1", type: "node" },
-            { id: "n2", x: 370, y: 130, label: "Node 2", type: "node" },
-            { id: "n3", x: 70, y: 220, label: "Node 3", type: "node" },
-            { id: "n4", x: 190, y: 220, label: "Node 4", type: "node" },
-            { id: "n5", x: 310, y: 220, label: "Node 5", type: "node" },
-            { id: "n6", x: 430, y: 220, label: "Node 6", type: "node" },
-            { id: "leaf1", x: 130, y: 310, label: "Leaf A", type: "leaf" },
-            { id: "leaf2", x: 250, y: 310, label: "Leaf B", type: "leaf" },
-            { id: "leaf3", x: 370, y: 310, label: "Leaf C", type: "leaf" },
           ]
         default:
           return []
@@ -540,21 +1208,6 @@ function DraggableGraph({ type, component }: { type: GraphType; component: Compo
           ["success", "log"],
           ["log", "end"],
           ["error", "end"],
-        ]
-      case "gfg":
-        return [
-          ["root", "n1"],
-          ["root", "n2"],
-          ["n1", "n3"],
-          ["n1", "n4"],
-          ["n2", "n5"],
-          ["n2", "n6"],
-          ["n3", "leaf1"],
-          ["n4", "leaf1"],
-          ["n4", "leaf2"],
-          ["n5", "leaf2"],
-          ["n5", "leaf3"],
-          ["n6", "leaf3"],
         ]
       default:
         return []

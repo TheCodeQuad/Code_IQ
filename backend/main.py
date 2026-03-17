@@ -469,6 +469,81 @@ def delete_file(filename: str):
         "message": f"File {filename} deleted successfully"
     }
 
+@app.get("/api/navigator/dag")
+def get_dag(repo_id: str = None):
+    """
+    Get the DAG (Directed Acyclic Graph) for a repository.
+    Returns the dependency graph of all components.
+    """
+    from backend.utils.paths import DATA_ROOT
+    
+    navigator_output_dir = Path(DATA_ROOT) / "intermediate" / "navigator_output"
+    
+    if not navigator_output_dir.exists():
+        return {
+            "success": False,
+            "message": "Navigator output directory not found",
+            "data": None
+        }
+    
+    # Try to get the specified repo's DAG or the most recent one
+    dag_path = None
+    if repo_id:
+        candidate = navigator_output_dir / f"dag_{repo_id}.json"
+        if candidate.exists():
+            dag_path = candidate
+    
+    # If not found, get the largest DAG file (by number of nodes) for better visualization
+    if not dag_path:
+        dag_files = list(navigator_output_dir.glob("dag_*.json"))
+        
+        # Find the DAG with the most nodes
+        largest_dag = None
+        max_nodes = 0
+        
+        for dag_file in dag_files:
+            try:
+                with open(dag_file, 'r', encoding='utf-8') as f:
+                    dag_data = json.load(f)
+                    node_count = len(dag_data) if isinstance(dag_data, dict) else 0
+                    if node_count > max_nodes:
+                        max_nodes = node_count
+                        largest_dag = dag_file
+            except:
+                continue
+        
+        if largest_dag:
+            dag_path = largest_dag
+        elif dag_files:
+            # Fallback to most recent if can't determine sizes
+            dag_path = sorted(dag_files, key=lambda p: p.stat().st_mtime, reverse=True)[0]
+    
+    if not dag_path or not dag_path.exists():
+        return {
+            "success": False,
+            "message": "No DAG file found",
+            "data": None
+        }
+    
+    try:
+        with open(dag_path, 'r', encoding='utf-8') as f:
+            dag_data = json.load(f)
+        
+        return {
+            "success": True,
+            "message": "DAG retrieved successfully",
+            "data": dag_data,
+            "file": dag_path.name,
+            "nodes": len(dag_data) if isinstance(dag_data, dict) else 0,
+            "edges": sum(len(v) for v in dag_data.values()) if isinstance(dag_data, dict) else 0
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Error reading DAG file: {str(e)}",
+            "data": None
+        }
+
 # ============================================================================
 # RUN SERVER
 # ============================================================================
