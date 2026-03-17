@@ -24,6 +24,7 @@ from backend.utils.file_handler import FileHandler
 from backend.utils.db import close_connection, ping as db_ping
 from backend.utils.paths import DATA_ROOT
 from backend.routes.repos import router as repos_router
+from backend.routes.github_routes import router as github_router
 
 # ============================================================================
 # APP LIFESPAN (startup / shutdown)
@@ -68,6 +69,7 @@ app.add_middleware(
 
 # Register API routers
 app.include_router(repos_router)
+app.include_router(github_router)
 
 # ============================================================================
 # OUTPUT DIRECTORY
@@ -488,4 +490,4 @@ def delete_file(filename: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("backend.app:app", host="0.0.0.0", port=8000, reload=True)

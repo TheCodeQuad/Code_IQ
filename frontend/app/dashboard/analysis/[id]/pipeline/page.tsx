@@ -1,5 +1,3 @@
-"use client"
-
 import { PipelineVisualization } from "@/components/pipeline/PipelineVisualization"
 import { ArrowLeft, GitBranch } from "lucide-react"
 import Link from "next/link"
