@@ -21,8 +21,11 @@ from .navigator.core.topo import (
 from .navigator.core.ir_export import export_ir
 from .navigator.core.dag_export import export_dag
 from backend.utils.file_handler import FileHandler
+from backend.unified_evaluator import UnifiedEvaluator
 from backend.utils.db import close_connection, ping as db_ping
+from backend.utils.paths import DATA_ROOT
 from backend.routes.repos import router as repos_router
+from backend.routes.github_routes import router as github_router
 
 # ============================================================================
 # APP LIFESPAN (startup / shutdown)
@@ -39,7 +42,6 @@ async def lifespan(app: FastAPI):
     # Shutdown: close MongoDB connection pool
     await close_connection()
     print("🛑 MongoDB connection closed")
-
 # ============================================================================
 # FASTAPI APP SETUP
 # ============================================================================
@@ -67,6 +69,7 @@ app.add_middleware(
 
 # Register API routers
 app.include_router(repos_router)
+app.include_router(github_router)
 
 # ============================================================================
 # OUTPUT DIRECTORY
@@ -81,7 +84,7 @@ def find_project_root(marker="requirements.txt"):
     return current.parents[2]
 
 PROJECT_ROOT = find_project_root()
-OUTPUT_DIR = PROJECT_ROOT / "data" / "intermediate" / "navigator_output"
+OUTPUT_DIR = DATA_ROOT / "intermediate" / "navigator_output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -394,7 +397,7 @@ def analyze_repo(req: AnalyzeRequest):
             docs = result.get("documentation", [])
             
             # Save reader output
-            reader_output_path = PROJECT_ROOT / "data" / "intermediate" / "agent_output" / "reader" / f"{repo_name}_reader_output.json"
+            reader_output_path = DATA_ROOT / "intermediate" / "agent_output" / "reader" / f"{repo_name}_reader_output.json"
             reader_output_path.parent.mkdir(parents=True, exist_ok=True)
             pipeline_components = result.get("components", {})
             FileHandler.write_json(reader_output_path, {k: FileHandler.serialize_component(v) for k, v in pipeline_components.items()})
@@ -427,6 +430,45 @@ def analyze_repo(req: AnalyzeRequest):
             detail=f"Analysis failed: {str(e)}"
         )
         
+
+class EvaluationRequest(BaseModel):
+    repo_name: str = Field(..., description="Name of the analyzed repository")
+
+@app.post("/evaluate")
+def evaluate_documentation(req: EvaluationRequest):
+    """
+    Evaluate generated documentation quality across three dimensions:
+    - Completeness: structural completeness of docstrings
+    - Helpfulness: LLM-based quality assessment (1-5)
+    - Truthfulness: verifies mentioned components actually exist
+    """
+    try:
+        print(f"🔍 Starting evaluation for: {req.repo_name}")
+
+        evaluator = UnifiedEvaluator(repo_name=req.repo_name)
+        results = evaluator.evaluate_all()
+
+        return JSONResponse(content={
+            "success": True,
+            "repo_name": req.repo_name,
+            "timestamp": datetime.now().isoformat(),
+            "overall_quality_score": results["overall_quality_score"],
+            "completeness": results["completeness"],
+            "helpfulness": results["helpfulness"],
+            "truthfulness": results["truthfulness"],
+            "output_file": results.get("output_file"),
+            "message": "Evaluation completed successfully",
+        })
+
+    except FileNotFoundError as e:
+        print(f"❌ File not found: {e}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        print(f"❌ Evaluation error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
+
 
 @app.get("/download/{filename}")
 def download_file(filename: str):
@@ -487,4 +529,4 @@ def delete_file(filename: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("backend.app:app", host="0.0.0.0", port=8000, reload=True)

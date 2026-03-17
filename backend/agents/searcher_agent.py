@@ -15,6 +15,7 @@ from backend.agents.base_agent import BaseAgent, AgentContext, AgentResult, Agen
 from backend.agents.reader_agent import ReaderOutput
 from backend.models.code_component import CodeComponent
 from backend.utils.logger import get_logger
+from backend.utils.paths import DATA_ROOT
 
 logger = get_logger(__name__)
 
@@ -83,7 +84,7 @@ class SearcherAgent(BaseAgent):
         
         # Consolidated outputs storage
         self.consolidated_outputs: List[Dict[str, Any]] = []
-        self.output_dir = Path("data/intermediate/agent_output/searcher")
+        self.output_dir = DATA_ROOT / "intermediate" / "agent_output" / "searcher"
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def set_repository_data(
@@ -665,7 +666,7 @@ Keep the explanation technical but accessible."""
         """
         try:
             # Create output directory
-            output_dir = Path("data/intermediate/agent_output/searcher")
+            output_dir = self.output_dir
             output_dir.mkdir(parents=True, exist_ok=True)
             
             # Create safe filename from component_id

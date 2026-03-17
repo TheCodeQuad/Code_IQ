@@ -22,7 +22,11 @@ from navigator.languages.typescript.extractor import extract_components as ts_ex
 from navigator.languages.python.extractor import extract_components as python_extract
 
 # Evaluator - only multilang now, no more ast-based special case
-from eval_completeness import run_multilang_evaluation, print_multilang_results
+from eval_completeness import (
+    run_multilang_evaluation,
+    print_multilang_results,
+    save_for_truthfulness_evaluation
+)
 
 
 # ================================================================
@@ -183,6 +187,8 @@ Examples:
   python run_eval.py src/main/java/
   python run_eval.py my_module.py
   python run_eval.py src/ -v
+  python run_eval.py src/ --save-for-truthfulness --system-name system_1
+  python run_eval.py src/ --save data/validation/my_results.json --system-name system_2 --append
         """
     )
 
@@ -194,6 +200,27 @@ Examples:
         "-v", "--verbose",
         action="store_true",
         help="Show per-file extraction details"
+    )
+    parser.add_argument(
+        "--save",
+        type=str,
+        help="Save results to JSON file for truthfulness evaluation"
+    )
+    parser.add_argument(
+        "--save-for-truthfulness",
+        action="store_true",
+        help="Quick save to data/validation/completeness_evaluation_cleaned.json"
+    )
+    parser.add_argument(
+        "--system-name",
+        type=str,
+        default="system_1",
+        help="System name for multi-system comparison (default: system_1)"
+    )
+    parser.add_argument(
+        "--append",
+        action="store_true",
+        help="Append to existing results file (for multi-system comparison)"
     )
 
     args = parser.parse_args()
@@ -223,6 +250,18 @@ Examples:
 
     results = run_multilang_evaluation(all_components)
     print_multilang_results(results)
+    
+    # Save results for truthfulness evaluation if requested
+    if args.save or args.save_for_truthfulness:
+        output_file = args.save if args.save else "data/validation/completeness_evaluation_cleaned.json"
+        save_for_truthfulness_evaluation(
+            results=results,
+            output_file=output_file,
+            system_name=args.system_name,
+            append_to_existing=args.append
+        )
+        print(f"\n🎯 Next step: Run truthfulness evaluation:")
+        print(f"   python -m backend.eval_truthfulness_multi_system --input {output_file}")
 
 
 if __name__ == "__main__":

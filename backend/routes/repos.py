@@ -18,12 +18,14 @@ import shutil
 import stat
 import subprocess
 import threading
+from datetime import timezone
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from bson import ObjectId
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 
 from backend.models.repository import (
     AgentLog,
@@ -35,6 +37,8 @@ from backend.models.repository import (
 )
 from backend.utils.db import get_repos_collection, update_repo_status, update_agent_log
 from backend.utils.logger import get_logger
+from backend.utils.paths import DATA_ROOT
+from backend.utils.progress_stream import format_sse_event, progress_broadcaster
 
 router = APIRouter(prefix="/api/repos", tags=["repositories"])
 logger = get_logger(__name__)
@@ -42,7 +46,7 @@ logger = get_logger(__name__)
 # ── Helpers ──────────────────────────────────────────────────────────
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]            # Code_IQ/
-CLONE_DIR = PROJECT_ROOT / "data" / "input" / "repositories"  # where repos are cloned
+CLONE_DIR = DATA_ROOT / "input" / "repositories"  # where repos are cloned
 CLONE_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -269,23 +273,75 @@ async def delete_repo(repo_id: str):
     if not doc:
         raise HTTPException(status_code=404, detail="Repository not found")
 
-    # Remove cloned directory if it exists
+    # Resolve candidate clone directories to delete.
+    # This handles historical records where repo_local_path may be stale after
+    # data-root migrations (e.g., from <app>/data to ../data).
+    candidate_dirs: list[Path] = []
+
     local_path = doc.get("repo_local_path")
-    if local_path and os.path.isdir(local_path):
+    if local_path:
+        candidate_dirs.append(Path(local_path))
+
+    repo_name = doc.get("repo_name")
+    if repo_name:
+        candidate_dirs.append(CLONE_DIR / repo_name)
+
+    repo_url = doc.get("repo_url")
+    if repo_url:
+        candidate_dirs.append(CLONE_DIR / _extract_repo_name(repo_url))
+
+    # De-duplicate while preserving order.
+    seen: set[str] = set()
+    unique_dirs: list[Path] = []
+    for path in candidate_dirs:
+        key = str(path.resolve()) if path.exists() else str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_dirs.append(path)
+
+    # Remove all matching clone directories before deleting DB metadata.
+    cleanup_errors: list[str] = []
+    removed_paths: list[str] = []
+    for path in unique_dirs:
+        if not path.is_dir():
+            continue
         try:
-            shutil.rmtree(local_path, onerror=_handle_remove_readonly)
-        except Exception:
-            pass  # best-effort cleanup
+            shutil.rmtree(str(path), onerror=_handle_remove_readonly)
+            removed_paths.append(str(path))
+        except Exception as exc:
+            cleanup_errors.append(f"{path}: {exc}")
+
+    if cleanup_errors:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "Failed to delete repository files; metadata was not removed",
+                "errors": cleanup_errors,
+            },
+        )
 
     await collection.delete_one({"_id": ObjectId(repo_id)})
 
-    return {"success": True, "message": f"Repository {repo_id} deleted"}
+    return {
+        "success": True,
+        "message": f"Repository {repo_id} deleted",
+        "removed_paths": removed_paths,
+    }
 
 
 # ── Pipeline endpoints ───────────────────────────────────────────────
 
 # Keep track of in-flight pipelines so we don't double-start.
 _running_pipelines: set[str] = set()
+
+
+async def _publish_pipeline_event(repo_id: str, event: dict[str, Any]) -> None:
+    """Publish a progress event to SSE subscribers."""
+    payload = dict(event)
+    payload.setdefault("repo_id", repo_id)
+    payload.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+    await progress_broadcaster.publish(repo_id, payload)
 
 
 def _run_pipeline_thread(repo_id: str, repo_path: str, loop: asyncio.AbstractEventLoop):
@@ -295,7 +351,13 @@ def _run_pipeline_thread(repo_id: str, repo_path: str, loop: asyncio.AbstractEve
     """
     from backend.pipeline import run_pipeline  # lazy import avoids circular
 
-    def status_callback(agent: str, status: str, progress: int, message: str):
+    def status_callback(
+        agent: str,
+        status: str,
+        progress: int,
+        message: str,
+        details: Optional[dict[str, Any]] = None,
+    ):
         """Bridge: sync callback → async DB update via loop."""
         asyncio.run_coroutine_threadsafe(
             update_repo_status(
@@ -304,6 +366,18 @@ def _run_pipeline_thread(repo_id: str, repo_path: str, loop: asyncio.AbstractEve
                 current_agent=agent,
                 progress_percent=progress,
             ),
+            loop,
+        )
+        event_payload = {
+            "event_type": "pipeline_progress",
+            "agent": agent,
+            "status": status,
+            "progress_percent": progress,
+            "message": message,
+            **(details or {}),
+        }
+        asyncio.run_coroutine_threadsafe(
+            _publish_pipeline_event(repo_id, event_payload),
             loop,
         )
 
@@ -328,6 +402,21 @@ def _run_pipeline_thread(repo_id: str, repo_path: str, loop: asyncio.AbstractEve
             ),
             loop,
         )
+        asyncio.run_coroutine_threadsafe(
+            _publish_pipeline_event(
+                repo_id,
+                {
+                    "event_type": "pipeline_progress",
+                    "agent": "pipeline",
+                    "status": "completed",
+                    "progress_percent": 100,
+                    "message": "Pipeline completed",
+                    "phase": "finalization",
+                    "step_id": "pipeline-completed",
+                },
+            ),
+            loop,
+        )
     except Exception as exc:
         logger.error(f"Pipeline failed for {repo_id}: {exc}", exc_info=True)
         asyncio.run_coroutine_threadsafe(
@@ -336,6 +425,19 @@ def _run_pipeline_thread(repo_id: str, repo_path: str, loop: asyncio.AbstractEve
                 status="failed",
                 error_message=str(exc)[:500],
                 current_agent=None,
+            ),
+            loop,
+        )
+        asyncio.run_coroutine_threadsafe(
+            _publish_pipeline_event(
+                repo_id,
+                {
+                    "event_type": "pipeline_progress",
+                    "agent": "pipeline",
+                    "status": "failed",
+                    "progress_percent": 100,
+                    "message": str(exc)[:500],
+                },
             ),
             loop,
         )
@@ -372,6 +474,18 @@ async def generate_docs(repo_id: str):
         current_agent="navigator",
         progress_percent=0,
     )
+    await _publish_pipeline_event(
+        repo_id,
+        {
+            "event_type": "pipeline_progress",
+            "agent": "navigator",
+            "status": "in_progress",
+            "progress_percent": 0,
+            "message": "Pipeline started",
+            "phase": "navigator",
+            "step_id": "extract-components",
+        },
+    )
 
     # Launch the pipeline in a background thread
     loop = asyncio.get_running_loop()
@@ -387,6 +501,65 @@ async def generate_docs(repo_id: str):
         "repo_id": repo_id,
         "message": "Pipeline started",
     }
+
+
+@router.get("/{repo_id}/events")
+async def stream_repo_events(repo_id: str, request: Request):
+    """Stream live pipeline progress updates via Server-Sent Events."""
+    if not ObjectId.is_valid(repo_id):
+        raise HTTPException(status_code=400, detail="Invalid repo_id")
+
+    collection = await get_repos_collection()
+    doc = await collection.find_one(
+        {"_id": ObjectId(repo_id)},
+        {
+            "status": 1,
+            "progress_percent": 1,
+            "current_agent": 1,
+            "updated_at": 1,
+        },
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="Repository not found")
+
+    queue = await progress_broadcaster.subscribe(repo_id)
+
+    async def event_generator():
+        try:
+            # Initial snapshot lets reconnecting clients restore state quickly.
+            initial_event = {
+                "event_type": "pipeline_snapshot",
+                "repo_id": repo_id,
+                "status": doc.get("status", "pending"),
+                "progress_percent": doc.get("progress_percent", 0),
+                "agent": doc.get("current_agent"),
+                "timestamp": doc.get("updated_at") or datetime.now(timezone.utc).isoformat(),
+            }
+            yield format_sse_event(initial_event, event="snapshot")
+
+            while True:
+                if await request.is_disconnected():
+                    break
+
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    yield format_sse_event(event, event="progress")
+                except asyncio.TimeoutError:
+                    # Keep-alive comment for proxies and browser EventSource.
+                    yield ": keepalive\n\n"
+        finally:
+            await progress_broadcaster.unsubscribe(repo_id, queue)
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers=headers,
+    )
 
 
 @router.get("/{repo_id}/status")

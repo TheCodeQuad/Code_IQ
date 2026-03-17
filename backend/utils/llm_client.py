@@ -618,13 +618,45 @@ def get_llm_client() -> BaseLLMClient:
                 logger.info(f"Initializing LocalLlamaClient for direct inference...")
                 logger.info(f"Model path resolved to: {model_path}")
                 logger.info(f"Target GPU: {main_gpu}")
-                _llm_client = LocalLlamaClient(
-                    model_path=model_path,
-                    n_ctx=n_ctx,
-                    n_gpu_layers=n_gpu_layers,
-                    n_threads=n_threads,
-                    main_gpu=main_gpu
-                )
+                try:
+                    _llm_client = LocalLlamaClient(
+                        model_path=model_path,
+                        n_ctx=n_ctx,
+                        n_gpu_layers=n_gpu_layers,
+                        n_threads=n_threads,
+                        main_gpu=main_gpu
+                    )
+                except ImportError as e:
+                    logger.warning(
+                        "llama-cpp-python is not installed. Falling back to RemoteAPIClient "
+                        "(local HTTP/Ollama if configured)."
+                    )
+                    logger.warning(str(e))
+                    _llm_client = RemoteAPIClient()
+                except Exception as e:
+                    logger.warning(f"LocalLlamaClient initialization failed: {e}")
+                    if n_gpu_layers != 0:
+                        logger.info("Retrying LocalLlamaClient in CPU mode (n_gpu_layers=0)...")
+                        try:
+                            _llm_client = LocalLlamaClient(
+                                model_path=model_path,
+                                n_ctx=n_ctx,
+                                n_gpu_layers=0,
+                                n_threads=n_threads,
+                                main_gpu=main_gpu
+                            )
+                        except Exception as cpu_err:
+                            logger.warning(
+                                f"CPU LocalLlamaClient initialization failed: {cpu_err}. "
+                                "Falling back to RemoteAPIClient (local HTTP/Ollama if configured)."
+                            )
+                            _llm_client = RemoteAPIClient()
+                    else:
+                        logger.warning(
+                            "Local llama-cpp is already configured for CPU and still failed. "
+                            "Falling back to RemoteAPIClient (local HTTP/Ollama if configured)."
+                        )
+                        _llm_client = RemoteAPIClient()
             else:
                 # Fallback to Ollama HTTP API (mode == 'ollama')
                 logger.info("Initializing RemoteAPIClient for Ollama...")

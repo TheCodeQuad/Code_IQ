@@ -11,7 +11,9 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Plus, Loader2, Github, AlertCircle } from "lucide-react";
+import { GitHubRepositorySelector } from "@/components/github-repository-selector";
 
 interface UploadRepoDialogProps {
   /** Called with the GitHub URL when the user submits. Should return a promise. */
@@ -24,6 +26,7 @@ export function UploadRepoDialog({ onUpload }: UploadRepoDialogProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const [activeTab, setActiveTab] = useState("manual");
 
   const GITHUB_RE = /^https?:\/\/(www\.)?github\.com\/[\w.-]+\/[\w.-]+(\.git)?$/;
 
@@ -71,60 +74,82 @@ export function UploadRepoDialog({ onUpload }: UploadRepoDialogProps) {
         </Button>
       </DialogTrigger>
 
-      <DialogContent className="sm:max-w-[480px]">
+      <DialogContent className="sm:max-w-[600px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Github className="w-5 h-5" />
             Add Repository
           </DialogTitle>
           <DialogDescription>
-            Paste a public GitHub repository URL. We&apos;ll clone it and you can
-            then run the documentation pipeline.
+            Add a repository by pasting a GitHub URL or selecting from your GitHub repositories.
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="mt-2 space-y-4">
-          <div className="space-y-2">
-            <Input
-              ref={inputRef}
-              placeholder="https://github.com/owner/repo"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              disabled={loading}
-              className="h-11"
-            />
-            {error && (
-              <p className="flex items-center gap-1.5 text-sm text-red-500">
-                <AlertCircle className="w-4 h-4 shrink-0" />
-                {error}
-              </p>
-            )}
-          </div>
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="manual">Manual URL</TabsTrigger>
+            <TabsTrigger value="github">GitHub Connected</TabsTrigger>
+          </TabsList>
 
-          <div className="flex justify-end gap-3">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setOpen(false)}
-              disabled={loading}
-            >
-              Cancel
-            </Button>
-            <Button type="submit" disabled={loading}>
-              {loading ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Cloning…
-                </>
-              ) : (
-                <>
-                  <Plus className="w-4 h-4 mr-2" />
-                  Add Project
-                </>
-              )}
-            </Button>
-          </div>
-        </form>
+          <TabsContent value="manual" className="mt-4">
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="space-y-2">
+                <Input
+                  ref={inputRef}
+                  placeholder="https://github.com/owner/repo"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  disabled={loading}
+                  className="h-11"
+                />
+                {error && (
+                  <p className="flex items-center gap-1.5 text-sm text-red-500">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    {error}
+                  </p>
+                )}
+              </div>
+
+              <div className="flex justify-end gap-3">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setOpen(false)}
+                  disabled={loading}
+                >
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={loading}>
+                  {loading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Cloning…
+                    </>
+                  ) : (
+                    <>
+                      <Plus className="w-4 h-4 mr-2" />
+                      Add Project
+                    </>
+                  )}
+                </Button>
+              </div>
+            </form>
+          </TabsContent>
+
+          <TabsContent value="github" className="mt-4">
+            <div className="py-4">
+              <GitHubRepositorySelector
+                onRepositorySelected={() => {
+                  setOpen(false)
+                  setActiveTab("manual")
+                }}
+                onRepositoryCloned={() => {
+                  setOpen(false)
+                }}
+              />
+            </div>
+          </TabsContent>
+        </Tabs>
       </DialogContent>
     </Dialog>
   );
