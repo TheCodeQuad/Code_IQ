@@ -26,6 +26,7 @@ from backend.utils.db import close_connection, ping as db_ping
 from backend.utils.paths import DATA_ROOT
 from backend.routes.repos import router as repos_router
 from backend.routes.github_routes import router as github_router
+from backend.routes.agents import router as agents_router 
 
 # ============================================================================
 # APP LIFESPAN (startup / shutdown)
@@ -70,7 +71,7 @@ app.add_middleware(
 # Register API routers
 app.include_router(repos_router)
 app.include_router(github_router)
-
+app.include_router(agents_router)
 # ============================================================================
 # OUTPUT DIRECTORY
 # ============================================================================
@@ -86,6 +87,58 @@ def find_project_root(marker="requirements.txt"):
 PROJECT_ROOT = find_project_root()
 OUTPUT_DIR = DATA_ROOT / "intermediate" / "navigator_output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+@app.get("/api/navigator/dag")
+def get_dag(repo_id: Optional[str] = None):
+    """Get a repository DAG from navigator output files."""
+    navigator_output_dir = DATA_ROOT / "intermediate" / "navigator_output"
+
+    if not navigator_output_dir.exists():
+        return {
+            "success": False,
+            "message": "Navigator output directory not found",
+            "data": None,
+        }
+
+    dag_path: Optional[Path] = None
+    if repo_id:
+        candidate = navigator_output_dir / f"dag_{repo_id}.json"
+        if candidate.exists():
+            dag_path = candidate
+
+    if not dag_path:
+        dag_files = sorted(
+            navigator_output_dir.glob("dag_*.json"),
+            key=lambda file_path: file_path.stat().st_mtime,
+            reverse=True,
+        )
+        if dag_files:
+            dag_path = dag_files[0]
+
+    if not dag_path or not dag_path.exists():
+        return {
+            "success": False,
+            "message": "No DAG file found",
+            "data": None,
+        }
+
+    try:
+        with open(dag_path, "r", encoding="utf-8") as file_handle:
+            dag_data = json.load(file_handle)
+
+        return {
+            "success": True,
+            "message": "DAG retrieved successfully",
+            "data": dag_data,
+            "file": dag_path.name,
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "message": f"Error reading DAG file: {str(exc)}",
+            "data": None,
+        }
 
 
 # ============================================================================
