@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { useParams } from "next/navigation"
 import Link from "next/link"
 import { useAnalysis } from "@/lib/analysis-context"
@@ -8,7 +8,6 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Separator } from "@/components/ui/separator"
 import {
   Code2,
@@ -20,6 +19,7 @@ import {
   Copy,
   Check,
   Eye,
+  EyeOff,
   PenTool,
   CheckCircle,
   Search,
@@ -29,6 +29,49 @@ import {
   AlertCircle,
   Clock,
 } from "lucide-react"
+
+function stripDocstrings(content: string, language: string): string {
+  const lines = content.split("\n")
+  const result: string[] = []
+  let inBlockComment = false
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+
+    if (inBlockComment) {
+      if (trimmed.includes("*/") || trimmed.includes('"""') || trimmed.includes("'''")) {
+        inBlockComment = false
+      }
+      continue
+    }
+
+    if (trimmed.startsWith("//") || trimmed.startsWith("#")) {
+      continue
+    }
+
+    if (trimmed.startsWith("/*") || trimmed.startsWith("/**")) {
+      if (!trimmed.includes("*/")) {
+        inBlockComment = true
+      }
+      continue
+    }
+
+    if (language === "python" && (trimmed.startsWith('"""') || trimmed.startsWith("'''"))) {
+      const quote = trimmed.startsWith('"""') ? '"""' : "'''"
+      const firstIndex = trimmed.indexOf(quote)
+      const lastIndex = trimmed.lastIndexOf(quote)
+
+      if (firstIndex === lastIndex) {
+        inBlockComment = true
+      }
+      continue
+    }
+
+    result.push(line)
+  }
+
+  return result.join("\n")
+}
 
 // File tree with documentation status (mock fallback)
 const mockFileTree = [
@@ -110,20 +153,6 @@ const mockCodeExamples = {
     return None`,
 }
 
-const mockDocstringParsed = {
-  description: "Authenticate a user and return an authentication token. This function validates the provided credentials against the database, implementing secure password verification using bcrypt. Upon successful authentication, it generates a JWT token for subsequent API requests.",
-  parameters: [
-    { name: "username", type: "str", description: "The user's unique identifier (email or username)." },
-    { name: "password", type: "str", description: "The plaintext password to verify." },
-    { name: "remember_me", type: "bool", description: "If True, extends token expiration to 30 days. Defaults to False." },
-  ],
-  returns: { type: "AuthToken | None", description: "A valid authentication token if credentials are correct, None if authentication fails." },
-  raises: [
-    { exception: "DatabaseConnectionError", description: "If unable to connect to the user database." },
-    { exception: "RateLimitExceeded", description: "If too many authentication attempts from this IP." },
-  ],
-}
-
 const mockAgentSummary = {
   reader: {
     status: "completed",
@@ -150,48 +179,20 @@ const mockGraphReferences = {
 }
 
 export default function DocumentationPage() {
-  const [selectedFile, setSelectedFile] = useState("auth/handler.py")
-  const [activeTab, setActiveTab] = useState<"code" | "docstring" | "diff">("code")
+  const [selectedFile, setSelectedFile] = useState("")
+  const [showOriginal, setShowOriginal] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [treeLoading, setTreeLoading] = useState(true)
+  const [fileLoading, setFileLoading] = useState(false)
+  const [repoTree, setRepoTree] = useState<any[]>([])
+  const [documentedCode, setDocumentedCode] = useState("")
+  const [originalCode, setOriginalCode] = useState("")
   const params = useParams()
   const analysisId = params.id as string
   const { getAnalysis } = useAnalysis()
   const analysis = getAnalysis(analysisId)
 
-  // Build real data from analysis when available
-  const fileTree = analysis?.components ? buildDocFileTree(analysis.components) : mockFileTree
-
-  const codeExamples = analysis?.components ? (() => {
-    const comps = Object.values(analysis.components!).filter(
-      (c: any) => c.file_path === selectedFile || c.file_path?.endsWith(selectedFile)
-    )
-    const comp = comps[0] || Object.values(analysis.components!)[0]
-    if (!comp) return mockCodeExamples
-    return {
-      original: comp.source_code || "// No source code available",
-      documented: comp.docstring
-        ? `${comp.docstring}\n\n${comp.source_code || ""}`
-        : comp.source_code || "// No source code available",
-    }
-  })() : mockCodeExamples
-
-  const docstringParsed = analysis?.components ? (() => {
-    const comps = Object.values(analysis.components!).filter(
-      (c: any) => c.file_path === selectedFile || c.file_path?.endsWith(selectedFile)
-    )
-    const comp = comps[0] || Object.values(analysis.components!)[0]
-    if (!comp?.docstring) return mockDocstringParsed
-    return {
-      description: comp.docstring.replace(/"""/g, "").trim().split("\n")[0] || "No description",
-      parameters: comp.depends_on?.map((d: string) => ({
-        name: d.split(".").pop() || d,
-        type: "any",
-        description: `Dependency: ${d}`,
-      })) || [],
-      returns: { type: comp.type, description: `Returns ${comp.type}` },
-      raises: [] as { exception: string; description: string }[],
-    }
-  })() : mockDocstringParsed
+  const fileTree = repoTree.length > 0 ? repoTree : analysis?.components ? buildDocFileTree(analysis.components) : mockFileTree
 
   const agentSummary = analysis?.stats ? {
     reader: {
@@ -218,8 +219,102 @@ export default function DocumentationPage() {
     hpg: Object.keys(analysis.dag).slice(7, 8),
   } : mockGraphReferences
 
+  const fetchFileContent = useCallback(
+    async (filePath: string) => {
+      if (!filePath) return
+      setFileLoading(true)
+      try {
+        const [documentedRes, originalRes] = await Promise.all([
+          fetch(`/api/repos/${analysisId}/file?path=${encodeURIComponent(filePath)}&documented=true`),
+          fetch(`/api/repos/${analysisId}/file?path=${encodeURIComponent(filePath)}&documented=false`),
+        ])
+
+        let documentedContent = ""
+        let originalContent = ""
+
+        // Try to get documented version
+        if (documentedRes.ok) {
+          const documentedData = await documentedRes.json()
+          documentedContent = documentedData?.content || ""
+        }
+
+        // Try to get original version
+        if (originalRes.ok) {
+          const originalData = await originalRes.json()
+          originalContent = originalData?.content || ""
+        }
+
+        // If we have documented content, use it; otherwise use original
+        const language = filePath.split(".").pop()?.toLowerCase() || "text"
+        
+        if (!documentedContent && originalContent) {
+          // If documented failed but original succeeded, strip docstrings from original
+          setDocumentedCode(originalContent)
+          setOriginalCode(stripDocstrings(originalContent, language))
+        } else if (documentedContent && originalContent) {
+          // If both succeeded, use them as-is
+          setDocumentedCode(documentedContent)
+          setOriginalCode(originalContent)
+        } else if (documentedContent) {
+          // Only documented succeeded, strip docstrings for original view
+          setDocumentedCode(documentedContent)
+          setOriginalCode(stripDocstrings(documentedContent, language))
+        } else if (originalContent) {
+          // Fallback: only original succeeded
+          setDocumentedCode(originalContent)
+          setOriginalCode(stripDocstrings(originalContent, language))
+        } else {
+          // Both failed, show empty code
+          setDocumentedCode("")
+          setOriginalCode("")
+        }
+      } catch (err) {
+        console.error("Error fetching file content:", err)
+        setDocumentedCode("")
+        setOriginalCode("")
+      } finally {
+        setFileLoading(false)
+      }
+    },
+    [analysisId]
+  )
+
+  useEffect(() => {
+    async function fetchTree() {
+      try {
+        const res = await fetch(`/api/repos/${analysisId}/tree`)
+        if (!res.ok) throw new Error("Failed to load tree")
+        const data = await res.json()
+        const realTree = data?.tree || []
+        setRepoTree(realTree)
+        const first = findFirstFile(realTree)
+        if (first) {
+          setSelectedFile(first.path || first.name)
+        }
+      } catch {
+        const fallbackTree = analysis?.components ? buildDocFileTree(analysis.components) : mockFileTree
+        setRepoTree(fallbackTree)
+        const first = findFirstFile(fallbackTree)
+        if (first) {
+          setSelectedFile(first.path || first.name)
+        }
+      } finally {
+        setTreeLoading(false)
+      }
+    }
+    fetchTree()
+  }, [analysisId, analysis?.components])
+
+  useEffect(() => {
+    if (selectedFile) {
+      fetchFileContent(selectedFile)
+    }
+  }, [selectedFile, fetchFileContent])
+
+  const displayCode = showOriginal ? originalCode : documentedCode
+
   const handleCopy = () => {
-    navigator.clipboard.writeText(codeExamples.documented)
+    navigator.clipboard.writeText(displayCode)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
@@ -232,42 +327,6 @@ export default function DocumentationPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="border-b border-border bg-card sticky top-0 z-50">
-        <div className="max-w-[1600px] mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <Link href="/dashboard">
-              <Button variant="ghost" size="sm">
-                <ArrowLeft className="w-4 h-4 mr-2" />
-                Back
-              </Button>
-            </Link>
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
-                <Code2 className="w-5 h-5 text-primary-foreground" />
-              </div>
-              <div>
-                <span className="text-lg font-semibold text-foreground">{analysis?.repoName || "api-gateway"}</span>
-                <Badge className="ml-2 bg-chart-3/10 text-chart-3 border border-chart-3/20">{analysis?.status === "completed" ? "Documented" : "Pending"}</Badge>
-              </div>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <Link href={`/dashboard/analysis/${analysisId}/graphs`}>
-              <Button variant="outline" size="sm" className="border-border bg-transparent">
-                <Network className="w-4 h-4 mr-2" />
-                View Graphs
-              </Button>
-            </Link>
-            <Link href={`/dashboard/analysis/${analysisId}/metrics`}>
-              <Button variant="outline" size="sm" className="border-border bg-transparent">
-                View Metrics
-              </Button>
-            </Link>
-          </div>
-        </div>
-      </header>
-
       <main className="max-w-[1600px] mx-auto">
         <div className="grid grid-cols-12 min-h-[calc(100vh-73px)]">
           {/* LEFT: Repository Tree */}
@@ -280,15 +339,19 @@ export default function DocumentationPage() {
             </div>
             <ScrollArea className="h-[calc(100vh-140px)]">
               <div className="p-3 space-y-1">
-                {fileTree.map((item) => (
-                  <FileTreeItem
-                    key={item.name}
-                    item={item}
-                    selectedFile={selectedFile}
-                    onSelect={setSelectedFile}
-                    statusConfig={statusConfig}
-                  />
-                ))}
+                {treeLoading ? (
+                  <p className="text-xs text-muted-foreground px-2 py-1">Loading repository tree...</p>
+                ) : (
+                  fileTree.map((item) => (
+                    <FileTreeItem
+                      key={item.path || item.name}
+                      item={item}
+                      selectedFile={selectedFile}
+                      onSelect={setSelectedFile}
+                      statusConfig={statusConfig}
+                    />
+                  ))
+                )}
               </div>
             </ScrollArea>
           </div>
@@ -301,121 +364,58 @@ export default function DocumentationPage() {
                 <span className="font-mono text-sm text-foreground">{selectedFile}</span>
                 <Badge className="bg-chart-3/10 text-chart-3 border border-chart-3/20">
                   <CheckCircle className="w-3 h-3 mr-1" />
-                  Documented
+                  {showOriginal ? "Original" : "Documented"}
                 </Badge>
               </div>
-              <Button variant="outline" size="sm" className="border-border bg-transparent" onClick={handleCopy}>
-                {copied ? (
-                  <>
-                    <Check className="w-4 h-4 mr-2" />
-                    Copied
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-4 h-4 mr-2" />
-                    Copy
-                  </>
-                )}
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant={showOriginal ? "default" : "outline"}
+                  size="sm"
+                  className={showOriginal ? "bg-amber-600 hover:bg-amber-700" : "border-border bg-transparent"}
+                  onClick={() => setShowOriginal((prev) => !prev)}
+                >
+                  {showOriginal ? (
+                    <>
+                      <EyeOff className="w-4 h-4 mr-2" />
+                      See With Docstring
+                    </>
+                  ) : (
+                    <>
+                      <Eye className="w-4 h-4 mr-2" />
+                      See Original
+                    </>
+                  )}
+                </Button>
+                <Button variant="outline" size="sm" className="border-border bg-transparent" onClick={handleCopy}>
+                  {copied ? (
+                    <>
+                      <Check className="w-4 h-4 mr-2" />
+                      Copied
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-4 h-4 mr-2" />
+                      Copy
+                    </>
+                  )}
+                </Button>
+              </div>
             </div>
 
-            <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)} className="h-full">
-              <div className="px-4 pt-4">
-                <TabsList className="bg-secondary">
-                  <TabsTrigger value="code">Code</TabsTrigger>
-                  <TabsTrigger value="docstring">Docstring</TabsTrigger>
-                  <TabsTrigger value="diff">Diff View</TabsTrigger>
-                </TabsList>
-              </div>
-
-              <TabsContent value="code" className="p-4 mt-0">
-                <div className="relative rounded-lg overflow-hidden">
+            <div className="p-4 mt-0">
+              <div className="relative rounded-lg overflow-hidden border border-border">
+                {fileLoading ? (
+                  <div className="p-6 text-sm text-muted-foreground">Loading file...</div>
+                ) : (
                   <pre className="bg-foreground text-background p-6 text-sm overflow-x-auto font-mono leading-relaxed">
-                    <code>{codeExamples.documented}</code>
+                    <code>{displayCode || "// Select a file to view code"}</code>
                   </pre>
-                  <Badge className="absolute top-4 right-4 bg-chart-3 text-white">AI Generated</Badge>
-                </div>
-              </TabsContent>
-
-              <TabsContent value="docstring" className="p-4 mt-0">
-                <Card className="border-border">
-                  <CardContent className="p-6 space-y-6">
-                    {/* Description */}
-                    <div>
-                      <h4 className="text-sm font-semibold text-foreground mb-2">Description</h4>
-                      <p className="text-sm text-muted-foreground leading-relaxed">{docstringParsed.description}</p>
-                    </div>
-
-                    <Separator />
-
-                    {/* Parameters */}
-                    <div>
-                      <h4 className="text-sm font-semibold text-foreground mb-3">Parameters</h4>
-                      <div className="space-y-3">
-                        {docstringParsed.parameters.map((param) => (
-                          <div key={param.name} className="flex gap-4 p-3 bg-secondary/50 rounded-lg">
-                            <div className="flex items-center gap-2">
-                              <code className="text-sm font-mono text-primary font-medium">{param.name}</code>
-                              <Badge variant="outline" className="text-xs border-border">{param.type}</Badge>
-                            </div>
-                            <p className="text-sm text-muted-foreground">{param.description}</p>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    <Separator />
-
-                    {/* Returns */}
-                    <div>
-                      <h4 className="text-sm font-semibold text-foreground mb-3">Returns</h4>
-                      <div className="flex gap-4 p-3 bg-secondary/50 rounded-lg">
-                        <Badge variant="outline" className="text-xs border-border">{docstringParsed.returns.type}</Badge>
-                        <p className="text-sm text-muted-foreground">{docstringParsed.returns.description}</p>
-                      </div>
-                    </div>
-
-                    <Separator />
-
-                    {/* Raises */}
-                    <div>
-                      <h4 className="text-sm font-semibold text-foreground mb-3">Raises</h4>
-                      <div className="space-y-2">
-                        {docstringParsed.raises.map((item) => (
-                          <div key={item.exception} className="flex gap-4 p-3 bg-destructive/5 rounded-lg border border-destructive/10">
-                            <code className="text-sm font-mono text-destructive font-medium">{item.exception}</code>
-                            <p className="text-sm text-muted-foreground">{item.description}</p>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              </TabsContent>
-
-              <TabsContent value="diff" className="p-4 mt-0">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <div className="flex items-center gap-2 mb-2">
-                      <Badge variant="outline" className="border-destructive/30 text-destructive">Before</Badge>
-                      <span className="text-xs text-muted-foreground">Original code</span>
-                    </div>
-                    <pre className="bg-destructive/5 border border-destructive/10 text-foreground p-4 rounded-lg text-xs overflow-x-auto font-mono leading-relaxed">
-                      <code>{codeExamples.original}</code>
-                    </pre>
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2 mb-2">
-                      <Badge variant="outline" className="border-chart-3/30 text-chart-3">After</Badge>
-                      <span className="text-xs text-muted-foreground">With documentation</span>
-                    </div>
-                    <pre className="bg-chart-3/5 border border-chart-3/10 text-foreground p-4 rounded-lg text-xs overflow-x-auto font-mono leading-relaxed">
-                      <code>{codeExamples.documented}</code>
-                    </pre>
-                  </div>
-                </div>
-              </TabsContent>
-            </Tabs>
+                )}
+                <Badge className={`absolute top-4 right-4 text-white ${showOriginal ? "bg-amber-600" : "bg-chart-3"}`}>
+                  {showOriginal ? "Original" : "With Docstrings"}
+                </Badge>
+              </div>
+            </div>
           </div>
 
           {/* RIGHT: Context Panel */}
@@ -475,7 +475,7 @@ export default function DocumentationPage() {
                     <div className="p-3 bg-secondary/50 rounded-lg">
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-xs font-medium text-foreground">CFG Nodes</span>
-                        <Link href={`/dashboard/analysis/${analysisId}/graphs?type=cfg`}>
+                        <Link href={`/dashboard/analysis/${analysisId}/results/graph?type=cfg`}>
                           <Button variant="ghost" size="sm" className="h-6 text-xs">
                             <ExternalLink className="w-3 h-3 mr-1" />
                             Jump
@@ -491,7 +491,7 @@ export default function DocumentationPage() {
                     <div className="p-3 bg-secondary/50 rounded-lg">
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-xs font-medium text-foreground">PDG Dependencies</span>
-                        <Link href={`/dashboard/analysis/${analysisId}/graphs?type=pdg`}>
+                        <Link href={`/dashboard/analysis/${analysisId}/results/graph?type=pdg`}>
                           <Button variant="ghost" size="sm" className="h-6 text-xs">
                             <ExternalLink className="w-3 h-3 mr-1" />
                             Jump
@@ -544,7 +544,7 @@ function FileTreeItem({
 }) {
   const [expanded, setExpanded] = useState(true)
   const isFolder = item.type === "folder"
-  const fullPath = item.name
+  const fullPath = item.path || item.name
 
   const langIcons: Record<string, string> = {
     python: "text-chart-1",
@@ -604,6 +604,17 @@ function FileTreeItem({
   )
 }
 
+function findFirstFile(nodes: any[]): { name: string; path?: string } | null {
+  for (const node of nodes) {
+    if (node.type === "file") return node
+    if (node.type === "folder" && Array.isArray(node.children)) {
+      const found = findFirstFile(node.children)
+      if (found) return found
+    }
+  }
+  return null
+}
+
 function AgentCard({
   icon: Icon,
   name,
@@ -617,7 +628,7 @@ function AgentCard({
   output: string
   color: string
 }) {
-  const statusIcon = status === "passed" || status === "completed" ? CheckCircle : status === "warning" ? AlertCircle : Clock
+  const StatusIcon = status === "passed" || status === "completed" ? CheckCircle : status === "warning" ? AlertCircle : Clock
 
   return (
     <div className="p-3 bg-secondary/50 rounded-lg border border-border/50">
@@ -626,7 +637,7 @@ function AgentCard({
           <Icon className="w-3 h-3 text-white" />
         </div>
         <span className="text-sm font-medium text-foreground">{name}</span>
-        <statusIcon className={`w-3 h-3 ml-auto ${status === "passed" || status === "completed" ? "text-chart-3" : "text-chart-1"}`} />
+        <StatusIcon className={`w-3 h-3 ml-auto ${status === "passed" || status === "completed" ? "text-chart-3" : "text-chart-1"}`} />
       </div>
       <p className="text-xs text-muted-foreground leading-relaxed">{output}</p>
     </div>
@@ -656,6 +667,7 @@ function buildDocFileTree(components: Record<string, any>): any[] {
           current[part] = {
             name: part,
             type: "file",
+            path: filePath,
             status: data.documented === data.total ? "documented" : data.documented > 0 ? "partial" : "pending",
             lang: data.lang,
           }

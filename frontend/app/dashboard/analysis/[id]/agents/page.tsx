@@ -223,10 +223,10 @@ export default function AgentReasoningPage() {
       <header className="border-b border-border bg-card sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <Link href={`/dashboard/analysis/${analysisId}/pipeline`}>
+            <Link href={`/dashboard/analysis/${analysisId}/results`}>
               <Button variant="ghost" size="sm">
                 <ArrowLeft className="w-4 h-4 mr-2" />
-                Back to Pipeline
+                Back to Results
               </Button>
             </Link>
             <div className="flex items-center gap-2">

@@ -28,7 +28,7 @@ from backend.models.code_component import CodeComponent, ComponentType
 def main():
     # Prompt for GitHub repo URL or local path
     print("Navigator runner (no agents)")
-    print("Enter GitHub repository URL or local path (e.g., data/input/repositories/<repo>):")
+    print("Enter GitHub repository URL or local path (e.g., ../data/input/repositories/<repo>):")
     user_input = input("> ").strip()
 
     if not user_input:

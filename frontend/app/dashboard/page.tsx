@@ -45,6 +45,7 @@ import { Input } from "@/components/ui/input"
 import { isBackendOnline } from "@/lib/api"
 import { useRepos } from "@/hooks/use-repos"
 import { useAnalysis } from "@/lib/analysis-context"
+import { useGitHub } from "@/hooks/use-github"
 import type { RepoSummary } from "@/lib/repo-types"
 
 // ── Status → visual config ──────────────────────────────────────────
@@ -131,9 +132,40 @@ export default function DashboardPage() {
   const [searchQuery, setSearchQuery] = useState("")
   const [view, setView] = useState<"grid" | "list">("grid")
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null)
+  const [processedCode, setProcessedCode] = useState<string | null>(null)
   const { data: session } = useSession()
   const router = useRouter()
   const { repos, loading, error, fetchRepos, uploadRepo, deleteRepo, generateDocs } = useRepos()
+  const { authorizeGitHub } = useGitHub()
+
+  // Handle GitHub OAuth callback
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const code = params.get("code")
+
+    // Only process the code once to prevent duplicate requests
+    if (code && processedCode !== code && session?.user?.id) {
+      console.log("[GitHub OAuth] Processing authorization code:", code.substring(0, 10) + "...")
+      setProcessedCode(code)
+      // Remove the one-time code immediately so strict mode / refresh cannot reuse it.
+      window.history.replaceState({}, document.title, "/dashboard")
+      
+      authorizeGitHub(code).then((success) => {
+        console.log("[GitHub OAuth] Authorization result:", success)
+        if (success) {
+          // Already cleared above.
+        } else {
+          // OAuth codes are one-time use. User must start a fresh OAuth flow.
+          console.warn("[GitHub OAuth] Authorization failed. Please click Connect GitHub again to generate a new code.")
+        }
+      }).catch((err) => {
+        console.error("[GitHub OAuth] Authorization error:", err)
+        // OAuth codes are one-time use. User must start a fresh OAuth flow.
+      })
+    } else if (code && !session?.user?.id) {
+      console.log("[GitHub OAuth] Code present but waiting for session:", code.substring(0, 10) + "...")
+    }
+  }, [session?.user?.id, authorizeGitHub, processedCode])
 
   // Check backend health on mount
   useEffect(() => {
@@ -175,11 +207,7 @@ export default function DashboardPage() {
   }
 
   async function handleGenerate(repoId: string) {
-    try {
-      await generateDocs(repoId)
-    } catch (err: any) {
-      alert(err.message)
-    }
+    router.push(`/dashboard/analysis/${repoId}/pipeline?autostart=1`)
   }
 
   return (
@@ -550,7 +578,7 @@ function RepoCard({
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => onGenerate(repo.id)}>
                 <Play className="w-4 h-4 mr-2" />
-                Run Analysis
+                Start Analysis
               </DropdownMenuItem>
               <DropdownMenuItem className="text-destructive" onClick={() => onDelete(repo.id)}>
                 <Trash2 className="w-4 h-4 mr-2" />
@@ -621,7 +649,7 @@ function RepoCard({
             onClick={() => onGenerate(repo.id)}
           >
             <Play className="w-4 h-4 mr-2" />
-            Analyze
+            Start Analysis
           </Button>
         )}
       </CardContent>
