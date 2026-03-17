@@ -229,30 +229,49 @@ export default function DocumentationPage() {
           fetch(`/api/repos/${analysisId}/file?path=${encodeURIComponent(filePath)}&documented=false`),
         ])
 
-        if (!documentedRes.ok) {
-          throw new Error("Failed to load file")
+        let documentedContent = ""
+        let originalContent = ""
+
+        // Try to get documented version
+        if (documentedRes.ok) {
+          const documentedData = await documentedRes.json()
+          documentedContent = documentedData?.content || ""
         }
 
-        const documentedData = await documentedRes.json()
-        const documentedContent = documentedData?.content || "// No source code available"
-        setDocumentedCode(documentedContent)
-
+        // Try to get original version
         if (originalRes.ok) {
           const originalData = await originalRes.json()
-          const originalContent = originalData?.content || ""
-          if (originalContent && originalContent !== documentedContent) {
-            setOriginalCode(originalContent)
-          } else {
-            const language = filePath.split(".").pop()?.toLowerCase() || "text"
-            setOriginalCode(stripDocstrings(documentedContent, language))
-          }
-        } else {
-          const language = filePath.split(".").pop()?.toLowerCase() || "text"
-          setOriginalCode(stripDocstrings(documentedContent, language))
+          originalContent = originalData?.content || ""
         }
-      } catch {
-        setDocumentedCode("// Could not load file contents")
-        setOriginalCode("// Could not load original file contents")
+
+        // If we have documented content, use it; otherwise use original
+        const language = filePath.split(".").pop()?.toLowerCase() || "text"
+        
+        if (!documentedContent && originalContent) {
+          // If documented failed but original succeeded, strip docstrings from original
+          setDocumentedCode(originalContent)
+          setOriginalCode(stripDocstrings(originalContent, language))
+        } else if (documentedContent && originalContent) {
+          // If both succeeded, use them as-is
+          setDocumentedCode(documentedContent)
+          setOriginalCode(originalContent)
+        } else if (documentedContent) {
+          // Only documented succeeded, strip docstrings for original view
+          setDocumentedCode(documentedContent)
+          setOriginalCode(stripDocstrings(documentedContent, language))
+        } else if (originalContent) {
+          // Fallback: only original succeeded
+          setDocumentedCode(originalContent)
+          setOriginalCode(stripDocstrings(originalContent, language))
+        } else {
+          // Both failed, show empty code
+          setDocumentedCode("")
+          setOriginalCode("")
+        }
+      } catch (err) {
+        console.error("Error fetching file content:", err)
+        setDocumentedCode("")
+        setOriginalCode("")
       } finally {
         setFileLoading(false)
       }
