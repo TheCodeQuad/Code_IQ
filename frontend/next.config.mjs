@@ -11,6 +11,20 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  async redirects() {
+    return [
+      {
+        source: "/dashboard/analysis/:id/documentation",
+        destination: "/dashboard/analysis/:id/results/documentation",
+        permanent: false,
+      },
+      {
+        source: "/dashboard/analysis/:id/metrics",
+        destination: "/dashboard/analysis/:id/results/metrics",
+        permanent: false,
+      },
+    ]
+  },
   turbopack: {
     root: __dirname,
   },

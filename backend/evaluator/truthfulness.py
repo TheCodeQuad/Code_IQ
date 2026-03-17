@@ -27,6 +27,7 @@ sys.path.insert(0, str(project_root))
 
 from backend.utils.logger import get_logger
 from backend.models.code_component import CodeComponent, ComponentType
+from backend.utils.paths import DATA_ROOT
 
 logger = get_logger(__name__)
 
@@ -699,19 +700,19 @@ def main():
     parser.add_argument(
         '--writer-dir',
         type=str,
-        default='data/intermediate/agent_output/writer',
+        default=str(DATA_ROOT / 'intermediate' / 'agent_output' / 'writer'),
         help='Directory containing writer output JSON files'
     )
     parser.add_argument(
         '--navigator-dir',
         type=str,
-        default='data/intermediate/navigator_output',
+        default=str(DATA_ROOT / 'intermediate' / 'navigator_output'),
         help='Directory containing navigator output (DAGs, components)'
     )
     parser.add_argument(
         '--output-dir',
         type=str,
-        default='data/validation/truthfulness',
+        default=str(DATA_ROOT / 'validation' / 'truthfulness'),
         help='Directory to save evaluation results'
     )
     parser.add_argument(
@@ -734,9 +735,17 @@ def main():
     use_llm = not args.no_llm
     
     # Resolve paths
-    writer_dir = project_root / args.writer_dir
-    navigator_dir = project_root / args.navigator_dir
-    output_dir = project_root / args.output_dir
+    writer_dir = Path(args.writer_dir)
+    if not writer_dir.is_absolute():
+        writer_dir = project_root / writer_dir
+
+    navigator_dir = Path(args.navigator_dir)
+    if not navigator_dir.is_absolute():
+        navigator_dir = project_root / navigator_dir
+
+    output_dir = Path(args.output_dir)
+    if not output_dir.is_absolute():
+        output_dir = project_root / output_dir
     
     print("=" * 60)
     print("Docstring Truthfulness Evaluation")

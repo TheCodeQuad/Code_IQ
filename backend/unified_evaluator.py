@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 from typing import Dict, Any, Optional
 from dataclasses import asdict
+from backend.utils.paths import DATA_ROOT
 
 # Project root
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -33,9 +34,9 @@ class UnifiedEvaluator:
 
     def __init__(self, repo_name: str):
         self.repo_name = repo_name
-        self.nav_output_dir = PROJECT_ROOT / "data" / "intermediate" / "navigator_output"
-        self.writer_output_dir = PROJECT_ROOT / "data" / "intermediate" / "agent_output" / "writer"
-        self.validation_dir = PROJECT_ROOT / "data" / "validation" / repo_name
+        self.nav_output_dir = DATA_ROOT / "intermediate" / "navigator_output"
+        self.writer_output_dir = DATA_ROOT / "intermediate" / "agent_output" / "writer"
+        self.validation_dir = DATA_ROOT / "validation" / repo_name
         self.validation_dir.mkdir(parents=True, exist_ok=True)
 
     def _load_components(self) -> Dict[str, CodeComponent]:

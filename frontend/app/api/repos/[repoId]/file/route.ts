@@ -19,15 +19,20 @@ export async function GET(
 
     const { repoId } = await params;
     const filePath = req.nextUrl.searchParams.get("path");
+    const documented = req.nextUrl.searchParams.get("documented");
 
     if (!filePath) {
       return NextResponse.json({ error: "Missing path parameter" }, { status: 400 });
     }
 
-    const res = await fetch(
-      `${BACKEND}/api/repos/${repoId}/file?path=${encodeURIComponent(filePath)}`,
-      { cache: "no-store" }
-    );
+    const query = new URLSearchParams({ path: filePath });
+    if (documented !== null) {
+      query.set("documented", documented);
+    }
+
+    const res = await fetch(`${BACKEND}/api/repos/${repoId}/file?${query.toString()}`, {
+      cache: "no-store",
+    });
 
     const data = await res.json();
     return NextResponse.json(data, { status: res.status });
