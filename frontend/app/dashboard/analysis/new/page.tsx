@@ -29,6 +29,8 @@ import {
   AlertCircle,
   Check,
   Globe,
+  Github,
+  Unplug,
 } from "lucide-react"
 import {
   Select,
@@ -38,6 +40,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { uploadRepo } from "@/lib/api"
+import { useGitHub } from "@/hooks/use-github"
 
 const LANGUAGE_EXTENSIONS: Record<string, string[]> = {
   python: [".py"],
@@ -58,6 +61,8 @@ const COMMON_LANGUAGE_PATTERNS: Record<string, string> = {
 export default function NewAnalysisPage() {
   const router = useRouter()
   const { data: session } = useSession()
+  const { isConnected: isGitHubConnected, initiateGitHubAuth, disconnectGitHub } = useGitHub()
+  const [disconnectingGitHub, setDisconnectingGitHub] = useState(false)
   const [uploadMethod, setUploadMethod] = useState<"upload" | "git">("git")
   const [repoUrl, setRepoUrl] = useState("")
   const [selectedLanguages, setSelectedLanguages] = useState<string[]>(["python"])
@@ -168,6 +173,24 @@ export default function NewAnalysisPage() {
     }
   }
 
+  const handleDisconnectGitHub = async () => {
+    const confirmed = window.confirm("Disconnect GitHub and clear this account's GitHub connection?")
+    if (!confirmed) return
+
+    setDisconnectingGitHub(true)
+    const success = await disconnectGitHub()
+    setDisconnectingGitHub(false)
+
+    if (!success) {
+      alert("Failed to disconnect GitHub. Please try again.")
+      return
+    }
+
+    if (uploadMethod === "github") {
+      setUploadMethod("git")
+    }
+  }
+
   return (
     <div className="min-h-screen bg-background">
       {/* Sidebar */}
@@ -236,15 +259,46 @@ export default function NewAnalysisPage() {
       <div className="ml-56">
         {/* Header */}
         <header className="border-b border-border bg-card">
-          <div className="px-6 py-3 flex items-center gap-3">
-            <Link href="/dashboard">
-              <Button variant="ghost" size="sm" className="h-8 px-2 text-muted-foreground hover:text-foreground">
-                <ArrowLeft className="w-4 h-4 mr-1.5" />
-                Back
-              </Button>
-            </Link>
-            <div className="h-4 w-px bg-border" />
-            <span className="text-sm font-medium text-foreground">New Analysis</span>
+          <div className="px-6 py-3 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Link href="/dashboard">
+                <Button variant="ghost" size="sm" className="h-8 px-2 text-muted-foreground hover:text-foreground">
+                  <ArrowLeft className="w-4 h-4 mr-1.5" />
+                  Back
+                </Button>
+              </Link>
+              <div className="h-4 w-px bg-border" />
+              <span className="text-sm font-medium text-foreground">New Analysis</span>
+            </div>
+            <div className="flex items-center gap-3">
+              {isGitHubConnected ? (
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30">
+                    <Github className="w-4 h-4 text-emerald-500" />
+                    <span className="text-xs font-medium text-emerald-600">GitHub Connected</span>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 gap-1.5"
+                    onClick={handleDisconnectGitHub}
+                    disabled={disconnectingGitHub}
+                  >
+                    {disconnectingGitHub ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Unplug className="w-3.5 h-3.5" />}
+                    <span className="text-xs">Disconnect</span>
+                  </Button>
+                </div>
+              ) : (
+                <Button 
+                  onClick={initiateGitHubAuth}
+                  size="sm" 
+                  className="h-8 gap-2 bg-[#24292e] hover:bg-[#1f2937] text-white border-0"
+                >
+                  <Github className="w-4 h-4" />
+                  <span className="text-xs font-medium">Connect GitHub</span>
+                </Button>
+              )}
+            </div>
           </div>
         </header>
 
@@ -266,7 +320,7 @@ export default function NewAnalysisPage() {
                   <CardDescription className="text-xs">Choose how to provide your codebase</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <div className="grid grid-cols-2 gap-3 mb-4">
+                  <div className="grid grid-cols-3 gap-3 mb-4">
                     <button
                       type="button"
                       onClick={() => setUploadMethod("upload")}
@@ -293,6 +347,24 @@ export default function NewAnalysisPage() {
                       <p className="text-sm font-medium text-foreground">Git Repository</p>
                       <p className="text-xs text-muted-foreground">Clone from URL</p>
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (isGitHubConnected) {
+                          router.push("/dashboard/analysis/new/github")
+                        }
+                      }}
+                      disabled={!isGitHubConnected}
+                      className={`p-3 rounded-lg border transition-all text-center ${
+                        isGitHubConnected
+                          ? "border-border hover:border-foreground/20"
+                          : "border-border opacity-50 cursor-not-allowed"
+                      }`}
+                    >
+                      <Github className="w-5 h-5 mx-auto mb-1.5 text-muted-foreground" />
+                      <p className="text-sm font-medium text-foreground">GitHub Connected</p>
+                      <p className="text-xs text-muted-foreground">{isGitHubConnected ? "Select from repos" : "Connect first"}</p>
+                    </button>
                   </div>
 
                   {uploadMethod === "upload" ? (
@@ -314,7 +386,7 @@ export default function NewAnalysisPage() {
                         Select File
                       </Button>
                     </div>
-                  ) : (
+                  ) : uploadMethod === "git" ? (
                     <div className="space-y-3">
                       <div>
                         <Label htmlFor="repo-url" className="text-sm text-foreground">Repository URL</Label>
@@ -359,7 +431,7 @@ export default function NewAnalysisPage() {
                         />
                       </div>
                     </div>
-                  )}
+                  ) : null}
                 </CardContent>
               </Card>
 
