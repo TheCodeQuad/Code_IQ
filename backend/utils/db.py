@@ -13,8 +13,18 @@ from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from dotenv import load_dotenv
 
-# Load .env from backend directory
-load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
+# Load environment variables from the most likely locations.
+# Order matters: first match should provide the runtime configuration.
+_HERE = os.path.dirname(__file__)
+_ENV_CANDIDATES = [
+    os.path.join(_HERE, "..", "..", ".env"),   # project root/.env (current setup)
+    os.path.join(_HERE, "..", ".env"),           # backend/.env (legacy setup)
+]
+
+for _env_path in _ENV_CANDIDATES:
+    if os.path.exists(_env_path):
+        load_dotenv(_env_path)
+        break
 
 MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017/codeiq")
 
