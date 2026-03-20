@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback, useRef, useEffect } from "react"
+import { useState, useCallback, useRef, useEffect, useMemo } from "react"
 import { useParams } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -119,6 +119,11 @@ export default function GraphsPage() {
   const [stats, setStats] = useState<any>(null)
   const [dagData, setDagData] = useState<Record<string, string[]> | null>(null)
   const [dagLoading, setDagLoading] = useState(false)
+  const [dagError, setDagError] = useState<string | null>(null)
+  const [dagMeta, setDagMeta] = useState<{ file?: string; nodeCount: number; edgeCount: number } | null>(null)
+  const [componentFlowLoading, setComponentFlowLoading] = useState(false)
+  const [componentFlowError, setComponentFlowError] = useState<string | null>(null)
+  const [resolvedRepoScope, setResolvedRepoScope] = useState<string | null>(routeId ?? null)
 
   // Fetch agent execution data (optional - won't block UI)
   useEffect(() => {
@@ -137,6 +142,8 @@ export default function GraphsPage() {
             console.error("Error resolving repo ID:", repoErr)
           }
         }
+
+        setResolvedRepoScope(repoScope || null)
 
         // Try to fetch all component flows
         const query = new URLSearchParams({ limit: "100" })
@@ -206,30 +213,47 @@ export default function GraphsPage() {
           setStats(statsData.data)
         }
 
-        // Try to fetch DAG data
+        setDagLoading(true)
+        setDagError(null)
+        setDagMeta(null)
+
+        // Try to fetch DAG data scoped to the repo
         try {
-          console.log("Fetching DAG from /api/navigator/dag...")
-          const dagResponse = await fetch("/api/navigator/dag")
-          console.log("DAG response status:", dagResponse.status)
-          
-          if (dagResponse.ok) {
-            const dagDataBlob = await dagResponse.json()
-            console.log("DAG data received:", {
-              file: dagDataBlob.file,
-              nodes: dagDataBlob.nodes,
-              edges: dagDataBlob.edges,
-              message: dagDataBlob.message
-            })
-            const dagToSet = dagDataBlob.data || dagDataBlob
-            console.log("Setting DAG data:", Object.keys(dagToSet).length, "components")
-            setDagData(dagToSet)
-          } else {
-            console.warn("DAG response not ok:", dagResponse.status, dagResponse.statusText)
-            const errorText = await dagResponse.text()
-            console.error("DAG error details:", errorText)
+          const dagQuery = new URLSearchParams()
+          if (repoScope) {
+            dagQuery.set("repo_id", repoScope)
           }
+          const dagUrl = dagQuery.toString() ? `/api/navigator/dag?${dagQuery.toString()}` : "/api/navigator/dag"
+          const dagResponse = await fetch(dagUrl)
+
+          if (!dagResponse.ok) {
+            const details = await dagResponse.text()
+            throw new Error(details || `Unable to fetch DAG (${dagResponse.status})`)
+          }
+
+          const dagPayload = await dagResponse.json()
+          const dagBody = dagPayload?.data
+
+          if (!dagPayload?.success || !dagBody || typeof dagBody !== "object") {
+            throw new Error(dagPayload?.message || "Invalid DAG response")
+          }
+
+          const normalized = Object.entries(dagBody).reduce<Record<string, string[]>>((acc, [key, deps]) => {
+            acc[key] = Array.isArray(deps) ? deps.filter(Boolean) : []
+            return acc
+          }, {})
+
+          const nodeCount = Object.keys(normalized).length
+          const edgeCount = Object.values(normalized).reduce((sum, deps) => sum + deps.length, 0)
+
+          setDagData(normalized)
+          setDagMeta({ file: dagPayload.file, nodeCount, edgeCount })
         } catch (dagErr: any) {
-          console.error("Error fetching DAG:", dagErr.message || dagErr)
+          console.error("Error fetching DAG:", dagErr?.message || dagErr)
+          setDagData(null)
+          setDagError(dagErr instanceof Error ? dagErr.message : "Failed to load repository DAG")
+        } finally {
+          setDagLoading(false)
         }
       } catch (err) {
         console.error("Error fetching agent data:", err)
@@ -247,7 +271,62 @@ export default function GraphsPage() {
     }
   }, [components, selectedComponent])
 
+  useEffect(() => {
+    if (!selectedComponent?.id) {
+      setComponentFlowLoading(false)
+      setComponentFlowError(null)
+      return
+    }
+
+    let cancelled = false
+    const componentId = selectedComponent.id
+
+    const fetchComponentFlow = async () => {
+      setComponentFlowLoading(true)
+      setComponentFlowError(null)
+
+      try {
+        const scopeParam = resolvedRepoScope ? `?repo_id=${encodeURIComponent(resolvedRepoScope)}` : ""
+        const response = await fetch(`/api/agents/component/${encodeURIComponent(componentId)}/flow${scopeParam}`)
+
+        if (!response.ok) {
+          throw new Error(`Unable to fetch execution data for ${componentId}`)
+        }
+
+        const payload = await response.json()
+        const flowData = (payload?.data || payload) as ComponentFlow | { error: string }
+
+        if ("error" in flowData) {
+          throw new Error(flowData.error)
+        }
+
+        if (!cancelled) {
+          setComponentFlows((prev) => ({
+            ...prev,
+            [componentId]: flowData as ComponentFlow,
+          }))
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Error fetching component flow:", error)
+          setComponentFlowError(error instanceof Error ? error.message : "Failed to load component data")
+        }
+      } finally {
+        if (!cancelled) {
+          setComponentFlowLoading(false)
+        }
+      }
+    }
+
+    fetchComponentFlow()
+
+    return () => {
+      cancelled = true
+    }
+  }, [selectedComponent?.id, resolvedRepoScope])
+
   const currentGraph = graphTypes.find((g) => g.id === selectedGraphType)
+  const selectedComponentFlow = selectedComponent ? componentFlows[selectedComponent.id] : null
 
   const handleZoomIn = () => setZoom((prev) => Math.min(prev + 25, 200))
   const handleZoomOut = () => setZoom((prev) => Math.max(prev - 25, 50))
@@ -364,10 +443,16 @@ export default function GraphsPage() {
             {selectedComponent && selectedGraphType === "agents-flow" ? (
               <AgentsFlowGraph 
                 component={selectedComponent}
-                componentFlow={componentFlows[selectedComponent.id]}
+                componentFlow={selectedComponentFlow || undefined}
               />
             ) : selectedComponent && selectedGraphType === "dag" ? (
-              <DAGGraph dagData={dagData} selectedComponentId={selectedComponent.id} />
+              <DAGGraph
+                dagData={dagData}
+                selectedComponentId={selectedComponent.id}
+                isLoading={dagLoading}
+                error={dagError}
+                dagMeta={dagMeta}
+              />
             ) : selectedComponent ? (
               <DraggableGraph type={selectedGraphType} component={selectedComponent} />
             ) : (
@@ -444,29 +529,55 @@ export default function GraphsPage() {
             )}
 
             {/* Execution Flow Info - Only show if data is available */}
-            {selectedComponent && componentFlows[selectedComponent.id] && (
+            {selectedComponent && (
               <div className="space-y-3">
                 <h4 className="text-xs font-semibold text-stone-400 uppercase tracking-wider">
                   Execution Flow
                 </h4>
-                <div className="p-3 bg-emerald-50 rounded-lg border border-emerald-100">
-                  <div className="space-y-2 text-xs">
-                    <div className="flex justify-between">
-                      <span className="text-stone-600">Total Executions</span>
-                      <span className="font-semibold text-emerald-700">{componentFlows[selectedComponent.id].total_executions}</span>
+                <div className="p-3 bg-emerald-50 rounded-lg border border-emerald-100 min-h-[88px]">
+                  {componentFlowLoading ? (
+                    <div className="flex items-center gap-2 text-xs text-emerald-700">
+                      <Loader className="w-3.5 h-3.5 animate-spin" />
+                      <span>Fetching execution data...</span>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-stone-600">Agents Involved</span>
-                      <span className="font-semibold text-emerald-700">{componentFlows[selectedComponent.id].agents_involved.length}</span>
+                  ) : componentFlowError ? (
+                    <div className="flex items-center gap-2 text-xs text-red-600">
+                      <AlertCircle className="w-3.5 h-3.5" />
+                      <span>{componentFlowError}</span>
                     </div>
-                    <div className="flex flex-wrap gap-1 pt-2 border-t border-emerald-200">
-                      {componentFlows[selectedComponent.id].agents_involved.map((agent) => (
-                        <Badge key={agent} variant="outline" className="text-xs bg-emerald-100 border-emerald-200 text-emerald-700">
-                          {agent}
+                  ) : selectedComponentFlow ? (
+                    <div className="space-y-2 text-xs">
+                      <div className="flex justify-between">
+                        <span className="text-stone-600">Total Executions</span>
+                        <span className="font-semibold text-emerald-700">{selectedComponentFlow.total_executions}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-stone-600">Agents Involved</span>
+                        <span className="font-semibold text-emerald-700">{selectedComponentFlow.agents_involved.length}</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-stone-600">Status</span>
+                        <Badge
+                          className={`text-[10px] px-2 py-0 ${selectedComponentFlow.status === "success" ? "bg-emerald-500" : "bg-red-500"} text-white border-transparent`}
+                        >
+                          {selectedComponentFlow.status === "success" ? "Success" : "Failed"}
                         </Badge>
-                      ))}
+                      </div>
+                      <div className="flex flex-wrap gap-1 pt-2 border-t border-emerald-200">
+                        {selectedComponentFlow.agents_involved.length > 0 ? (
+                          selectedComponentFlow.agents_involved.map((agent) => (
+                            <Badge key={agent} variant="outline" className="text-xs bg-emerald-100 border-emerald-200 text-emerald-700">
+                              {agent}
+                            </Badge>
+                          ))
+                        ) : (
+                          <span className="text-xs text-stone-500">No agents recorded</span>
+                        )}
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <p className="text-xs text-stone-500">No execution data found for this component.</p>
+                  )}
                 </div>
               </div>
             )}
@@ -494,6 +605,46 @@ export default function GraphsPage() {
                     <p className="text-lg font-semibold text-red-600">{stats.failure_count || 0}</p>
                     <p className="text-xs text-stone-400">Failures</p>
                   </div>
+                </div>
+              </div>
+            )}
+
+            {selectedGraphType === "dag" && (
+              <div className="space-y-3">
+                <h4 className="text-xs font-semibold text-stone-400 uppercase tracking-wider">
+                  Repository DAG Snapshot
+                </h4>
+                <div className="p-3 rounded-lg border border-stone-100 bg-stone-50">
+                  {dagLoading ? (
+                    <div className="flex items-center gap-2 text-xs text-stone-500">
+                      <Loader className="w-3.5 h-3.5 animate-spin" />
+                      <span>Loading dependency graph…</span>
+                    </div>
+                  ) : dagError ? (
+                    <div className="flex items-center gap-2 text-xs text-red-600">
+                      <AlertCircle className="w-3.5 h-3.5" />
+                      <span>{dagError}</span>
+                    </div>
+                  ) : dagMeta ? (
+                    <div className="text-xs text-stone-600 space-y-2">
+                      <div className="flex justify-between">
+                        <span>Components</span>
+                        <span className="font-semibold text-stone-800">{dagMeta.nodeCount}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Dependencies</span>
+                        <span className="font-semibold text-stone-800">{dagMeta.edgeCount}</span>
+                      </div>
+                      {dagMeta.file && (
+                        <div className="flex justify-between">
+                          <span>Source File</span>
+                          <span className="font-mono text-[11px] text-stone-500 truncate max-w-[140px]">{dagMeta.file}</span>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-stone-500">No DAG metadata available for this repository.</p>
+                  )}
                 </div>
               </div>
             )}
@@ -807,113 +958,251 @@ function AgentNode({
 }
 
 // DAG Graph Component - Shows repository dependency graph
-function DAGGraph({ dagData, selectedComponentId }: { dagData: Record<string, string[]> | null; selectedComponentId: string }) {
+function DAGGraph({
+  dagData,
+  selectedComponentId,
+  isLoading,
+  error,
+  dagMeta,
+}: {
+  dagData: Record<string, string[]> | null
+  selectedComponentId: string
+  isLoading: boolean
+  error: string | null
+  dagMeta: { file?: string; nodeCount: number; edgeCount: number } | null
+}) {
   const svgRef = useRef<SVGSVGElement>(null)
   const [nodes, setNodes] = useState<DraggableNode[]>([])
   const [dragging, setDragging] = useState<string | null>(null)
   const [offset, setOffset] = useState({ x: 0, y: 0 })
-  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set([selectedComponentId]))
+  const [scopeMode, setScopeMode] = useState<"component" | "repository">("component")
 
-  // Generate hierarchical layout for DAG
   useEffect(() => {
-    if (!dagData || Object.keys(dagData).length === 0) return
+    if (!selectedComponentId) {
+      setScopeMode("repository")
+    }
+  }, [selectedComponentId])
 
-    // Build a graph structure
-    const allNodes = new Set<string>()
-    const reverseEdges: Record<string, Set<string>> = {}
-    
-    Object.entries(dagData).forEach(([key, deps]) => {
-      allNodes.add(key)
-      if (!reverseEdges[key]) reverseEdges[key] = new Set()
-      deps?.forEach((dep) => {
-        allNodes.add(dep)
-        if (!reverseEdges[dep]) reverseEdges[dep] = new Set()
-        reverseEdges[dep].add(key) // Track reverse edges for layout
-      })
+  const adjacency = useMemo(() => {
+    const map = new Map<string, string[]>()
+    if (!dagData) {
+      return map
+    }
+
+    Object.entries(dagData).forEach(([node, deps]) => {
+      map.set(node, Array.isArray(deps) ? deps.filter(Boolean) : [])
     })
 
-    // Calculate levels using topological sort (BFS from leaves)
-    const levels: Map<string, number> = new Map()
+    const missing = new Set<string>()
+    map.forEach((deps) => {
+      deps.forEach((dep) => {
+        if (!map.has(dep)) {
+          missing.add(dep)
+        }
+      })
+    })
+    missing.forEach((dep) => map.set(dep, []))
+
+    return map
+  }, [dagData])
+
+  const reverseMap = useMemo(() => {
+    const rev = new Map<string, Set<string>>()
+    adjacency.forEach((_, node) => rev.set(node, new Set()))
+    adjacency.forEach((deps, node) => {
+      deps.forEach((dep) => {
+        if (!rev.has(dep)) {
+          rev.set(dep, new Set())
+        }
+        rev.get(dep)!.add(node)
+      })
+    })
+    return rev
+  }, [adjacency])
+
+  const dependenciesOfSelected = useMemo(() => {
+    if (!selectedComponentId || !adjacency.has(selectedComponentId)) {
+      return new Set<string>()
+    }
+    return new Set(adjacency.get(selectedComponentId))
+  }, [adjacency, selectedComponentId])
+
+  const dependentsOfSelected = useMemo(() => {
+    if (!selectedComponentId || !reverseMap.has(selectedComponentId)) {
+      return new Set<string>()
+    }
+    return new Set(reverseMap.get(selectedComponentId))
+  }, [reverseMap, selectedComponentId])
+
+  const scopedNodeIds = useMemo(() => {
+    if (!adjacency.size) return []
+    if (
+      scopeMode === "repository" ||
+      !selectedComponentId ||
+      !adjacency.has(selectedComponentId)
+    ) {
+      return Array.from(adjacency.keys())
+    }
+
+    const maxNodes = 80
+    const queue: string[] = [selectedComponentId]
+    const seen = new Set(queue)
+
+    let idx = 0
+    while (idx < queue.length && seen.size < maxNodes) {
+      const current = queue[idx++]
+      adjacency.get(current)?.forEach((dep) => {
+        if (!seen.has(dep) && seen.size < maxNodes) {
+          seen.add(dep)
+          queue.push(dep)
+        }
+      })
+      reverseMap.get(current)?.forEach((parent) => {
+        if (!seen.has(parent) && seen.size < maxNodes) {
+          seen.add(parent)
+          queue.push(parent)
+        }
+      })
+    }
+
+    return Array.from(seen)
+  }, [adjacency, reverseMap, scopeMode, selectedComponentId])
+
+  const scopedEdges = useMemo(() => {
+    const scopedSet = new Set(scopedNodeIds)
+    const edges: [string, string][] = []
+    scopedNodeIds.forEach((node) => {
+      adjacency.get(node)?.forEach((dep) => {
+        if (scopedSet.has(dep)) {
+          edges.push([node, dep])
+        }
+      })
+    })
+    return edges
+  }, [scopedNodeIds, adjacency])
+
+  const layoutBlueprint = useMemo(() => {
+    if (!scopedNodeIds.length) return []
+
+    const scopedSet = new Set(scopedNodeIds)
+    const reverseEdges = new Map<string, Set<string>>()
+    scopedNodeIds.forEach((node) => reverseEdges.set(node, new Set()))
+    scopedEdges.forEach(([from, to]) => {
+      if (!reverseEdges.has(to)) {
+        reverseEdges.set(to, new Set())
+      }
+      reverseEdges.get(to)!.add(from)
+    })
+
+    const dependencyCount = new Map<string, number>()
+    scopedNodeIds.forEach((node) => {
+      const count = (adjacency.get(node) || []).filter((dep) => scopedSet.has(dep)).length
+      dependencyCount.set(node, count)
+    })
+
+    const seeds = scopedNodeIds.filter((node) => (dependencyCount.get(node) || 0) === 0)
+    const seedSource = seeds.length
+      ? seeds
+      : scopedNodeIds.includes(selectedComponentId)
+        ? [selectedComponentId]
+        : [scopedNodeIds[0]]
+    const queue: Array<[string, number]> = seedSource.map((node) => [node, 0])
+
+    const levels = new Map<string, number>()
     const visited = new Set<string>()
-    
-    // Find all leaf nodes (nodes with no dependencies)
-    const leaves = Array.from(allNodes).filter(node => 
-      !dagData[node] || dagData[node].length === 0
-    )
-    
-    // Assign levels starting from leaves
-    const queue: [string, number][] = leaves.map(leaf => [leaf, 0])
-    
-    while (queue.length > 0) {
+
+    while (queue.length) {
       const [node, level] = queue.shift()!
-      if (visited.has(node)) continue
+      if (!node || visited.has(node) || !scopedSet.has(node)) continue
       visited.add(node)
-      levels.set(node, Math.max(levels.get(node) || 0, level))
-      
-      // Add dependent nodes to queue
-      reverseEdges[node]?.forEach(dependent => {
+      if (!levels.has(node)) {
+        levels.set(node, level)
+      }
+      reverseEdges.get(node)?.forEach((dependent) => {
         if (!visited.has(dependent)) {
           queue.push([dependent, level + 1])
         }
       })
     }
 
-    // Group nodes by level
-    const levelGroups: Map<number, string[]> = new Map()
-    levels.forEach((level, node) => {
-      if (!levelGroups.has(level)) levelGroups.set(level, [])
-      levelGroups.get(level)!.push(node)
+    scopedNodeIds.forEach((node) => {
+      if (!levels.has(node)) {
+        const deps = adjacency.get(node)?.filter((dep) => scopedSet.has(dep)) ?? []
+        const fallbackLevel = deps.reduce((max, dep) => Math.max(max, levels.get(dep) ?? 0), 0)
+        levels.set(node, fallbackLevel)
+      }
     })
 
-    // Position nodes
-    const canvasWidth = 750
-    const canvasHeight = 550
-    const horizontalPadding = 60
-    const verticalPadding = 80
+    const levelBuckets = new Map<number, string[]>()
+    levels.forEach((level, node) => {
+      const bucket = levelBuckets.get(level) ?? []
+      bucket.push(node)
+      levelBuckets.set(level, bucket)
+    })
+
+    const sortedLevels = Array.from(levelBuckets.keys()).sort((a, b) => a - b)
+    const levelIndexMap = new Map<number, number>()
+    sortedLevels.forEach((level, idx) => levelIndexMap.set(level, idx))
+
+    const canvasWidth = 820
+    const canvasHeight = 560
+    const horizontalPadding = 80
+    const verticalPadding = 60
     const usableWidth = canvasWidth - horizontalPadding * 2
     const usableHeight = canvasHeight - verticalPadding * 2
-    
-    const maxLevel = Math.max(...levels.values(), 0)
-    const levelHeight = maxLevel > 0 ? usableHeight / (maxLevel + 1) : usableHeight / 2
+    const verticalSteps = Math.max(sortedLevels.length - 1, 1)
+    const verticalSpacing = usableHeight / verticalSteps
 
-    const layoutNodes: DraggableNode[] = Array.from(allNodes).map((nodeId) => {
-      const level = levels.get(nodeId) || 0
-      const levelNodes = levelGroups.get(level) || []
-      const indexInLevel = levelNodes.indexOf(nodeId)
-      const nodeCountInLevel = levelNodes.length
-      
-      // Distribute horizontally within the level
-      let x: number
-      if (nodeCountInLevel === 1) {
-        x = canvasWidth / 2
-      } else {
-        x = horizontalPadding + (indexInLevel / (nodeCountInLevel - 1)) * usableWidth
-      }
-      
-      const y = verticalPadding + level * levelHeight
+    return scopedNodeIds.map((node) => {
+      const logicalLevel = levels.get(node) ?? 0
+      const normalizedLevelIndex = levelIndexMap.get(logicalLevel) ?? 0
+      const nodesInLevel = levelBuckets.get(logicalLevel) ?? [node]
+      const indexInLevel = nodesInLevel.indexOf(node)
+
+      const x =
+        nodesInLevel.length <= 1
+          ? canvasWidth / 2
+          : horizontalPadding + (indexInLevel / (nodesInLevel.length - 1 || 1)) * usableWidth
+      const y =
+        sortedLevels.length <= 1
+          ? canvasHeight / 2
+          : verticalPadding + normalizedLevelIndex * verticalSpacing
+
+      let type: string = "neutral"
+      if (node === selectedComponentId) type = "selected"
+      else if (dependenciesOfSelected.has(node)) type = "dependency"
+      else if (dependentsOfSelected.has(node)) type = "dependent"
 
       return {
-        id: nodeId,
+        id: node,
         x,
         y,
-        label: nodeId.split(".").pop() || nodeId,
-        type: nodeId === selectedComponentId ? "selected" : "dependency",
+        label: node.split(".").pop() || node,
+        type,
       }
     })
+  }, [
+    scopedNodeIds,
+    scopedEdges,
+    adjacency,
+    selectedComponentId,
+    dependenciesOfSelected,
+    dependentsOfSelected,
+  ])
 
-    setNodes(layoutNodes)
-  }, [dagData, selectedComponentId])
+  useEffect(() => {
+    setNodes(layoutBlueprint)
+  }, [layoutBlueprint])
 
-  const getEdges = (): [string, string][] => {
-    if (!dagData) return []
-    const edges: [string, string][] = []
-    Object.entries(dagData).forEach(([source, dependencies]) => {
-      dependencies?.forEach((target) => {
-        edges.push([source, target])
-      })
-    })
-    return edges
-  }
+  const highlightIds = useMemo(() => {
+    const set = new Set<string>()
+    if (selectedComponentId) {
+      set.add(selectedComponentId)
+      dependenciesOfSelected.forEach((id) => set.add(id))
+      dependentsOfSelected.forEach((id) => set.add(id))
+    }
+    return set
+  }, [selectedComponentId, dependenciesOfSelected, dependentsOfSelected])
 
   const handleMouseDown = (e: React.MouseEvent, nodeId: string) => {
     const node = nodes.find((n) => n.id === nodeId)
@@ -943,19 +1232,34 @@ function DAGGraph({ dagData, selectedComponentId }: { dagData: Record<string, st
     setDragging(null)
   }
 
-  const toggleNodeExpansion = (nodeId: string) => {
-    setExpandedNodes((prev) => {
-      const newSet = new Set(prev)
-      if (newSet.has(nodeId)) {
-        newSet.delete(nodeId)
-      } else {
-        newSet.add(nodeId)
-      }
-      return newSet
-    })
+  const palette: Record<string, { fill: string; stroke: string; text: string }> = {
+    selected: { fill: "#dbeafe", stroke: "#2563eb", text: "#1e3a8a" },
+    dependency: { fill: "#dcfce7", stroke: "#16a34a", text: "#166534" },
+    dependent: { fill: "#fef3c7", stroke: "#d97706", text: "#92400e" },
+    neutral: { fill: "#f4f4f5", stroke: "#cbd5f5", text: "#475569" },
   }
 
-  const edges = getEdges()
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center w-full h-full">
+        <div className="flex items-center gap-2 text-sm text-stone-500">
+          <Loader className="w-4 h-4 animate-spin" />
+          <span>Loading dependency graph…</span>
+        </div>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center w-full h-full">
+        <div className="flex items-center gap-2 text-sm text-red-600">
+          <AlertCircle className="w-5 h-5" />
+          <span>{error}</span>
+        </div>
+      </div>
+    )
+  }
 
   if (!dagData || Object.keys(dagData).length === 0) {
     return (
@@ -969,150 +1273,120 @@ function DAGGraph({ dagData, selectedComponentId }: { dagData: Record<string, st
     )
   }
 
+  if (!scopedNodeIds.length) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <p className="text-sm text-stone-500">No nodes to display for this scope.</p>
+      </div>
+    )
+  }
+
+  const focusDisabled = !selectedComponentId || !adjacency.has(selectedComponentId)
+
   return (
-    <svg
-      ref={svgRef}
-      viewBox="0 0 800 650"
-      className="w-full h-full max-w-[900px] max-h-[700px]"
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
-    >
-      <defs>
-        <marker id="arrow-dag" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-          <polygon points="0 0, 8 3, 0 6" fill="#9ca3af" />
-        </marker>
-        <marker id="arrow-dag-highlight" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-          <polygon points="0 0, 8 3, 0 6" fill="#3b82f6" />
-        </marker>
-      </defs>
+    <div className="relative w-full h-full">
+      <div className="absolute top-3 right-3 flex items-center gap-2 z-10">
+        <div className="px-3 py-1.5 rounded-md bg-white/80 border border-stone-200 shadow-sm">
+          <p className="text-[11px] font-semibold text-stone-700">
+            {scopedNodeIds.length} nodes · {scopedEdges.length} edges
+          </p>
+          <p className="text-[10px] text-stone-400">
+            {scopeMode === "repository" ? "Entire repository" : "Component neighborhood"}
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 text-xs"
+          onClick={() => setScopeMode((prev) => (prev === "component" ? "repository" : "component"))}
+          disabled={focusDisabled}
+        >
+          {scopeMode === "component" ? "Show Full DAG" : "Focus on Component"}
+        </Button>
+      </div>
 
-      {/* Background */}
-      <rect width="800" height="650" fill="#fafafa" />
+      {dagMeta?.file && (
+        <div className="absolute top-3 left-3 z-10 px-3 py-1.5 bg-white/80 border border-stone-200 rounded-md shadow-sm text-[10px] text-stone-500">
+          <span className="font-semibold text-stone-700">File:</span> {dagMeta.file}
+        </div>
+      )}
 
-      {/* Edges */}
-      {edges.map(([from, to], i) => {
-        const fromNode = nodes.find((n) => n.id === from)
-        const toNode = nodes.find((n) => n.id === to)
-        if (!fromNode || !toNode) return null
+      <svg
+        ref={svgRef}
+        viewBox="0 0 820 560"
+        className="w-full h-full"
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseUp}
+      >
+        <defs>
+          <marker id="arrow-dag-muted" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+            <polygon points="0 0, 8 3, 0 6" fill="#cbd5f5" />
+          </marker>
+          <marker id="arrow-dag-active" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+            <polygon points="0 0, 8 3, 0 6" fill="#2563eb" />
+          </marker>
+        </defs>
 
-        const isHighlighted =
-          fromNode.id === selectedComponentId || toNode.id === selectedComponentId
+        <rect width="820" height="560" fill="#fafafa" />
 
-        return (
-          <g key={i}>
+        {scopedEdges.map(([from, to], idx) => {
+          const fromNode = nodes.find((n) => n.id === from)
+          const toNode = nodes.find((n) => n.id === to)
+          if (!fromNode || !toNode) return null
+
+          const isHighlighted = highlightIds.has(from) || highlightIds.has(to)
+
+          return (
             <path
+              key={`${from}-${to}-${idx}`}
               d={`M ${fromNode.x} ${fromNode.y + 18} Q ${(fromNode.x + toNode.x) / 2} ${(fromNode.y + toNode.y) / 2} ${toNode.x} ${toNode.y - 18}`}
               fill="none"
-              stroke={isHighlighted ? "#3b82f6" : "#d1d5db"}
-              strokeWidth={isHighlighted ? "2.5" : "1.5"}
-              markerEnd={isHighlighted ? "url(#arrow-dag-highlight)" : "url(#arrow-dag)"}
-              opacity={isHighlighted ? 1 : 0.6}
-              className="transition-all"
+              stroke={isHighlighted ? "#2563eb" : "#cbd5f5"}
+              strokeWidth={isHighlighted ? 2.4 : 1.4}
+              markerEnd={isHighlighted ? "url(#arrow-dag-active)" : "url(#arrow-dag-muted)"}
+              opacity={isHighlighted ? 0.95 : 0.7}
             />
-          </g>
-        )
-      })}
+          )
+        })}
 
-      {/* Nodes */}
-      {nodes.map((node) => {
-        const isSelected = node.id === selectedComponentId
-        const hasDependants = Object.entries(dagData || {}).some(([_, deps]) =>
-          deps?.includes(node.id)
-        )
-        const hasDependencies = (dagData?.[node.id]?.length || 0) > 0
+        {nodes.map((node) => {
+          const colors = palette[node.type] || palette.neutral
+          const label = node.label.length > 18 ? `${node.label.substring(0, 15)}…` : node.label
 
-        return (
-          <g
-            key={node.id}
-            transform={`translate(${node.x}, ${node.y})`}
-            onMouseDown={(e) => handleMouseDown(e, node.id)}
-            style={{ cursor: dragging === node.id ? "grabbing" : "grab" }}
-            onClick={() => toggleNodeExpansion(node.id)}
-          >
-            {/* Node Background */}
-            <rect
-              x="-50"
-              y="-22"
-              width="100"
-              height="44"
-              rx="6"
-              fill={
-                isSelected
-                  ? "#dbeafe"
-                  : hasDependencies || hasDependants
-                    ? "#f0fdf4"
-                    : "#f9fafb"
-              }
-              stroke={isSelected ? "#3b82f6" : hasDependencies ? "#22c55e" : "#d1d5db"}
-              strokeWidth={isSelected ? "2.5" : "1.5"}
-              className="transition-all cursor-pointer"
-            />
-
-            {/* Node Label */}
-            <text
-              textAnchor="middle"
-              dy="0"
-              fontSize="11"
-              fontWeight={isSelected ? "600" : "500"}
-              fill={isSelected ? "#1e40af" : "#374151"}
-              pointerEvents="none"
+          return (
+            <g
+              key={node.id}
+              transform={`translate(${node.x}, ${node.y})`}
+              onMouseDown={(e) => handleMouseDown(e, node.id)}
+              style={{ cursor: dragging === node.id ? "grabbing" : "grab" }}
             >
-              {node.label.length > 15 ? node.label.substring(0, 12) + "..." : node.label}
-            </text>
-
-            {/* Dependency Indicator */}
-            {(hasDependencies || hasDependants) && (
-              <circle
-                cx="45"
-                cy="-18"
-                r="6"
-                fill={hasDependencies && hasDependants ? "#f59e0b" : hasDependencies ? "#22c55e" : "#3b82f6"}
-                opacity="0.9"
-                stroke="white"
-                strokeWidth="1"
+              <rect
+                x="-55"
+                y="-20"
+                width="110"
+                height="40"
+                rx="6"
+                fill={colors.fill}
+                stroke={colors.stroke}
+                strokeWidth={node.type === "selected" ? 2.5 : 1.5}
               />
-            )}
-          </g>
-        )
-      })}
-
-      {/* Legend */}
-      <g transform="translate(10, 10)">
-        <text fontSize="11" fontWeight="600" fill="#374151" y="0">
-          Legend:
-        </text>
-        <circle cx="15" cy="18" r="4" fill="#3b82f6" />
-        <text fontSize="9" fill="#536e7b" x="25" y="22">
-          Selected
-        </text>
-
-        <circle cx="15" cy="35" r="4" fill="#22c55e" />
-        <text fontSize="9" fill="#536e7b" x="25" y="39">
-          Has Dependencies
-        </text>
-
-        <circle cx="15" cy="52" r="4" fill="#3b82f6" opacity="0.6" />
-        <text fontSize="9" fill="#536e7b" x="25" y="56">
-          Dependant
-        </text>
-
-        <circle cx="15" cy="69" r="4" fill="#f59e0b" opacity="0.8" />
-        <text fontSize="9" fill="#536e7b" x="25" y="73">
-          Both
-        </text>
-      </g>
-
-      {/* Stats */}
-      <g transform="translate(10, 120)">
-        <text fontSize="10" fontWeight="600" fill="#374151" y="0">
-          {nodes.length} components
-        </text>
-        <text fontSize="10" fontWeight="600" fill="#374151" y="15">
-          {edges.length} dependencies
-        </text>
-      </g>
-    </svg>
+              <text
+                textAnchor="middle"
+                dy="4"
+                fontSize="11"
+                fontWeight={node.type === "selected" ? "600" : "500"}
+                fill={colors.text}
+                pointerEvents="none"
+              >
+                {label}
+              </text>
+              <title>{node.id}</title>
+            </g>
+          )
+        })}
+      </svg>
+    </div>
   )
 }
 
