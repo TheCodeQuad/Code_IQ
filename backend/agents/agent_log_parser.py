@@ -48,13 +48,21 @@ class AgentLogParser:
         )
         self.component_id_pattern = re.compile(r'component_id:\s*([\w.\-/:]+)', re.IGNORECASE)
         self.component_for_pattern = re.compile(
-            r'(?:analyzing|documentation\s+for|verifying\s+documentation\s+for|complete\s+for|failed\s+to\s+document)\s*:?\s*([A-Za-z_][\w.$-]*)',
+            r'(?:analyzing|documentation\s+for|verifying\s+documentation\s+for|generating\s+(?:docs|documentation)\s+for|refining\s+(?:docs|documentation)\s+for|writer\s+(?:generating|refining)\s+(?:docs|documentation)\s+for|docstring\s+(?:inserted|generated|insertion)\s+for|complete\s+for|failed\s+to\s+document|verification\s+complete\s+for|reader-searcher\s+converged\s+for)\s*:?\s*([A-Za-z_][\w.$-]*)',
+            re.IGNORECASE,
+        )
+        self.reader_complete_pattern = re.compile(
+            r'reader\s+complete:\s*([A-Za-z_][\w.$-]*)',
             re.IGNORECASE,
         )
         self.pipeline_start_pattern = re.compile(
             r'Starting pipeline for repository:\s*(.+)$',
             re.IGNORECASE,
         )
+        self.additional_component_patterns = [
+            re.compile(r'processing\s+search\s+for\s+component:\s*([A-Za-z0-9_.\-]+)', re.IGNORECASE),
+            re.compile(r'skipping\s+([A-Za-z0-9_.\-]+)', re.IGNORECASE),
+        ]
 
     def _parse_timestamp(self, timestamp: str) -> Optional[datetime]:
         try:
@@ -175,20 +183,32 @@ class AgentLogParser:
         if match:
             return match.group(1).strip()
 
+        match = self.reader_complete_pattern.search(msg)
+        if match:
+            return match.group(1).strip()
+
         match = self.component_for_pattern.search(msg)
         if match:
             return match.group(1).strip()
 
+        for pattern in self.additional_component_patterns:
+            m = pattern.search(msg)
+            if m:
+                return m.group(1).strip()
+
         return None
 
-    def _message_mentions_component(self, message: str, component_id: str) -> bool:
-        """Match component id as a token, not as a substring inside paths/words."""
-        if not message or not component_id:
+    def _component_matches(self, reference: Optional[str], component_id: str) -> bool:
+        if not reference or not component_id:
             return False
+        ref = reference.strip().lower()
+        comp = component_id.strip().lower()
+        if ref == comp:
+            return True
+        if ref.endswith(f".{comp}"):
+            return True
+        return False
 
-        escaped_component = re.escape(component_id)
-        token_pattern = re.compile(rf'(?<![A-Za-z0-9_]){escaped_component}(?![A-Za-z0-9_])')
-        return bool(token_pattern.search(message))
 
     def _get_execution_logs(self) -> List[Path]:
         """Get the most relevant logs for component flow extraction."""
@@ -385,13 +405,36 @@ class AgentLogParser:
         
         # Filter for this component
         component_executions = [
-            e for e in executions 
-            if self._message_mentions_component(e.message, component_id)
-            or (e.component_id and e.component_id == component_id)
-            or (e.component_name and e.component_name == component_id)
+            e for e in executions
+            if self._component_matches(e.component_id, component_id)
+            or self._component_matches(e.component_name, component_id)
         ]
         
         if not component_executions:
+            return {"error": f"No executions found for component {component_id}"}
+
+        skip_entries = [
+            e for e in component_executions
+            if e.agent_name == "orchestrator" and "skipping" in (e.message or "").lower()
+        ]
+
+        tracked_agents = {"reader", "searcher", "writer", "verifier"}
+        agent_executions = [
+            e for e in component_executions
+            if e.agent_name in tracked_agents
+        ]
+
+        if not agent_executions and skip_entries:
+            return {
+                "component_id": component_id,
+                "executions": [asdict(e) for e in skip_entries],
+                "agents_involved": [],
+                "total_executions": len(skip_entries),
+                "status": "skipped",
+                "skip_reason": skip_entries[-1].message,
+            }
+
+        if not agent_executions:
             return {"error": f"No executions found for component {component_id}"}
         
         # Extract flow information
@@ -409,18 +452,14 @@ class AgentLogParser:
             if "verifier" in message_lower:
                 inferred_agents.add("verifier")
 
-        explicit_agents = set(
-            e.agent_name
-            for e in component_executions
-            if e.agent_name and e.agent_name not in {"orchestrator", "pipeline"}
-        )
+        explicit_agents = {e.agent_name for e in agent_executions}
 
         flow = {
             "component_id": component_id,
             "executions": [asdict(e) for e in component_executions],
             "agents_involved": sorted(list(explicit_agents.union(inferred_agents))),
             "total_executions": len(component_executions),
-            "status": "failed" if any(e.status == "failed" for e in component_executions) else "success",
+            "status": "failed" if any(e.status == "failed" for e in agent_executions) else "success",
         }
         
         return flow

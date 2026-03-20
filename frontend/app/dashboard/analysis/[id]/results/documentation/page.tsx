@@ -9,6 +9,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
+import SyntaxHighlighter from "react-syntax-highlighter"
+import { atomOneDark } from "react-syntax-highlighter/dist/esm/styles/hljs"
 import {
   Code2,
   ArrowLeft,
@@ -29,6 +31,49 @@ import {
   AlertCircle,
   Clock,
 } from "lucide-react"
+
+// Custom theme with yellow comments/docstrings
+const customTheme = {
+  ...atomOneDark,
+  'hljs-comment': {
+    color: '#FFD700',
+    fontStyle: 'italic',
+  },
+  'hljs-quote': {
+    color: '#FFD700',
+  },
+}
+
+function getLanguageFromPath(filePath: string): string {
+  const ext = filePath.split(".").pop()?.toLowerCase() || ""
+  const languageMap: Record<string, string> = {
+    py: "python",
+    js: "javascript",
+    jsx: "jsx",
+    ts: "typescript",
+    tsx: "tsx",
+    java: "java",
+    cpp: "cpp",
+    c: "c",
+    cs: "csharp",
+    php: "php",
+    rb: "ruby",
+    go: "go",
+    rs: "rust",
+    kt: "kotlin",
+    swift: "swift",
+    sql: "sql",
+    html: "html",
+    css: "css",
+    json: "json",
+    xml: "xml",
+    yaml: "yaml",
+    yml: "yaml",
+    sh: "bash",
+    bash: "bash",
+  }
+  return languageMap[ext] || "text"
+}
 
 function stripDocstrings(content: string, language: string): string {
   const lines = content.split("\n")
@@ -407,9 +452,15 @@ export default function DocumentationPage() {
                 {fileLoading ? (
                   <div className="p-6 text-sm text-muted-foreground">Loading file...</div>
                 ) : (
-                  <pre className="bg-foreground text-background p-6 text-sm overflow-x-auto font-mono leading-relaxed">
-                    <code>{displayCode || "// Select a file to view code"}</code>
-                  </pre>
+                  <SyntaxHighlighter
+                    language={getLanguageFromPath(selectedFile)}
+                    style={customTheme}
+                    className="!bg-foreground !m-0 !p-6 !text-sm"
+                    showLineNumbers={true}
+                    wrapLines={true}
+                  >
+                    {displayCode || "// Select a file to view code"}
+                  </SyntaxHighlighter>
                 )}
                 <Badge className={`absolute top-4 right-4 text-white ${showOriginal ? "bg-amber-600" : "bg-chart-3"}`}>
                   {showOriginal ? "Original" : "With Docstrings"}
