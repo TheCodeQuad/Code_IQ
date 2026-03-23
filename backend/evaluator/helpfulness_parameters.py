@@ -4,7 +4,7 @@
 import re
 from typing import Dict, Any, List, Tuple
 
-from evaluator.evaluation_common import ScoreLevel, ParameterEvaluationExample
+from backend.evaluator.evaluation_common import ScoreLevel, ParameterEvaluationExample
 
 
 class DocstringParametersEvaluator:

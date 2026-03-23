@@ -11,6 +11,7 @@ import {
   FileCode,
   FileText,
   GitBranch,
+  GitPullRequest,
   ClipboardCheck,
   ArrowRight,
   Layers,
@@ -60,6 +61,16 @@ const pageDescriptions = [
     stats: { label: "Quality Score", value: "92%" },
     iconBg: "bg-amber-100",
     iconColor: "text-amber-600",
+  },
+  {
+    href: "/pull-request",
+    title: "Pull Request",
+    icon: GitPullRequest,
+    description: "Review generated changes, configure reviewers and merge strategy, then create a pull request from one place.",
+    features: ["Diff preview", "Reviewer selection", "Labels and checklist", "Draft and merge options"],
+    stats: { label: "Changed Files", value: "6" },
+    iconBg: "bg-rose-100",
+    iconColor: "text-rose-600",
   },
 ]
 
