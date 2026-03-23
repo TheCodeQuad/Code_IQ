@@ -11,10 +11,7 @@ from pathlib import Path
 from typing import Dict, Any
 from tabulate import tabulate
 
-try:
-    from backend.evaluator.multilang_completeness import MultiLangCompletenessEvaluator
-except ImportError:
-    from evaluator.multilang_completeness import MultiLangCompletenessEvaluator
+from backend.evaluator.multilang_completeness import MultiLangCompletenessEvaluator
 
 
 def run_multilang_evaluation(all_components: Dict) -> Dict[str, Any]:

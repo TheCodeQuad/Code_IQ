@@ -12,6 +12,7 @@ import {
   FileText,
   GitBranch,
   ClipboardCheck,
+  GitPullRequest,
   Download,
 } from "lucide-react"
 
@@ -26,6 +27,7 @@ const navItems = [
   { href: "/readme", label: "README", icon: FileText },
   { href: "/graph", label: "View Graphs", icon: GitBranch },
   { href: "/metrics", label: "Evaluation Metrics", icon: ClipboardCheck },
+  { href: "/pull-request", label: "Pull Request", icon: GitPullRequest },
 ]
 
 export default function ResultsLayout({ children }: { children: React.ReactNode }) {
