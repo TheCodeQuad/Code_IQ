@@ -270,7 +270,7 @@ export function PullRequestPanel({ analysisId }: { analysisId: string }) {
   const [githubConnected, setGithubConnected] = useState<boolean | null>(null)
   const [title, setTitle] = useState("docs: add AI-generated documentation")
   const [description, setDescription] = useState(
-"## Summary\nThis PR introduces AI-generated documentation to improve code readability, consistency, and maintainability across the codebase.\n\n## Changes\n- Added structured docstrings to functions, classes, and modules\n- Documented parameters, return values, and expected behavior\n- Enhanced inline documentation for better code understanding\n\nThis documentation was generated using CodeIQ to ensure consistent and context-aware coverage."  )
+"## Summary\nThis PR adds comprehensive documentation to enhance code readability, consistency, and maintainability across the codebase.\n\n## Changes\n- Added structured docstrings to functions, classes, and modules\n- Documented parameters, return values, and expected behavior\n- Enhanced inline documentation for better code understanding"  )
   const [baseBranch, setBaseBranch] = useState("main")
   const [sourceBranch, setSourceBranch] = useState("")
   const [isEditingBranch, setIsEditingBranch] = useState(false)
