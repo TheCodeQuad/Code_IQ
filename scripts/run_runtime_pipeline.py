@@ -8,15 +8,28 @@ Usage:
 This script runs the full runtime-aware documentation pipeline
 **without** touching pipeline.py, app.py, or main.py.
 
+OUTPUT STRUCTURE:
+    {output_dir}/
+    ├── documented_source/{repo_name}/   # Copied source with inserted docstrings
+    │   ├── src/
+    │   │   └── *.py  (with docstrings inserted)
+    │   └── ...
+    ├── {repo_name}_runtime_docs.json    # JSON documentation metadata
+    └── {repo_name}_runtime_profiles.json # Runtime profiles (exceptions, side effects)
+
+    NOTE: Original repository files are NEVER modified.
+          Docstrings are inserted into the copied source files only.
+
 Pipeline stages:
-    1. Navigator  — parse repository → CodeComponents
-    2. DAG        — build dependency graph, topological sort
-    3. Profiler   — StaticRuntimeProfiler → attaches RuntimeProfile
-    4. Reader     — code analysis (batched)
-    5. Searcher   — internal/external context gathering
-    6. RuntimeWriterAgent — LLM docstring generation with runtime signals
-    7. Verifier   — quality gate (optional, controlled by config)
-    8. Inserter   — write docstrings back into source files
+    1.   Navigator  — parse repository → CodeComponents
+    1.5  Copy       — copy source files to output directory (for safe insertion)
+    2.   DAG        — build dependency graph, topological sort
+    3.   Profiler   — StaticRuntimeProfiler → attaches RuntimeProfile
+    4.   Reader     — code analysis (batched)
+    5.   Searcher   — internal/external context gathering
+    6.   RuntimeWriterAgent — LLM docstring generation with runtime signals
+    7.   Verifier   — quality gate (optional, controlled by config)
+    8.   Inserter   — write docstrings into COPIED source files
 
 Only **Python** components are enriched with runtime profiles in this
 phase-1 implementation.  Non-Python components pass through with the
@@ -26,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 import time
 from datetime import datetime
@@ -65,6 +79,103 @@ logger = get_logger("runtime_pipeline")
 # Component types that have no docstring insertion point
 _SKIP_TYPES = {"global_variable", "static_field", "field", "import", "variable"}
 
+# File extensions to copy (source code files only)
+_SOURCE_EXTENSIONS = {
+    ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".go", ".rs", ".cpp", ".c", ".h", ".hpp", ".cs"
+}
+
+
+def _copy_repository_for_insertion(
+    source_repo: Path,
+    output_dir: Path,
+) -> Path:
+    """
+    Copy source code files from the repository to the output directory.
+
+    Only copies files with recognized source code extensions to avoid
+    copying large binary files, node_modules, venvs, etc.
+
+    Args:
+        source_repo: Path to the original repository
+        output_dir: Base output directory
+
+    Returns:
+        Path to the copied repository root
+    """
+    repo_name = source_repo.name
+    dest_repo = output_dir / "documented_source" / repo_name
+
+    # Remove existing copy if present
+    if dest_repo.exists():
+        shutil.rmtree(dest_repo)
+
+    # Directories to skip
+    skip_dirs = {
+        "node_modules", "__pycache__", ".git", ".venv", "venv",
+        "env", ".env", "dist", "build", ".pytest_cache", ".mypy_cache",
+        ".tox", "eggs", "*.egg-info", ".eggs"
+    }
+
+    copied_files = 0
+
+    for src_file in source_repo.rglob("*"):
+        # Skip directories
+        if src_file.is_dir():
+            continue
+
+        # Skip files in excluded directories
+        if any(skip_dir in src_file.parts for skip_dir in skip_dirs):
+            continue
+
+        # Only copy source code files
+        if src_file.suffix.lower() not in _SOURCE_EXTENSIONS:
+            continue
+
+        # Calculate relative path and destination
+        rel_path = src_file.relative_to(source_repo)
+        dest_file = dest_repo / rel_path
+
+        # Create parent directories
+        dest_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # Copy file
+        shutil.copy2(src_file, dest_file)
+        copied_files += 1
+
+    logger.info(f"Copied {copied_files} source files to {dest_repo}")
+    return dest_repo
+
+
+def _remap_component_paths(
+    components: Dict[str, CodeComponent],
+    original_repo: Path,
+    copied_repo: Path,
+) -> None:
+    """
+    Update file paths in components to point to the copied repository location.
+
+    Modifies components in-place.
+
+    Args:
+        components: Dictionary of component ID to CodeComponent
+        original_repo: Path to the original repository
+        copied_repo: Path to the copied repository
+    """
+    original_str = str(original_repo.resolve())
+    copied_str = str(copied_repo.resolve())
+
+    for comp in components.values():
+        if hasattr(comp, 'location') and comp.location:
+            original_path = comp.location.file_path
+            if original_path and original_str in original_path:
+                new_path = original_path.replace(original_str, copied_str)
+                comp.location.file_path = new_path
+
+        # Also update file_path if it exists as a direct attribute
+        if hasattr(comp, 'file_path') and comp.file_path:
+            if original_str in comp.file_path:
+                comp.file_path = comp.file_path.replace(original_str, copied_str)
+
 
 # ======================================================================
 # Helpers
@@ -95,15 +206,21 @@ def run_runtime_pipeline(
     """
     Run the runtime-aware documentation pipeline on a repository.
 
+    When insert_docstrings is True (default), the pipeline:
+    1. Copies the repository source files to {output_dir}/documented_source/{repo_name}/
+    2. Generates docstrings with runtime signals (exceptions, side effects, etc.)
+    3. Inserts docstrings into the COPIED files (original files are NOT modified)
+    4. Saves JSON outputs for profiles and documentation metadata
+
     Args:
         repo_path:          Path to the repository root.
         output_dir:         Where to save pipeline artefacts.
-                            Defaults to ``data/intermediate/agent_output/runtime_writer/``.
-        insert_docstrings:  Whether to write docstrings back into source files.
+                            Defaults to ``data/output/runtime_documentation/``.
+        insert_docstrings:  Whether to copy repo and insert docstrings into copied files.
         skip_non_python:    If True, only process Python files (skip JS/TS/Java).
 
     Returns:
-        Dict with keys: components, profiles, documentation, statistics.
+        Dict with keys: components, profiles, documentation, statistics, documented_source_path.
     """
     t0 = time.time()
 
@@ -113,7 +230,7 @@ def run_runtime_pipeline(
         raise FileNotFoundError(f"Repository not found: {repo_path_obj}")
 
     out_root = Path(output_dir) if output_dir else (
-        _PROJECT_ROOT / "data" / "intermediate" / "agent_output" / "runtime_writer"
+        _PROJECT_ROOT / "data" / "output" / "runtime_documentation"
     )
     out_root.mkdir(parents=True, exist_ok=True)
 
@@ -160,6 +277,15 @@ def run_runtime_pipeline(
                 dependency_level=getattr(nav_comp, "dependency_level", 0),
                 metadata=getattr(nav_comp, "metadata", {}),
             )
+
+    # ── Stage 1.5: Copy repository for docstring insertion ───────────
+    # Copy source files to output directory so original files are NOT modified
+    copied_repo_path: Optional[Path] = None
+    if insert_docstrings:
+        _print_banner("Stage 1.5 / 8: Copying repository for docstring insertion")
+        copied_repo_path = _copy_repository_for_insertion(repo_path_obj, out_root)
+        _remap_component_paths(components, repo_path_obj, copied_repo_path)
+        logger.info(f"Component paths remapped to: {copied_repo_path}")
 
     # ── Stage 2: Build dependency graph ──────────────────────────────
     _print_banner("Stage 2 / 8: Building dependency graph")
@@ -208,11 +334,11 @@ def run_runtime_pipeline(
     max_verifier_rejections = config.get("agents.verifier_agent.max_rejections", 3)
     project_dag = set(components.keys())
 
-    # Docstring inserter
+    # Docstring inserter (no backup needed - we're working on a copy)
     inserter: Optional[DocstringInserter] = None
     if insert_docstrings:
         inserter = DocstringInserter(
-            backup=True,
+            backup=False,  # No backup needed since we're inserting into copied files
             replace_existing=config.get("system.pipeline.replace_existing_docstrings", False),
         )
 
@@ -413,18 +539,25 @@ def run_runtime_pipeline(
 
     # Print summary
     _print_banner("Runtime-Aware Pipeline Complete")
-    print(f"  Repository:       {repo_name}")
-    print(f"  Total components: {stats['total']}")
-    print(f"  Processed:        {stats['processed']}")
-    print(f"  Successful:       {stats['successful']}")
-    print(f"  Failed:           {stats['failed']}")
-    print(f"  Skipped:          {stats['skipped']}")
-    print(f"  Runtime-enriched: {stats['runtime_enriched']}")
-    print(f"  Docstrings inserted: {stats['inserted']}")
-    print(f"  Success rate:     {stats['success_rate']}%")
-    print(f"  Elapsed:          {stats['elapsed_seconds']}s")
-    print(f"  Docs output:      {docs_path}")
-    print(f"  Profiles output:  {profiles_path}")
+    print(f"  Repository:           {repo_name}")
+    print(f"  Total components:     {stats['total']}")
+    print(f"  Processed:            {stats['processed']}")
+    print(f"  Successful:           {stats['successful']}")
+    print(f"  Failed:               {stats['failed']}")
+    print(f"  Skipped:              {stats['skipped']}")
+    print(f"  Runtime-enriched:     {stats['runtime_enriched']}")
+    print(f"  Docstrings inserted:  {stats['inserted']}")
+    print(f"  Success rate:         {stats['success_rate']}%")
+    print(f"  Elapsed:              {stats['elapsed_seconds']}s")
+    print()
+    print("  OUTPUT LOCATIONS:")
+    print(f"    JSON docs:          {docs_path}")
+    print(f"    JSON profiles:      {profiles_path}")
+    if copied_repo_path:
+        print(f"    Documented source:  {copied_repo_path}")
+        print()
+        print("  NOTE: Docstrings were inserted into the COPIED source files above.")
+        print("        Original repository files were NOT modified.")
     print()
 
     return {
@@ -432,6 +565,7 @@ def run_runtime_pipeline(
         "profiles": profiles,
         "documentation": documented,
         "statistics": stats,
+        "documented_source_path": str(copied_repo_path) if copied_repo_path else None,
     }
 
 
