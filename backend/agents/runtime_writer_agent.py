@@ -49,7 +49,7 @@ class RuntimeWriterAgent(WriterAgent):
     def __init__(self):
         super().__init__()
         # Override the output directory so runtime-aware docs don't mix
-        self.output_dir = Path("data/intermediate/agent_output/runtime_writer")
+        self.output_dir = Path("data/output/runtime_documentation/agent_output")
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
