@@ -2,7 +2,7 @@
 Main Orchestrator
 Coordinates the multi-agent workflow with parallel processing support
 """
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Callable
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
@@ -81,6 +81,38 @@ class Orchestrator:
             f"max_reader_search_attempts={self._max_reader_search_attempts})"
         )
     
+    # ─── Status callback helper ────────────────────────────────────────
+
+    def _fire_cb(
+        self,
+        agent: str,
+        status: str,
+        message: str = "",
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        """Fire the status callback with an auto-calculated progress %."""
+        cb = getattr(self, '_status_callback', None)
+        if not cb:
+            return
+        total = getattr(self, '_total_to_process', 1) or 1
+        done = getattr(self, '_processed_so_far', 0)
+        # Map agent to a base progress range within 20-90%
+        agent_weights = {
+            'reader': 0.0, 'searcher': 0.20, 'writer': 0.45, 'verifier': 0.70
+        }
+        base_weight = agent_weights.get(agent, 0.0)
+        per_component = 0.70 / total  # 70% of bar (20% to 90%) spread across components
+        progress = int(20 + (done * per_component + base_weight * per_component) * 100)
+        progress = min(progress, 90)
+        payload = {
+            'phase': 'agentic',
+            **(details or {}),
+        }
+        try:
+            cb(agent, status, progress, message, payload)
+        except Exception as e:
+            self.logger.warning(f"status_callback error: {e}")
+
     # ─── Reader output parsing & normalization ───────────────────────────
     
     def _parse_reader_xml_output(self, xml_string: str) -> Dict[str, Any]:
@@ -350,6 +382,20 @@ class Orchestrator:
                 break
             
             # Run searcher
+            component = context.component
+            self._fire_cb(
+                "searcher",
+                "in_progress",
+                f"Searcher retrieving context for {component.name}",
+                {
+                    'step_id': 'searcher',
+                    'component_id': component.id,
+                    'component_name': component.name,
+                    'component_type': component.type.value if hasattr(component.type, 'value') else str(component.type),
+                    'file_path': component.location.file_path if getattr(component, 'location', None) else None,
+                    'transition': 'reader_to_searcher',
+                },
+            )
             searcher_result = self.searcher.execute(context)
             cal_hist['total_searcher_calls'] += 1
             if not searcher_result.is_success():
@@ -360,6 +406,31 @@ class Orchestrator:
             found = self._accumulate_searcher_results(
                 context, searcher_result.output, cal_hist
             )
+
+            if found == 0:
+                self._fire_cb(
+                    "searcher",
+                    "completed",
+                    f"Searcher found no additional context for {component.name}",
+                    {
+                        'step_id': 'searcher',
+                        'component_id': component.id,
+                        'component_name': component.name,
+                        'transition': 'searcher_to_reader_not_found',
+                    },
+                )
+            else:
+                self._fire_cb(
+                    "searcher",
+                    "completed",
+                    f"Searcher found context for {component.name}",
+                    {
+                        'step_id': 'searcher',
+                        'component_id': component.id,
+                        'component_name': component.name,
+                        'transition': 'searcher_to_writer_found',
+                    },
+                )
             
             if found == 0:
                 empty_count += 1
@@ -453,6 +524,19 @@ class Orchestrator:
             )
             
             # ── Phase 2: Writer generates documentation ──
+            self._fire_cb(
+                "writer",
+                "in_progress",
+                f"Writer generating doc for {component.name}",
+                {
+                    'step_id': 'writer',
+                    'component_id': component.id,
+                    'component_name': component.name,
+                    'component_type': component.type.value if hasattr(component.type, 'value') else str(component.type),
+                    'file_path': component.location.file_path if getattr(component, 'location', None) else None,
+                    'transition': 'reader_to_writer',
+                },
+            )
             self.logger.info(f"Writer generating documentation for {component.name}")
             writer_result = self.writer.execute(context)
             if not writer_result.is_success():
@@ -471,6 +555,17 @@ class Orchestrator:
             cal_hist['rejection_count'] = verifier_rejection_count
             
             while verifier_rejection_count <= self._max_verifier_rejections:
+                self._fire_cb(
+                    "verifier",
+                    "in_progress",
+                    f"Verifier validating {component.name}",
+                    {
+                        'step_id': 'verifier',
+                        'component_id': component.id,
+                        'component_name': component.name,
+                        'transition': 'writer_to_verifier',
+                    },
+                )
                 self.logger.info(f"Verifier validating documentation for {component.name}")
                 verifier_result = self.verifier.execute(context)
                 
@@ -490,6 +585,17 @@ class Orchestrator:
                         )
                     else:
                         self.logger.info(f"Verifier accepted documentation for {component.name}")
+                        self._fire_cb(
+                            "verifier",
+                            "completed",
+                            f"Verifier accepted docstring for {component.name}",
+                            {
+                                'step_id': 'verifier',
+                                'component_id': component.id,
+                                'component_name': component.name,
+                                'transition': 'verifier_to_inserted',
+                            },
+                        )
                     self._insert_docstring_for_component(component, documentation)
                     return documentation
                 
@@ -511,6 +617,17 @@ class Orchestrator:
                         f"{self._max_verifier_rejections}), gathering additional context"
                     )
                     self._gather_additional_context(context, verification, cal_hist)
+                    self._fire_cb(
+                        "verifier",
+                        "in_progress",
+                        f"Verifier requested more context for {component.name}",
+                        {
+                            'step_id': 'verifier',
+                            'component_id': component.id,
+                            'component_name': component.name,
+                            'transition': 'verifier_to_reader_needs_context',
+                        },
+                    )
                     self.writer.clear_memory()
                     broke_for_context = True
                     break  # → next reader_search_attempt
@@ -533,6 +650,17 @@ class Orchestrator:
                     f"Verifier rejected (rejection {verifier_rejection_count}/"
                     f"{self._max_verifier_rejections}), refining with feedback: {suggestion}"
                 )
+                self._fire_cb(
+                    "verifier",
+                    "in_progress",
+                    f"Verifier requested revision for {component.name}",
+                    {
+                        'step_id': 'verifier',
+                        'component_id': component.id,
+                        'component_name': component.name,
+                        'transition': 'verifier_to_writer_revision',
+                    },
+                )
                 writer_result = self.writer.refine_documentation(context, suggestion)
                 if writer_result.is_success():
                     documentation = writer_result.output
@@ -553,7 +681,8 @@ class Orchestrator:
     
     def process_components(
         self,
-        components: List[CodeComponent]
+        components: List[CodeComponent],
+        status_callback: Optional[Callable] = None
     ) -> List[Documentation]:
         """
         Process all components through the agent pipeline.
@@ -565,6 +694,9 @@ class Orchestrator:
         """
         self.logger.info(f"Processing {len(components)} components (parallel={self._parallel_enabled})")
         start_time = datetime.now()
+        self._status_callback = status_callback
+        self._total_to_process = len(components)
+        self._processed_so_far = 0
 
         component_map = {c.id: c for c in components}  # For dependency lookup
         
@@ -668,6 +800,15 @@ class Orchestrator:
             ]
             
             # BATCH READER CALL (1 LLM call for entire batch)
+            self._fire_cb(
+                "reader",
+                "in_progress",
+                f"Reader analysing batch {batch_start // batch_size + 1}",
+                {
+                    'step_id': 'reader',
+                    'batch_index': (batch_start // batch_size) + 1,
+                },
+            )
             try:
                 reader_batch_results = self.reader.process_batch(batch_contexts)
                 self.logger.info(f"Reader batch completed successfully")
@@ -684,8 +825,9 @@ class Orchestrator:
 
             # Process each component through the unified pipeline
             for idx, component in enumerate(batch):
+                comp_idx = batch_start + idx + 1
                 self.logger.info(
-                    f"Processing component {batch_start + idx + 1}/{len(components)}: "
+                    f"Processing component {comp_idx}/{len(components)}: "
                     f"{component.name} ({component.type})"
                 )
 
@@ -737,6 +879,19 @@ class Orchestrator:
                     )
                     
                     # Process through unified pipeline
+                    self._fire_cb(
+                        "reader",
+                        "completed",
+                        f"Reader analyzed {component.name}",
+                        {
+                            'step_id': 'reader',
+                            'component_id': component.id,
+                            'component_name': component.name,
+                            'component_type': component.type.value if hasattr(component.type, 'value') else str(component.type),
+                            'file_path': component.location.file_path if getattr(component, 'location', None) else None,
+                        },
+                    )
+
                     doc = self._process_component_pipeline(
                         component,
                         context,
@@ -746,6 +901,17 @@ class Orchestrator:
                     if doc:
                         documented_components.append(doc)
                         self.successful_docs += 1
+                        self._fire_cb(
+                            "writer",
+                            "completed",
+                            f"Docstring inserted for {component.name}",
+                            {
+                                'step_id': 'insertion',
+                                'component_id': component.id,
+                                'component_name': component.name,
+                                'transition': 'inserted',
+                            },
+                        )
                     else:
                         self.failed_docs += 1
                         self.logger.warning(f"Failed to document {component.name}")
@@ -758,6 +924,7 @@ class Orchestrator:
                     self.failed_docs += 1
                 
                 self.total_components_processed += 1
+                self._processed_so_far = self.total_components_processed
         
         return documented_components
     

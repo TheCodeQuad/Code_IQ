@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,6 +21,28 @@ from .navigator.core.topo import (
 from .navigator.core.ir_export import export_ir
 from .navigator.core.dag_export import export_dag
 from backend.utils.file_handler import FileHandler
+from backend.unified_evaluator import UnifiedEvaluator
+from backend.utils.db import close_connection, ping as db_ping
+from backend.utils.paths import DATA_ROOT
+from backend.routes.repos import router as repos_router
+from backend.routes.github_routes import router as github_router
+from backend.routes.analysis_routes import router as analysis_router
+
+# ============================================================================
+# APP LIFESPAN (startup / shutdown)
+# ============================================================================
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: verify MongoDB is reachable
+    if await db_ping():
+        print("[OK] MongoDB connected")
+    else:
+        print("[WARN] MongoDB not reachable - repo endpoints will fail")
+    yield
+    # Shutdown: close MongoDB connection pool
+    await close_connection()
+    print("[STOP] MongoDB connection closed")
 # ============================================================================
 # FASTAPI APP SETUP
 # ============================================================================
@@ -27,21 +50,28 @@ from backend.utils.file_handler import FileHandler
 app = FastAPI(
     title="Code Dependency Analyzer API",
     description="Analyze code repositories and extract dependency graphs",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
-# CORS Configuration
+# CORS Configuration – allows codeiq_ui (Next.js) frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
         "http://localhost:3001",
-        "http://127.0.0.1:3000"
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Register API routers
+app.include_router(repos_router)
+app.include_router(github_router)
+app.include_router(analysis_router)
 
 # ============================================================================
 # OUTPUT DIRECTORY
@@ -56,13 +86,60 @@ def find_project_root(marker="requirements.txt"):
     return current.parents[2]
 
 PROJECT_ROOT = find_project_root()
-OUTPUT_DIR = PROJECT_ROOT / "data" / "intermediate" / "navigator_output"
+OUTPUT_DIR = DATA_ROOT / "intermediate" / "navigator_output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# ============================================================================
-# REQUEST/RESPONSE MODELS
-# ============================================================================
+@app.get("/api/navigator/dag")
+def get_dag(repo_id: Optional[str] = None):
+    """Get a repository DAG from navigator output files."""
+    navigator_output_dir = DATA_ROOT / "intermediate" / "navigator_output"
+
+    if not navigator_output_dir.exists():
+        return {
+            "success": False,
+            "message": "Navigator output directory not found",
+            "data": None,
+        }
+
+    dag_path: Optional[Path] = None
+    if repo_id:
+        candidate = navigator_output_dir / f"dag_{repo_id}.json"
+        if candidate.exists():
+            dag_path = candidate
+
+    if not dag_path:
+        dag_files = sorted(
+            navigator_output_dir.glob("dag_*.json"),
+            key=lambda file_path: file_path.stat().st_mtime,
+            reverse=True,
+        )
+        if dag_files:
+            dag_path = dag_files[0]
+
+    if not dag_path or not dag_path.exists():
+        return {
+            "success": False,
+            "message": "No DAG file found",
+            "data": None,
+        }
+
+    try:
+        with open(dag_path, "r", encoding="utf-8") as file_handle:
+            dag_data = json.load(file_handle)
+
+        return {
+            "success": True,
+            "message": "DAG retrieved successfully",
+            "data": dag_data,
+            "file": dag_path.name,
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "message": f"Error reading DAG file: {str(exc)}",
+            "data": None,
+        }
 
 class AnalyzeRequest(BaseModel):
     repo_url: HttpUrl = Field(..., description="GitHub repository URL")
@@ -264,13 +341,15 @@ def root():
     }
 
 @app.get("/health")
-def health_check():
+async def health_check():
     """Detailed health check"""
+    mongo_ok = await db_ping()
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "output_dir": str(OUTPUT_DIR),
-        "output_dir_exists": OUTPUT_DIR.exists()
+        "output_dir_exists": OUTPUT_DIR.exists(),
+        "mongodb": "connected" if mongo_ok else "disconnected",
     }
 
 @app.post("/analyze", response_model=AnalyzeResponse)
@@ -283,9 +362,9 @@ def analyze_repo(req: AnalyzeRequest):
         repo_name = extract_repo_name(str(req.repo_url))
         
         # Step 1: Clone repository
-        print(f"📥 Cloning repository: {req.repo_url}")
+        print(f"[CLONE] Cloning repository: {req.repo_url}")
         repo_path = clone_repo(str(req.repo_url))
-        print(f"🔍 Parsing repository at: {repo_path}")
+        print(f"[PARSE] Parsing repository at: {repo_path}")
         parser = RepositoryParser(repo_path)
         components = parser.parse()
         
@@ -296,12 +375,12 @@ def analyze_repo(req: AnalyzeRequest):
             )
         
         # Step 3: Build dependency graph
-        print(f"📊 Building dependency graph...")
+        print(f"[GRAPH] Building dependency graph...")
         graph = build_graph_from_components(components)
         graph = resolve_cycles(graph)
         
         # Step 4: Calculate ordering
-        print(f"🔄 Calculating topological order...")
+        print(f"[TOPO] Calculating topological order...")
         topo_order = topological_sort(graph)
         dfs_order = dependency_first_dfs(graph)
         
@@ -339,19 +418,19 @@ def analyze_repo(req: AnalyzeRequest):
         print_analysis_summary(components, graph, dfs_order, topo_order)
         
         # Step 9: Export IR and DAG
-        print(f"📦 Exporting IR and DAG...")
+        print(f"[EXPORT] Exporting IR and DAG...")
         export_ir(components, repo_name)
         export_dag(graph, repo_id=repo_name)
-        print(f"✅ IR and DAG exported for '{repo_name}'")
+        print(f"[OK] IR and DAG exported for '{repo_name}'")
         
         # Step 10: Save components to JSON file (in the required format)
         output_file = None
         if req.save_json:
-            print(f"💾 Saving components to JSON...")
+            print(f"[SAVE] Saving components to JSON...")
             output_file = save_analysis_to_json(components_dict, repo_name)
-            print(f"✅ Results saved to: {output_file}")
+            print(f"[OK] Results saved to: {output_file}")
         
-        print(f"✅ Analysis complete!")
+        print(f"[OK] Analysis complete!")
         print(f"   Total components: {stats.total_components}")
         print(f"   Functions: {stats.functions}")
         print(f"   Classes: {stats.classes}")
@@ -362,18 +441,18 @@ def analyze_repo(req: AnalyzeRequest):
         docs = []
         try:
             from backend.pipeline import run_pipeline
-            print(f"🚀 Running documentation pipeline for: {repo_path}")
+            print(f"[PIPELINE] Running documentation pipeline for: {repo_path}")
             result = run_pipeline(repo_path)
             docs = result.get("documentation", [])
             
             # Save reader output
-            reader_output_path = PROJECT_ROOT / "data" / "intermediate" / "agent_output" / "reader" / f"{repo_name}_reader_output.json"
+            reader_output_path = DATA_ROOT / "intermediate" / "agent_output" / "reader" / f"{repo_name}_reader_output.json"
             reader_output_path.parent.mkdir(parents=True, exist_ok=True)
             pipeline_components = result.get("components", {})
             FileHandler.write_json(reader_output_path, {k: FileHandler.serialize_component(v) for k, v in pipeline_components.items()})
-            print(f"✅ Documentation pipeline complete.")
+            print(f"[OK] Documentation pipeline complete.")
         except Exception as pipeline_err:
-            print(f"⚠️  Documentation pipeline skipped: {pipeline_err}")
+            print(f"[WARN] Documentation pipeline skipped: {pipeline_err}")
             print(f"   Navigator results will be returned without LLM-generated docs.")
 
         return AnalyzeResponse(
@@ -392,7 +471,7 @@ def analyze_repo(req: AnalyzeRequest):
         )
         
     except Exception as e:
-        print(f"❌ Error during analysis: {str(e)}")
+        print(f"[ERROR] Error during analysis: {str(e)}")
         import traceback
         traceback.print_exc()
         raise HTTPException(
@@ -400,6 +479,45 @@ def analyze_repo(req: AnalyzeRequest):
             detail=f"Analysis failed: {str(e)}"
         )
         
+
+class EvaluationRequest(BaseModel):
+    repo_name: str = Field(..., description="Name of the analyzed repository")
+
+@app.post("/evaluate")
+def evaluate_documentation(req: EvaluationRequest):
+    """
+    Evaluate generated documentation quality across three dimensions:
+    - Completeness: structural completeness of docstrings
+    - Helpfulness: LLM-based quality assessment (1-5)
+    - Truthfulness: verifies mentioned components actually exist
+    """
+    try:
+        print(f"[EVAL] Starting evaluation for: {req.repo_name}")
+
+        evaluator = UnifiedEvaluator(repo_name=req.repo_name)
+        results = evaluator.evaluate_all()
+
+        return JSONResponse(content={
+            "success": True,
+            "repo_name": req.repo_name,
+            "timestamp": datetime.now().isoformat(),
+            "overall_quality_score": results["overall_quality_score"],
+            "completeness": results["completeness"],
+            "helpfulness": results["helpfulness"],
+            "truthfulness": results["truthfulness"],
+            "output_file": results.get("output_file"),
+            "message": "Evaluation completed successfully",
+        })
+
+    except FileNotFoundError as e:
+        print(f"[ERROR] File not found: {e}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        print(f"[ERROR] Evaluation error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
+
 
 @app.get("/download/{filename}")
 def download_file(filename: str):
@@ -460,4 +578,4 @@ def delete_file(filename: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("backend.app:app", host="0.0.0.0", port=8000, reload=True)

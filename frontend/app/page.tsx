@@ -1,299 +1,622 @@
-"use client";
-import { useState } from "react";
-import { Search, GitBranch, FileCode, Download, CheckCircle, AlertCircle } from "lucide-react";
+"use client"
 
-export default function Home() {
-  const [repoUrl, setRepoUrl] = useState("");
-  const [result, setResult] = useState<any>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [activeTab, setActiveTab] = useState("formatted");
+import { useState, useEffect, useMemo } from "react"
+import Link from "next/link"
+import { useSession } from "next-auth/react"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent } from "@/components/ui/card"
+import {
+  ArrowRight,
+  Code2,
+  GitBranch,
+  FileText,
+  BarChart3,
+  Zap,
+  Shield,
+  Brain,
+  Network,
+  Cpu,
+  Eye,
+  PenTool,
+  CheckCircle,
+  ChevronRight,
+  Play,
+  Terminal,
+  User,
+} from "lucide-react"
 
-  async function analyzeRepo() {
-    if (!repoUrl.trim()) {
-      setError("Please enter a repository URL");
-      return;
-    }
+const codeSnippets = [
+  "def analyze_code():",
+  "  graph = build_cfg()",
+  "  return extract_docs()",
+  "async function parse() {",
+  "  const ast = await read()",
+  "  return transform(ast)",
+  "class Navigator:",
+  "  def traverse(self):",
+  "    yield from self.nodes",
+  "function compile(src) {",
+  "  const tokens = lex(src)",
+  "  return parse(tokens)",
+  "impl CodeGraph {",
+  "  fn new() -> Self {",
+  "    Self { nodes: vec![] }",
+  "const pipeline = async () =>",
+  "  await Promise.all(tasks)",
+  "SELECT * FROM graphs",
+]
 
-    setLoading(true);
-    setResult(null);
-    setError("");
+function SpatialZoomCode() {
+  // Seeded random for consistent positions (avoids hydration mismatch)
+  const seededRandom = (seed: number) => {
+    const x = Math.sin(seed * 9999) * 10000
+    return x - Math.floor(x)
+  }
 
-    try {
-      const res = await fetch("http://localhost:8000/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ repo_url: repoUrl }),
-      });
+  // Keep generated style values stable between SSR and client hydration.
+  const items = useMemo(() => {
+    const fmt = (n: number, digits = 3) => Number(n.toFixed(digits))
 
-      if (!res.ok) {
-        throw new Error(`HTTP error! status: ${res.status}`);
+    return Array.from({ length: 25 }, (_, i) => {
+      // Random angle for circular distribution (full 360 degrees)
+      const angle = seededRandom(i * 7.3) * Math.PI * 2
+      // Random distance from center (varying radius)
+      const distance = 20 + seededRandom(i * 3.7) * 50 // 20-70 units from center
+      // Convert polar to cartesian
+      const x = fmt(Math.cos(angle) * distance)
+      const y = fmt(Math.sin(angle) * distance * 0.6) // Slightly squashed vertically
+      // Random delay spread across the animation duration
+      const delay = fmt(seededRandom(i * 5.1) * 18)
+      // Random duration for variety (slower)
+      const duration = fmt(20 + seededRandom(i * 2.9) * 12) // 20-32s
+
+      return {
+        snippet: codeSnippets[i % codeSnippets.length],
+        x,
+        y,
+        delay,
+        duration,
       }
-
-      const data = await res.json();
-      setResult(data);
-    } catch (err: any) {
-      setError(err.message || "Failed to analyze repository");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function downloadJSON() {
-    if (!result) return;
-    
-    const blob = new Blob([JSON.stringify(result.components, null, 2)], {
-      type: "application/json",
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `analysis-${Date.now()}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
+    })
+  }, [])
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-black via-zinc-900 to-black">
-      <div className="container mx-auto px-4 py-8 max-w-7xl">
-        {/* Header */}
-        <div className="text-center mb-12">
-          <div className="flex items-center justify-center gap-3 mb-4">
-            <GitBranch className="w-12 h-12 text-purple-400" />
-            <h1 className="text-5xl font-bold text-white">CodeIQ</h1>
+    <div 
+      className="absolute inset-0 overflow-hidden pointer-events-none"
+      style={{ 
+        perspective: '620px',
+        perspectiveOrigin: '50% 50%',
+      }}
+    >
+      <div 
+        className="absolute inset-0"
+        style={{ 
+          transformStyle: 'preserve-3d',
+        }}
+      >
+        {items.map((item, i) => (
+          <div
+            key={`code-${i}`}
+            className="absolute left-1/2 top-1/2 text-[10px] md:text-xs font-mono text-foreground/30 whitespace-nowrap"
+            style={{
+              animationName: 'spatialZoom',
+              animationDuration: `${item.duration}s`,
+              animationTimingFunction: 'linear',
+              animationIterationCount: 'infinite',
+              animationDelay: `-${item.delay}s`,
+              willChange: 'transform, opacity',
+              backfaceVisibility: 'hidden',
+              ['--tx' as string]: `${item.x}vw`,
+              ['--ty' as string]: `${item.y}vh`,
+            }}
+          >
+            {item.snippet}
           </div>
-          <p className="text-xl text-purple-200">
-            AI-Powered Repository Dependency Analyzer
-          </p>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+const heroTexts = [
+  ["Code that", "documents itself"],
+  ["Agentic AI", "Code Documentation"],
+  ["AI that understands", "your codebase"],
+  ["Turn complex code", "into clear docs"],
+]
+
+const LANDING_GRADIENT = `
+  radial-gradient(ellipse 80% 60% at 20% 80%, rgba(245, 208, 200, 0.6) 0%, transparent 50%),
+  radial-gradient(ellipse 70% 50% at 80% 30%, rgba(240, 200, 150, 0.5) 0%, transparent 50%),
+  radial-gradient(ellipse 60% 40% at 10% 20%, rgba(235, 220, 230, 0.4) 0%, transparent 40%),
+  radial-gradient(ellipse 90% 70% at 50% 50%, rgba(255, 250, 245, 0.8) 0%, transparent 60%),
+  linear-gradient(to bottom right, #fdf8f5, #fef9f3, #fdf6f0)
+`
+
+function SliceSlider() {
+  const [currentIndex, setCurrentIndex] = useState(0)
+  const [showFirst, setShowFirst] = useState(true)
+  const [showSecond, setShowSecond] = useState(true)
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      // Hide current lines
+      setShowFirst(false)
+      setTimeout(() => setShowSecond(false), 100)
+      
+      // Change index and show new lines
+      setTimeout(() => {
+        setCurrentIndex((prev) => (prev + 1) % heroTexts.length)
+        setShowFirst(true)
+        setTimeout(() => setShowSecond(true), 150)
+      }, 500)
+    }, 3500)
+    
+    return () => clearInterval(interval)
+  }, [])
+
+  return (
+    <div className="flex flex-col items-center">
+      {/* First line */}
+      <div className="h-[48px] md:h-[56px] lg:h-[72px] overflow-hidden">
+        <div
+          className={`transition-transform duration-400 ease-[cubic-bezier(0.77,0,0.175,1)] ${
+            showFirst ? "translate-y-0" : "translate-y-full"
+          }`}
+        >
+          <span className="block">{heroTexts[currentIndex][0]}</span>
         </div>
+      </div>
+      
+      {/* Second line */}
+      <div className="h-[48px] md:h-[56px] lg:h-[72px] overflow-hidden">
+        <div
+          className={`transition-transform duration-400 ease-[cubic-bezier(0.77,0,0.175,1)] ${
+            showSecond ? "translate-y-0" : "translate-y-full"
+          }`}
+        >
+          <span className="block">{heroTexts[currentIndex][1]}</span>
+        </div>
+      </div>
+    </div>
+  )
+}
 
-        {/* Input Section */}
-        <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-8 mb-8 shadow-2xl border border-white/20">
-          <div className="flex flex-col gap-4">
-            <div className="flex gap-4">
-              <div className="flex-1 relative">
-                <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 text-purple-300 w-5 h-5" />
-                <input
-                  type="text"
-                  placeholder="Enter GitHub Repository URL (e.g., https://github.com/user/repo)"
-                  value={repoUrl}
-                  onChange={(e) => setRepoUrl(e.target.value)}
-                  onKeyPress={(e) => e.key === "Enter" && analyzeRepo()}
-                  className="w-full pl-12 pr-4 py-4 bg-white/20 border border-purple-300/30 rounded-xl text-white placeholder-purple-200/50 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition"
-                />
+function AgentOrbit() {
+  const agents = [
+    { icon: Eye, name: "Reader", angle: 0, bgColor: "bg-violet-100", iconColor: "text-violet-600" },
+    { icon: PenTool, name: "Writer", angle: 90, bgColor: "bg-amber-100", iconColor: "text-amber-600" },
+    { icon: CheckCircle, name: "Verifier", angle: 180, bgColor: "bg-emerald-100", iconColor: "text-emerald-600" },
+    { icon: Network, name: "Searcher", angle: 270, bgColor: "bg-sky-100", iconColor: "text-sky-600" },
+  ]
+  
+  const radius = 60
+  
+  return (
+    <div className="relative w-44 h-44">
+      {/* Rotating container */}
+      <div className="absolute inset-0 animate-spin" style={{ animationDuration: '30s' }}>
+        {/* Orbit ring */}
+        <div className="absolute inset-3 rounded-full border border-dashed border-border" />
+        
+        {/* Rotating agents */}
+        {agents.map((agent) => {
+          const angleRad = (agent.angle * Math.PI) / 180
+          const x = Math.cos(angleRad) * radius
+          const y = Math.sin(angleRad) * radius
+          
+          return (
+            <div
+              key={agent.name}
+              className="absolute left-1/2 top-1/2"
+              style={{
+                transform: `translate(calc(-50% + ${x}px), calc(-50% + ${y}px))`,
+              }}
+            >
+              {/* Counter-rotate to keep icons upright */}
+              <div className="animate-spin" style={{ animationDuration: '30s', animationDirection: 'reverse' }}>
+                <div className={`w-9 h-9 rounded-full ${agent.bgColor} flex items-center justify-center shadow-sm`}>
+                  <agent.icon className={`w-4 h-4 ${agent.iconColor}`} />
+                </div>
               </div>
-              <button
-                onClick={analyzeRepo}
-                disabled={loading}
-                className="px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-semibold rounded-xl hover:from-purple-700 hover:to-pink-700 disabled:opacity-50 disabled:cursor-not-allowed transition shadow-lg hover:shadow-xl transform hover:scale-105"
-              >
-                {loading ? (
-                  <span className="flex items-center gap-2">
-                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    Analyzing...
-                  </span>
-                ) : (
-                  "Analyze"
-                )}
-              </button>
             </div>
+          )
+        })}
+      </div>
+      
+      {/* Center brain - static */}
+      <div className="absolute inset-0 flex items-center justify-center">
+        <div className="w-11 h-11 rounded-full bg-slate-100 flex items-center justify-center">
+          <Brain className="w-5 h-5 text-slate-600" />
+        </div>
+      </div>
+    </div>
+  )
+}
 
-            {error && (
-              <div className="flex items-center gap-2 bg-red-500/20 border border-red-500/50 rounded-lg p-4 text-red-200">
-                <AlertCircle className="w-5 h-5" />
-                <span>{error}</span>
-              </div>
+export default function LandingPage() {
+  const [activeStep, setActiveStep] = useState(0)
+  const { data: session, status } = useSession()
+  const isSignedIn = status === "authenticated"
+  const getStartedHref = isSignedIn ? "/dashboard" : "/login"
+  
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setActiveStep((prev) => (prev + 1) % 5)
+    }, 2000)
+    return () => clearInterval(interval)
+  }, [])
+
+  const pipelineSteps = [
+    { icon: Terminal, label: "Upload", desc: "Source Code" },
+    { icon: Network, label: "Navigate", desc: "Build Graphs" },
+    { icon: Brain, label: "Reason", desc: "Agent Pipeline" },
+    { icon: FileText, label: "Generate", desc: "Documentation" },
+    { icon: BarChart3, label: "Evaluate", desc: "Quality Metrics" },
+  ]
+
+  return (
+    <div className="min-h-screen relative overflow-hidden" style={{ background: LANDING_GRADIENT }}>
+      {/* Background */}
+      <div className="fixed inset-0 grid-pattern pointer-events-none opacity-50" />
+
+      {/* Navigation */}
+      <nav className="fixed top-0 left-0 right-0 z-50 glass">
+        <div className="max-w-6xl mx-auto px-6 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-lg bg-foreground flex items-center justify-center">
+              <Code2 className="w-4 h-4 text-background" />
+            </div>
+            <span className="text-lg font-semibold text-foreground">CodeIQ</span>
+          </div>
+          <div className="hidden md:flex items-center gap-1">
+            {["Features", "Pipeline", "Agents", "Docs"].map((item) => (
+              <Link
+                key={item}
+                href={`#${item.toLowerCase()}`}
+                className="px-3 py-1.5 rounded-md text-sm text-muted-foreground hover:text-foreground hover:bg-secondary transition-all"
+              >
+                {item}
+              </Link>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            {isSignedIn ? (
+              <>
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-secondary text-sm text-muted-foreground">
+                  <User className="w-4 h-4" />
+                  <span className="max-w-[160px] truncate">{session?.user?.email}</span>
+                </div>
+                <Link href="/dashboard">
+                  <Button className="bg-foreground text-background hover:bg-foreground/90 h-9 px-4 text-sm">
+                    Dashboard
+                  </Button>
+                </Link>
+              </>
+            ) : (
+              <>
+                <Link href="/login">
+                  <Button variant="ghost" className="text-muted-foreground hover:text-foreground h-9 px-3 text-sm">Sign In</Button>
+                </Link>
+                <Link href="/login">
+                  <Button className="bg-foreground text-background hover:bg-foreground/90 h-9 px-4 text-sm">
+                    Get Started
+                  </Button>
+                </Link>
+              </>
             )}
           </div>
         </div>
+      </nav>
 
-        {/* Results Section */}
-        {result && (
-          <div className="space-y-6">
-            {/* Stats Cards */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="bg-gradient-to-br from-purple-500/20 to-pink-500/20 backdrop-blur-lg rounded-xl p-6 border border-white/20">
-                <div className="text-3xl font-bold text-white mb-1">
-                  {result.stats.total_components}
-                </div>
-                <div className="text-purple-200 text-sm">Total Components</div>
-              </div>
-              <div className="bg-gradient-to-br from-blue-500/20 to-cyan-500/20 backdrop-blur-lg rounded-xl p-6 border border-white/20">
-                <div className="text-3xl font-bold text-white mb-1">
-                  {result.stats.functions}
-                </div>
-                <div className="text-blue-200 text-sm">Functions</div>
-              </div>
-              <div className="bg-gradient-to-br from-green-500/20 to-emerald-500/20 backdrop-blur-lg rounded-xl p-6 border border-white/20">
-                <div className="text-3xl font-bold text-white mb-1">
-                  {result.stats.classes}
-                </div>
-                <div className="text-green-200 text-sm">Classes</div>
-              </div>
-              <div className="bg-gradient-to-br from-orange-500/20 to-red-500/20 backdrop-blur-lg rounded-xl p-6 border border-white/20">
-                <div className="text-3xl font-bold text-white mb-1">
-                  {result.stats.methods}
-                </div>
-                <div className="text-orange-200 text-sm">Methods</div>
-              </div>
-            </div>
+      {/* Hero Section - Full Screen */}
+      <section 
+        className="min-h-screen pt-28 pb-10 px-6 relative flex items-center"
+      >
+        <SpatialZoomCode />
+        
+        <div className="max-w-4xl mx-auto text-center relative z-10">
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-foreground/5 border border-foreground/10 mb-8">
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-500 opacity-75" />
+              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500" />
+            </span>
+            <span className="text-xs font-medium text-muted-foreground">Agentic AI Documentation</span>
+          </div>
+          
+          {/* <h1 className="text-6xl md:text-7xl lg:text-8xl font-semibold text-foreground leading-[1.1] tracking-tight">
+            Code that{" "}
+            <span className="relative inline-block">
+              <span className="relative z-10">documents</span>
+              <svg className="absolute -bottom-2 md:-bottom-3 left-0 w-full h-4 md:h-5 overflow-visible" viewBox="0 0 200 20" preserveAspectRatio="none">
+                <path
+                  d="M0 10 Q50 2, 100 10 T200 10"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="3"
+                  strokeLinecap="round"
+                  className="text-primary"
+                />
+              </svg>
+            </span>{" "}
+            itself
+          </h1> */}
 
-            {/* Success Message */}
-            <div className="flex items-center justify-between bg-green-500/20 border border-green-500/50 rounded-xl p-4">
-              <div className="flex items-center gap-2 text-green-200">
-                <CheckCircle className="w-5 h-5" />
-                <span>{result.message}</span>
+          <div className="text-6xl md:text-5xl lg:text-6xl font-semibold text-foreground leading-[1.15] tracking-tight">
+            <SliceSlider />
+          </div>
+          
+          
+          <p className="mt-5 text-lg text-muted-foreground max-w-2xl mx-auto leading-relaxed">
+            Transform your codebase with AI that understands context, reasons like developers, 
+            and generates documentation that actually helps.
+          </p>
+          
+          <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
+            <Link href={getStartedHref}>
+              <Button className="bg-foreground text-background hover:bg-foreground/90 h-11 px-6 text-base font-medium group">
+                Get Started
+                <ArrowRight className="ml-2 w-4 h-4 group-hover:translate-x-1 transition-transform" />
+              </Button>
+            </Link>
+            <Link href="#pipeline">
+              <Button variant="outline" className="h-11 px-6 text-base font-medium border-border bg-transparent hover:bg-secondary group">
+                <Play className="w-4 h-4 mr-2" />
+                Watch Demo
+              </Button>
+            </Link>
+          </div>
+          
+          {/* Quick stats - centered */}
+          <div className="mt-16 flex items-center justify-center gap-12 md:gap-16">
+            {[
+              { value: "10x", label: "Faster docs" },
+              { value: "97%", label: "Accuracy" },
+              { value: "4", label: "AI Agents" },
+            ].map((stat) => (
+              <div key={stat.label} className="text-center">
+                <div className="text-3xl md:text-4xl font-semibold text-foreground">{stat.value}</div>
+                <div className="text-sm text-muted-foreground mt-1">{stat.label}</div>
               </div>
-              <button
-                onClick={downloadJSON}
-                className="flex items-center gap-2 px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg text-white transition"
-              >
-                <Download className="w-4 h-4" />
-                Download JSON
-              </button>
-            </div>
+            ))}
+          </div>
+        </div>
+      </section>
 
-            {/* Tabs */}
-            <div className="bg-white/10 backdrop-blur-lg rounded-2xl overflow-hidden border border-white/20 shadow-2xl">
-              <div className="flex border-b border-white/20">
-                <button
-                  onClick={() => setActiveTab("formatted")}
-                  className={`flex-1 px-6 py-4 font-semibold transition ${
-                    activeTab === "formatted"
-                      ? "bg-purple-600 text-white"
-                      : "text-purple-200 hover:bg-white/5"
+      {/* Pipeline Section */}
+      <section id="pipeline" className="min-h-screen py-20 px-6 relative flex items-center">
+        <div className="max-w-6xl mx-auto relative">
+          <div className="text-center mb-12">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">How it works</p>
+            <h2 className="text-2xl md:text-3xl font-semibold text-foreground">From Code to Docs</h2>
+            <p className="mt-2 text-sm text-muted-foreground max-w-lg mx-auto">
+              Watch your code transform through our five-stage agentic pipeline
+            </p>
+          </div>
+
+          {/* Animated pipeline */}
+          <div className="relative">
+            {/* Connection line */}
+            <div className="absolute top-1/2 left-0 right-0 h-0.5 bg-border -translate-y-1/2 hidden lg:block" />
+            <div 
+              className="absolute top-1/2 left-0 h-0.5 bg-emerald-500 -translate-y-1/2 transition-all duration-500 hidden lg:block"
+              style={{ width: `${(activeStep + 1) * 20}%` }}
+            />
+            
+            <div className="grid lg:grid-cols-5 gap-4">
+              {pipelineSteps.map((step, i) => (
+                <div
+                  key={step.label}
+                  className={`relative transition-all duration-300 ${
+                    i <= activeStep ? "opacity-100" : "opacity-40"
                   }`}
                 >
-                  <FileCode className="inline w-5 h-5 mr-2" />
-                  Formatted Output
-                </button>
-                <button
-                  onClick={() => setActiveTab("components")}
-                  className={`flex-1 px-6 py-4 font-semibold transition ${
-                    activeTab === "components"
-                      ? "bg-purple-600 text-white"
-                      : "text-purple-200 hover:bg-white/5"
-                  }`}
-                >
-                  Components
-                </button>
-                <button
-                  onClick={() => setActiveTab("dag")}
-                  className={`flex-1 px-6 py-4 font-semibold transition ${
-                    activeTab === "dag"
-                      ? "bg-purple-600 text-white"
-                      : "text-purple-200 hover:bg-white/5"
-                  }`}
-                >
-                  DAG
-                </button>
-                <button
-                  onClick={() => setActiveTab("stats")}
-                  className={`flex-1 px-6 py-4 font-semibold transition ${
-                    activeTab === "stats"
-                      ? "bg-purple-600 text-white"
-                      : "text-purple-200 hover:bg-white/5"
-                  }`}
-                >
-                  Statistics
-                </button>
-              </div>
-
-              <div className="p-6 max-h-[600px] overflow-y-auto">
-                {activeTab === "formatted" && (
-                  <pre className="text-purple-100 text-sm font-mono whitespace-pre-wrap">
-                    {result.formatted_output}
-                  </pre>
-                )}
-
-                {activeTab === "components" && (
-                  <div className="space-y-4">
-                    {Object.entries(result.components).map(([id, comp]: [string, any]) => (
-                      <div
-                        key={id}
-                        className="bg-white/5 rounded-lg p-4 border border-white/10 hover:border-purple-500/50 transition"
-                      >
-                        <div className="flex items-start justify-between mb-2">
-                          <div className="font-mono text-purple-300 font-semibold">
-                            {id}
-                          </div>
-                          <span className="px-3 py-1 bg-purple-500/30 rounded-full text-xs text-purple-200">
-                            {comp.type}
-                          </span>
-                        </div>
-                        <div className="text-sm text-purple-200/70 mb-2">
-                          {comp.file_path}
-                        </div>
-                        {comp.depends_on && comp.depends_on.length > 0 && (
-                          <div className="mt-3">
-                            <div className="text-xs text-purple-300 mb-1">Dependencies:</div>
-                            <div className="flex flex-wrap gap-2">
-                              {comp.depends_on.map((dep: string) => (
-                                <span
-                                  key={dep}
-                                  className="px-2 py-1 bg-purple-600/30 rounded text-xs text-purple-200"
-                                >
-                                  {dep}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                        )}
+                  <Card className={`border-border bg-card ${
+                    i === activeStep ? "border-foreground/20 shadow-sm" : ""
+                  }`}>
+                    <CardContent className="p-5 text-center">
+                      <div className={`w-11 h-11 rounded-lg mx-auto mb-3 flex items-center justify-center transition-colors ${
+                        i <= activeStep ? "bg-emerald-50" : "bg-secondary"
+                      }`}>
+                        <step.icon className={`w-5 h-5 ${
+                          i <= activeStep ? "text-emerald-600" : "text-muted-foreground"
+                        }`} />
                       </div>
-                    ))}
+                      <h3 className="text-sm font-medium text-foreground mb-0.5">{step.label}</h3>
+                      <p className="text-xs text-muted-foreground">{step.desc}</p>
+                    </CardContent>
+                  </Card>
+                  
+                  {/* Step number */}
+                  <div className={`absolute -top-2 left-1/2 -translate-x-1/2 w-5 h-5 rounded-full flex items-center justify-center text-xs font-medium ${
+                    i <= activeStep ? "bg-emerald-500 text-white" : "bg-muted text-muted-foreground"
+                  }`}>
+                    {i + 1}
                   </div>
-                )}
-
-                {activeTab === "dag" && (
-                  <div className="space-y-3">
-                    {Object.entries(result.dag)
-                      .filter(([_, deps]) => (deps as any[]).length > 0)
-                      .map(([id, deps]) => (
-                        <div
-                          key={id}
-                          className="bg-white/5 rounded-lg p-4 border border-white/10"
-                        >
-                          <div className="font-mono text-purple-300 mb-2">{id}</div>
-                          <div className="flex items-center gap-2 text-purple-200/70">
-                            <span>→</span>
-                            <div className="flex flex-wrap gap-2">
-                              {(deps as string[]).map((dep) => (
-                                <span
-                                  key={dep}
-                                  className="px-2 py-1 bg-purple-600/30 rounded text-xs"
-                                >
-                                  {dep}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                  </div>
-                )}
-
-                {activeTab === "stats" && (
-                  <div className="grid grid-cols-2 gap-4">
-                    {Object.entries(result.stats).map(([key, value]) => (
-                      <div
-                        key={key}
-                        className="bg-white/5 rounded-lg p-4 border border-white/10"
-                      >
-                        <div className="text-2xl font-bold text-white mb-1">
-                          {typeof value === "number" ? value.toLocaleString() : value}
-                        </div>
-                        <div className="text-purple-200 text-sm capitalize">
-                          {key.replace(/_/g, " ")}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+                </div>
+              ))}
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      </section>
+
+      {/* Features Bento Grid */}
+      <section id="features" className="py-20 px-6">
+        <div className="max-w-6xl mx-auto">
+          <div className="text-center mb-12">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Features</p>
+            <h2 className="text-2xl md:text-3xl font-semibold text-foreground">Why CodeIQ?</h2>
+            <p className="mt-2 text-sm text-muted-foreground max-w-lg mx-auto">
+              Built for developers who value accurate, maintainable documentation
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {/* Large feature card */}
+            <Card className="lg:col-span-2 border-border bg-card hover:border-foreground/20 transition-all">
+              <CardContent className="p-6 h-full">
+                <div className="flex flex-col h-full">
+                  <div className="w-10 h-10 rounded-lg bg-slate-100 flex items-center justify-center mb-4">
+                    <Network className="w-5 h-5 text-slate-600" />
+                  </div>
+                  <h3 className="text-base font-medium text-foreground mb-2">Graph-Based Understanding</h3>
+                  <p className="text-sm text-muted-foreground mb-4">
+                    Control Flow Graphs, Program Dependency Graphs, and Hybrid Program Graphs 
+                    provide deep semantic understanding of your code structure.
+                  </p>
+                  <div className="mt-auto flex flex-wrap gap-1.5">
+                    {["CFG", "PDG", "HPG", "GHG"].map((tag) => (
+                      <span key={tag} className="px-2 py-1 rounded bg-secondary text-xs font-medium text-muted-foreground">
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Tall feature card */}
+            <Card className="lg:row-span-2 border-border bg-card hover:border-foreground/20 transition-all">
+              <CardContent className="p-6 h-full flex flex-col">
+                <div className="w-10 h-10 rounded-lg bg-violet-50 flex items-center justify-center mb-4">
+                  <Brain className="w-5 h-5 text-violet-600" />
+                </div>
+                <h3 className="text-base font-medium text-foreground mb-2">Multi-Agent Architecture</h3>
+                <p className="text-sm text-muted-foreground mb-6">
+                  Four specialized agents collaborate with human-like reasoning patterns.
+                </p>
+                <div className="flex-1 flex items-center justify-center">
+                  <AgentOrbit />
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Small cards */}
+            {[
+              { icon: Zap, title: "Real-time Pipeline", desc: "Watch documentation unfold live", bgColor: "bg-amber-50", iconColor: "text-amber-600" },
+              { icon: Shield, title: "Verification Layer", desc: "Built-in accuracy checks", bgColor: "bg-emerald-50", iconColor: "text-emerald-600" },
+              { icon: BarChart3, title: "Quality Metrics", desc: "Completeness & consistency scores", bgColor: "bg-sky-50", iconColor: "text-sky-600" },
+              { icon: GitBranch, title: "Version Tracking", desc: "Docs evolve with your code", bgColor: "bg-rose-50", iconColor: "text-rose-600" },
+            ].map((feature) => (
+              <Card key={feature.title} className="border-border bg-card hover:border-foreground/20 transition-all">
+                <CardContent className="p-5">
+                  <div className={`w-9 h-9 rounded-lg ${feature.bgColor} flex items-center justify-center mb-3`}>
+                    <feature.icon className={`w-4 h-4 ${feature.iconColor}`} />
+                  </div>
+                  <h3 className="text-sm font-medium text-foreground mb-1">{feature.title}</h3>
+                  <p className="text-xs text-muted-foreground">{feature.desc}</p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Agents Section */}
+      <section id="agents" className="py-20 px-6 relative">
+        <div className="max-w-6xl mx-auto relative">
+          <div className="text-center mb-12">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">AI Agents</p>
+            <h2 className="text-2xl md:text-3xl font-semibold text-foreground">Meet the Agents</h2>
+            <p className="mt-2 text-sm text-muted-foreground max-w-lg mx-auto">
+              Specialized AI agents that collaborate like a human team
+            </p>
+          </div>
+
+          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+            {[
+              {
+                icon: Eye,
+                name: "Reader",
+                role: "Semantic Extraction",
+                tasks: ["Parse code structure", "Extract semantics", "Summarize patterns"],
+                bgColor: "bg-violet-50",
+                iconColor: "text-violet-600",
+              },
+              {
+                icon: Network,
+                name: "Searcher",
+                role: "Context Discovery",
+                tasks: ["Navigate graphs", "Find dependencies", "Link references"],
+                bgColor: "bg-amber-50",
+                iconColor: "text-amber-600",
+              },
+              {
+                icon: PenTool,
+                name: "Writer",
+                role: "Documentation",
+                tasks: ["Generate docstrings", "Create READMEs", "Format output"],
+                bgColor: "bg-emerald-50",
+                iconColor: "text-emerald-600",
+              },
+              {
+                icon: CheckCircle,
+                name: "Verifier",
+                role: "Quality Assurance",
+                tasks: ["Validate accuracy", "Check consistency", "Score quality"],
+                bgColor: "bg-sky-50",
+                iconColor: "text-sky-600",
+              },
+            ].map((agent) => (
+              <Card key={agent.name} className="border-border bg-card hover:border-foreground/20 transition-all">
+                <CardContent className="p-5">
+                  <div className={`w-10 h-10 rounded-lg ${agent.bgColor} flex items-center justify-center mb-3`}>
+                    <agent.icon className={`w-5 h-5 ${agent.iconColor}`} />
+                  </div>
+                  <h3 className="text-sm font-medium text-foreground">{agent.name}</h3>
+                  <p className="text-xs text-muted-foreground mb-3">{agent.role}</p>
+                  <ul className="space-y-1.5">
+                    {agent.tasks.map((task) => (
+                      <li key={task} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <ChevronRight className="w-3 h-3 text-muted-foreground/50" />
+                        {task}
+                      </li>
+                    ))}
+                  </ul>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Simple CTA */}
+      <section className="py-16 px-6 border-t border-border">
+        <div className="max-w-2xl mx-auto text-center">
+          <h2 className="text-xl font-semibold text-foreground mb-2">
+            Ready to improve your documentation?
+          </h2>
+          <p className="text-sm text-muted-foreground mb-6">
+            Start analyzing your codebase with CodeIQ today.
+          </p>
+          <Link href={getStartedHref}>
+            <Button className="bg-foreground text-background hover:bg-foreground/90 h-10 px-5 text-sm font-medium">
+              Get Started
+              <ArrowRight className="ml-2 w-4 h-4" />
+            </Button>
+          </Link>
+        </div>
+      </section>
+
+      {/* Footer */}
+      <footer className="border-t border-border py-12 px-6 bg-card">
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-foreground flex items-center justify-center">
+              <Code2 className="w-6 h-6 text-background" />
+            </div>
+            <span className="text-xl font-bold text-foreground">CodeIQ</span>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Agentic AI for Context-Aware Code Documentation
+          </p>
+          <div className="flex items-center gap-6">
+            <Link href="#" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Docs</Link>
+            <Link href="#" className="text-sm text-muted-foreground hover:text-foreground transition-colors">GitHub</Link>
+            <Link href="#" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Twitter</Link>
+          </div>
+        </div>
+      </footer>
     </div>
-  );
+  )
 }

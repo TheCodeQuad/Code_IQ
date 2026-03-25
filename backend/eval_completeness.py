@@ -6,11 +6,12 @@
 
 import os
 import sys
+import json
 from pathlib import Path
 from typing import Dict, Any
 from tabulate import tabulate
 
-from evaluator.multilang_completeness import MultiLangCompletenessEvaluator
+from backend.evaluator.multilang_completeness import MultiLangCompletenessEvaluator
 
 
 def run_multilang_evaluation(all_components: Dict) -> Dict[str, Any]:
@@ -42,8 +43,28 @@ def run_multilang_evaluation(all_components: Dict) -> Dict[str, Any]:
         name      = getattr(component, 'name', comp_id)
         score     = evaluator.evaluate_component(component)
 
+        # Get component details for truthfulness evaluation
+        docstring = getattr(component, 'existing_docstring', '') or ''
+        file_path = ''
+        location_dict = {}
+        
+        # Extract location information
+        location = getattr(component, 'location', None)
+        if location:
+            if hasattr(location, 'file_path'):
+                file_path = location.file_path
+                location_dict = {
+                    'file_path': location.file_path,
+                    'start_line': getattr(location, 'start_line', 0),
+                    'end_line': getattr(location, 'end_line', 0)
+                }
+            elif isinstance(location, dict):
+                file_path = location.get('file_path', '')
+                location_dict = location
+        
         results["components"].append({
             "id":                comp_id,
+            "component_id":      comp_id,  # Alias for compatibility
             "name":              name,
             "language":          language,
             "type":              comp_type,
@@ -51,7 +72,10 @@ def run_multilang_evaluation(all_components: Dict) -> Dict[str, Any]:
             "element_scores":    dict(evaluator.element_scores),
             "element_required":  dict(evaluator.element_required),
             "required_sections": list(evaluator.required_sections),
-            "has_docstring":     bool(getattr(component, 'existing_docstring', None))
+            "has_docstring":     bool(docstring),
+            "docstring":         docstring,  # Include for truthfulness evaluation
+            "file_path":         file_path,  # Include for truthfulness evaluation
+            "location":          location_dict  # Include for truthfulness evaluation
         })
 
         # Aggregate by language
@@ -168,3 +192,53 @@ def print_multilang_results(results: Dict[str, Any]) -> None:
     print(tabulate(bottom_table,
         headers=["Name", "Language", "Type", "Score", "Has Docstring"],
         tablefmt="grid"))
+
+
+def save_for_truthfulness_evaluation(
+    results: Dict[str, Any],
+    output_file: str,
+    system_name: str = "system_1",
+    append_to_existing: bool = False
+) -> None:
+    """
+    Save completeness evaluation results in format for truthfulness evaluation.
+    
+    Args:
+        results: Results from run_multilang_evaluation
+        output_file: Path to save JSON file
+        system_name: Name of this system (e.g., 'system_1', 'system_2')
+        append_to_existing: If True, add to existing multi-system file
+    """
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Get components with docstrings
+    components_with_docstrings = [
+        comp for comp in results["components"]
+        if comp.get("docstring")
+    ]
+    
+    # Prepare multi-system format
+    if append_to_existing and output_path.exists():
+        # Load existing data and add this system
+        with open(output_path, 'r', encoding='utf-8') as f:
+            existing_data = json.load(f)
+        
+        if not isinstance(existing_data, dict):
+            existing_data = {"system_1": existing_data}
+        
+        existing_data[system_name] = components_with_docstrings
+        multi_system_data = existing_data
+    else:
+        # Create new multi-system data
+        multi_system_data = {
+            system_name: components_with_docstrings
+        }
+    
+    # Save to file
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(multi_system_data, f, indent=2)
+    
+    print(f"\n[SUCCESS] Saved {len(components_with_docstrings)} components to {output_path}")
+    print(f"   System: {system_name}")
+    print(f"   Ready for truthfulness evaluation!")

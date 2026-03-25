@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +22,10 @@ from backend.navigator.core.topo import (
 from backend.navigator.core.ir_export import export_ir
 from backend.navigator.core.dag_export import export_dag
 from backend.models.code_component import CodeComponent, ComponentType
+from backend.utils.db import close_connection, ping as db_ping
+from backend.routes.repos import router as repos_router
+from backend.routes.github_routes import router as github_router
+from backend.routes.analysis_routes import router as analysis_router
 
 # Orchestrator disabled for navigator-only run
 # from backend.agents.orchestrator.orchestrator import Orchestrator
@@ -28,7 +33,7 @@ from backend.models.code_component import CodeComponent, ComponentType
 def main():
     # Prompt for GitHub repo URL or local path
     print("Navigator runner (no agents)")
-    print("Enter GitHub repository URL or local path (e.g., data/input/repositories/<repo>):")
+    print("Enter GitHub repository URL or local path (e.g., ../data/input/repositories/<repo>):")
     user_input = input("> ").strip()
 
     if not user_input:
@@ -69,24 +74,41 @@ def main():
 # FASTAPI APP SETUP
 # ============================================================================
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if await db_ping():
+        print("✅ MongoDB connected")
+    else:
+        print("⚠️  MongoDB not reachable – repo endpoints will fail")
+    yield
+    await close_connection()
+    print("🛑 MongoDB connection closed")
+
 app = FastAPI(
     title="Code Dependency Analyzer API",
     description="Analyze code repositories and extract dependency graphs",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
-# CORS Configuration
+# CORS Configuration – allows codeiq_ui (Next.js) frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
         "http://localhost:3001",
-        "http://127.0.0.1:3000"
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Register API routers
+app.include_router(repos_router)
+app.include_router(github_router)
+app.include_router(analysis_router)
 
 # ============================================================================
 # OUTPUT DIRECTORY
@@ -467,6 +489,81 @@ def delete_file(filename: str):
         "success": True,
         "message": f"File {filename} deleted successfully"
     }
+
+@app.get("/api/navigator/dag")
+def get_dag(repo_id: str = None):
+    """
+    Get the DAG (Directed Acyclic Graph) for a repository.
+    Returns the dependency graph of all components.
+    """
+    from backend.utils.paths import DATA_ROOT
+    
+    navigator_output_dir = Path(DATA_ROOT) / "intermediate" / "navigator_output"
+    
+    if not navigator_output_dir.exists():
+        return {
+            "success": False,
+            "message": "Navigator output directory not found",
+            "data": None
+        }
+    
+    # Try to get the specified repo's DAG or the most recent one
+    dag_path = None
+    if repo_id:
+        candidate = navigator_output_dir / f"dag_{repo_id}.json"
+        if candidate.exists():
+            dag_path = candidate
+    
+    # If not found, get the largest DAG file (by number of nodes) for better visualization
+    if not dag_path:
+        dag_files = list(navigator_output_dir.glob("dag_*.json"))
+        
+        # Find the DAG with the most nodes
+        largest_dag = None
+        max_nodes = 0
+        
+        for dag_file in dag_files:
+            try:
+                with open(dag_file, 'r', encoding='utf-8') as f:
+                    dag_data = json.load(f)
+                    node_count = len(dag_data) if isinstance(dag_data, dict) else 0
+                    if node_count > max_nodes:
+                        max_nodes = node_count
+                        largest_dag = dag_file
+            except:
+                continue
+        
+        if largest_dag:
+            dag_path = largest_dag
+        elif dag_files:
+            # Fallback to most recent if can't determine sizes
+            dag_path = sorted(dag_files, key=lambda p: p.stat().st_mtime, reverse=True)[0]
+    
+    if not dag_path or not dag_path.exists():
+        return {
+            "success": False,
+            "message": "No DAG file found",
+            "data": None
+        }
+    
+    try:
+        with open(dag_path, 'r', encoding='utf-8') as f:
+            dag_data = json.load(f)
+        
+        return {
+            "success": True,
+            "message": "DAG retrieved successfully",
+            "data": dag_data,
+            "file": dag_path.name,
+            "nodes": len(dag_data) if isinstance(dag_data, dict) else 0,
+            "edges": sum(len(v) for v in dag_data.values()) if isinstance(dag_data, dict) else 0
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Error reading DAG file: {str(e)}",
+            "data": None
+        }
 
 # ============================================================================
 # RUN SERVER
