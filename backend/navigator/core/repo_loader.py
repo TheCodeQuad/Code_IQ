@@ -4,10 +4,10 @@ import subprocess
 import re
 import stat
 
+from backend.utils.paths import DATA_ROOT
 
-# Get the absolute path to the project root (one level up from backend/)
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
-DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+
+DATA_DIR = str(DATA_ROOT)
 
 def handle_remove_readonly(func, path, exc_info):
     """
@@ -53,11 +53,13 @@ def extract_repo_name(repo_url: str) -> str:
     
     return repo_name
 
-def clone_repo(repo_url: str, base_dir=os.path.join(DATA_DIR, "input", "repositories")):
+def clone_repo(repo_url: str, base_dir: str | None = None):
     """
     Clone a GitHub repository and return local path.
     Uses the repository name as the folder name.
     """
+    if base_dir is None:
+        base_dir = str(DATA_ROOT / "input" / "repositories")
     os.makedirs(base_dir, exist_ok=True)
 
     repo_name = extract_repo_name(repo_url)

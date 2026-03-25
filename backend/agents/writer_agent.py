@@ -14,6 +14,7 @@ from backend.agents.base_agent import BaseAgent, AgentContext, AgentResult, Agen
 from backend.models.code_component import CodeComponent, ComponentType
 from backend.models.documentation import Documentation
 from backend.utils.logger import get_logger
+from backend.utils.paths import DATA_ROOT
 
 logger = get_logger(__name__)
 
@@ -117,7 +118,7 @@ class WriterAgent(BaseAgent):
 
     def __init__(self):
         super().__init__("writer")
-        self.output_dir = Path("data/intermediate/agent_output/writer")
+        self.output_dir = DATA_ROOT / "intermediate" / "agent_output" / "writer"
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
