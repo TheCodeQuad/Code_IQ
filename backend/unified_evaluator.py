@@ -18,7 +18,7 @@ from backend.utils.paths import DATA_ROOT
 # Project root
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-from backend.models.code_component import CodeComponent
+from backend.models.code_component import CodeComponent, ComponentType, Location
 from backend.eval_completeness import run_multilang_evaluation
 from backend.eval_helpfulness import run_helpfulness_evaluation
 from backend.evaluator.truthfulness import TruthfulnessEvaluator
@@ -41,12 +41,15 @@ class UnifiedEvaluator:
 
     def _load_components(self) -> Dict[str, CodeComponent]:
         """
-        Load components from the navigator IR export.
-        Looks for ir_{repo_name}.json in navigator output dir.
+        Load components from navigator IR and merge with writer output docstrings.
+        
+        1. Loads from ir_{repo_name}.json (navigator output) - gets full structure
+        2. Loads from {repo_name}_writer_output.json - gets generated docstrings
+        3. Merges: replaces existing_docstring with writer's docstring
         """
+        # Step 1: Load from navigator IR (full structure)
         ir_file = self.nav_output_dir / f"ir_{self.repo_name}.json"
         if not ir_file.exists():
-            # Try without prefix
             candidates = list(self.nav_output_dir.glob(f"*{self.repo_name}*.json"))
             ir_file = candidates[0] if candidates else None
             if not ir_file:
@@ -55,25 +58,53 @@ class UnifiedEvaluator:
                 )
 
         with open(ir_file, 'r', encoding='utf-8') as f:
-            raw = json.load(f)
+            ir_data = json.load(f)
 
+        # Convert IR to CodeComponents
         components = {}
-        for comp_id, comp_data in raw.items():
+        for comp_id, comp_data in ir_data.items():
             try:
                 components[comp_id] = CodeComponent.from_dict(comp_data)
             except Exception:
-                # Skip components that can't be deserialized
                 continue
 
         if not components:
             raise ValueError(f"No valid components loaded from {ir_file}")
 
-        print(f"📦 Loaded {len(components)} components from {ir_file.name}")
+        print(f"[INFO] Loaded {len(components)} components from {ir_file.name}")
+
+        # Step 2: Load writer output and merge docstrings
+        writer_file = self.writer_output_dir / f"{self.repo_name}_writer_output.json"
+        if not writer_file.exists():
+            candidates = list(self.writer_output_dir.glob(f"*{self.repo_name}*writer_output.json"))
+            writer_file = candidates[0] if candidates else None
+            if not writer_file:
+                print(f"[WARN] No writer output found for '{self.repo_name}' - using navigator docstrings only")
+                return components
+
+        with open(writer_file, 'r', encoding='utf-8') as f:
+            writer_output = json.load(f)
+
+        # Merge: update existing_docstring with writer output
+        merged_count = 0
+        for comp_id, writer_data in writer_output.items():
+            if comp_id in components:
+                # Extract docstring from writer output (remove <DOCSTRING> tags if present)
+                writer_docstring = writer_data.get('docstring', '')
+                if writer_docstring.startswith('<DOCSTRING>'):
+                    # Remove <DOCSTRING> and </DOCSTRING> tags
+                    writer_docstring = writer_docstring.replace('<DOCSTRING>\n', '').replace('\n</DOCSTRING>', '').strip()
+                
+                # Replace component's docstring with writer's
+                components[comp_id].existing_docstring = writer_docstring
+                merged_count += 1
+
+        print(f"[INFO] Merged {merged_count} components with writer output docstrings")
         return components
 
     def _run_completeness(self, components: Dict[str, CodeComponent]) -> Dict[str, Any]:
         """Run completeness evaluation."""
-        print("📋 Running completeness evaluation...")
+        print("[EVAL] Running completeness evaluation...")
         results = run_multilang_evaluation(components)
 
         total = results["overall"]["total"]
@@ -123,7 +154,7 @@ class UnifiedEvaluator:
 
     def _run_helpfulness(self, components: Dict[str, CodeComponent]) -> Dict[str, Any]:
         """Run helpfulness evaluation (LLM-based)."""
-        print("💡 Running helpfulness evaluation...")
+        print("[EVAL] Running helpfulness evaluation...")
         try:
             results = run_helpfulness_evaluation(components, max_components=50)
 
@@ -149,7 +180,7 @@ class UnifiedEvaluator:
                 "errors": results.get("errors", []),
             }
         except Exception as e:
-            print(f"⚠️  Helpfulness evaluation error: {e}")
+            print(f"[WARN] Helpfulness evaluation error: {e}")
             return {
                 "summary": {
                     "average_score": 0,
@@ -165,7 +196,7 @@ class UnifiedEvaluator:
 
     def _run_truthfulness(self, components: Dict[str, CodeComponent]) -> Dict[str, Any]:
         """Run truthfulness evaluation."""
-        print("🔍 Running truthfulness evaluation...")
+        print("[EVAL] Running truthfulness evaluation...")
         try:
             # Find writer output directory for this repo
             writer_dir = self.writer_output_dir
@@ -179,6 +210,7 @@ class UnifiedEvaluator:
                 navigator_output_dir=str(self.nav_output_dir),
                 use_llm=False,  # Use regex for speed in UI
                 llm_mode="llama_cpp",
+                repo_name=self.repo_name,  # Only load components from this specific repo
             )
 
             results = evaluator.evaluate_all()
@@ -224,7 +256,7 @@ class UnifiedEvaluator:
                 },
             }
         except Exception as e:
-            print(f"⚠️  Truthfulness evaluation error: {e}")
+            print(f"[WARN] Truthfulness evaluation error: {e}")
             return self._truthfulness_from_components(components, None)
 
     def _truthfulness_from_components(
@@ -304,11 +336,13 @@ class UnifiedEvaluator:
             json.dump(results, f, indent=2)
         results["output_file"] = str(out_file)
 
-        print(f"\n✅ Evaluation complete!")
+        print(f"\n[SUCCESS] Evaluation complete!")
         print(f"   Overall Quality Score: {overall:.1%}")
         print(f"   Completeness: {comp_score:.1%}")
         print(f"   Helpfulness:  {help_score:.1%} (raw {helpfulness['summary']['average_score']:.2f}/5)")
         print(f"   Truthfulness: {truth_score:.1%}")
         print(f"   Results saved to: {out_file}")
+        print(f"   Evaluation results in: {out_file}")
+        return results
 
         return results

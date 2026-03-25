@@ -123,7 +123,7 @@ def run_helpfulness_evaluation(
         components_to_eval = components_to_eval[:max_components]
 
     total = len(components_to_eval)
-    print(f"\n📊 Evaluating {total} components with docstrings...")
+    print(f"\n[EVAL] Evaluating {total} components with docstrings...")
     print(f"   Skipped {results['skipped_no_docstring']} (no docstring)")
     print(f"   Skipped {results['skipped_private']} (private)\n")
 
@@ -275,7 +275,7 @@ def run_helpfulness_evaluation(
     # Print LLM stats
     try:
         stats = llm.get_stats()
-        print(f"\n📈 LLM Usage: {stats['total_requests']} requests, "
+        print(f"\n[LLM] LLM Usage: {stats['total_requests']} requests, "
               f"{stats['total_tokens']} tokens, "
               f"cost=${stats.get('total_cost', 0):.4f}")
     except Exception:

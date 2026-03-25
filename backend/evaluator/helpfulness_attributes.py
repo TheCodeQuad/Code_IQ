@@ -10,7 +10,10 @@ import re
 from typing import Dict, Any, List, Tuple
 from dataclasses import dataclass
 
-from evaluator.evaluation_common import ScoreLevel
+try:
+    from backend.evaluator.evaluation_common import ScoreLevel
+except ImportError:
+    from evaluator.evaluation_common import ScoreLevel
 
 
 @dataclass
