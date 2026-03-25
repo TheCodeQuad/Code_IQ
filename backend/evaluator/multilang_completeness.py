@@ -10,8 +10,12 @@
 import re
 from typing import Dict, List, Optional, Tuple
 
-from evaluator.base import BaseEvaluator
-from evaluator.language_config import LANGUAGE_CONFIG
+try:
+    from backend.evaluator.base import BaseEvaluator
+    from backend.evaluator.language_config import LANGUAGE_CONFIG
+except ImportError:
+    from evaluator.base import BaseEvaluator
+    from evaluator.language_config import LANGUAGE_CONFIG
 
 
 class MultiLangCompletenessEvaluator(BaseEvaluator):

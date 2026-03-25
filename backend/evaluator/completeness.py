@@ -9,7 +9,10 @@ import ast
 import re
 from typing import Dict, List, Optional
 
-from evaluator.base import BaseEvaluator
+try:
+    from backend.evaluator.base import BaseEvaluator
+except ImportError:
+    from evaluator.base import BaseEvaluator
 
 
 class CompletenessEvaluator(BaseEvaluator):

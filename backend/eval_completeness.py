@@ -242,6 +242,6 @@ def save_for_truthfulness_evaluation(
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(multi_system_data, f, indent=2)
     
-    print(f"\n✅ Saved {len(components_with_docstrings)} components to {output_path}")
+    print(f"\n[SUCCESS] Saved {len(components_with_docstrings)} components to {output_path}")
     print(f"   System: {system_name}")
     print(f"   Ready for truthfulness evaluation!")
