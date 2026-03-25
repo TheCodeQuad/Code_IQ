@@ -18,6 +18,7 @@ from .navigator.core.topo import (
     dependency_first_dfs,
     resolve_cycles
 )
+
 from .navigator.core.ir_export import export_ir
 from .navigator.core.dag_export import export_dag
 from backend.utils.file_handler import FileHandler
