@@ -1,6 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 
 const BACKEND = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+function parseGithubFullName(value?: string | null): string | null {
+  if (!value) return null;
+  const raw = value.trim();
+  if (!raw) return null;
+
+  if (/^[\w.-]+\/[\w.-]+$/.test(raw)) return raw;
+
+  const httpsMatch = raw.match(/github\.com\/([\w.-]+\/[\w.-]+?)(?:\.git)?(?:$|\/)/i);
+  if (httpsMatch?.[1]) return httpsMatch[1];
+
+  const sshMatch = raw.match(/github\.com:([\w.-]+\/[\w.-]+?)(?:\.git)?$/i);
+  if (sshMatch?.[1]) return sshMatch[1];
+
+  return null;
+}
 
 /**
  * POST /api/analysis/create-pr-safe — create a pull request with a new branch (safe workflow)
@@ -40,6 +58,34 @@ export async function POST(req: NextRequest) {
     }
 
     if (!res.ok) {
+      // Fallback: backend analysis routes unavailable (404)
+      if (res.status === 404) {
+        console.log(`[API Proxy] Backend analysis route unavailable (404), attempting fallback...`);
+        
+        const session = await getServerSession(authOptions);
+        const userId = (session?.user as any)?.id;
+
+        if (!userId) {
+          return NextResponse.json(
+            { error: "User not authenticated", error_type: "not_authenticated" },
+            { status: 401 }
+          );
+        }
+
+        // Provide helpful guidance to restart the backend
+        return NextResponse.json(
+          {
+            error:
+              "The analysis PR endpoint is temporarily unavailable. This usually means the backend needs to be restarted. " +
+              "Please refresh the page (Ctrl+F5) and try again. If the problem persists, the backend server may need to be restarted.",
+            error_type: "service_unavailable",
+            suggestion:
+              "Run: python -m uvicorn backend.app:app --reload",
+          },
+          { status: 503 }
+        );
+      }
+
       console.error(`[API Proxy] Backend error:`, data);
       // Pass through the structured error from backend
       return NextResponse.json(

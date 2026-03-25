@@ -5,8 +5,12 @@ Endpoints for accessing analysis results and linked repository data.
 """
 
 import re
+import io
+import json
+import zipfile
 from datetime import datetime
 from typing import Optional, List, Dict, Any
+from pathlib import Path
 
 from bson import ObjectId
 from fastapi import APIRouter, HTTPException, Header
@@ -21,6 +25,92 @@ router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 logger = get_logger(__name__)
 
 GITHUB_API_BASE = "https://api.github.com"
+
+
+def _parse_github_full_name(value: str) -> Optional[str]:
+    """Extract owner/repo from common GitHub URL formats."""
+    if not value:
+        return None
+
+    raw = value.strip()
+
+    # Already owner/repo format
+    if re.match(r"^[\w.-]+/[\w.-]+$", raw):
+        return raw
+
+    # git@github.com:owner/repo.git
+    ssh_match = re.search(r"github\.com:([\w.-]+/[\w.-]+?)(?:\.git)?$", raw)
+    if ssh_match:
+        return ssh_match.group(1)
+
+    # https://github.com/owner/repo(.git)
+    https_match = re.search(r"github\.com/([\w.-]+/[\w.-]+?)(?:\.git)?(?:$|/)", raw)
+    if https_match:
+        return https_match.group(1)
+
+    return None
+
+
+def _read_origin_url_from_git_config(repo_local_path: str) -> str:
+    """Best-effort origin URL lookup from .git/config for cloned repos."""
+    try:
+        config_path = Path(repo_local_path) / ".git" / "config"
+        if not config_path.exists():
+            return ""
+
+        in_origin_block = False
+        for line in config_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("[") and stripped.endswith("]"):
+                in_origin_block = stripped.lower() == '[remote "origin"]'
+                continue
+            if in_origin_block and stripped.lower().startswith("url") and "=" in stripped:
+                return stripped.split("=", 1)[1].strip()
+    except Exception:
+        return ""
+
+    return ""
+
+
+def _extract_repo_linkage(repo_doc: dict) -> tuple[Optional[str], Optional[str]]:
+    """Resolve (owner/repo, canonical_repo_url) from heterogeneous repo docs."""
+    candidates = [
+        repo_doc.get("github_repo_full_name"),
+        repo_doc.get("full_name"),
+        repo_doc.get("repo_url"),
+        repo_doc.get("github_url"),
+        repo_doc.get("url"),
+        repo_doc.get("github_repo_url"),
+        repo_doc.get("clone_url"),
+        repo_doc.get("origin_url"),
+    ]
+
+    full_name: Optional[str] = None
+    repo_url: Optional[str] = None
+
+    for candidate in candidates:
+        if not isinstance(candidate, str) or not candidate.strip():
+            continue
+        parsed = _parse_github_full_name(candidate)
+        if parsed:
+            full_name = parsed
+            if "github.com" in candidate:
+                repo_url = candidate
+            break
+
+    if not full_name:
+        repo_local_path = repo_doc.get("repo_local_path")
+        if isinstance(repo_local_path, str) and repo_local_path:
+            origin_url = _read_origin_url_from_git_config(repo_local_path)
+            parsed = _parse_github_full_name(origin_url)
+            if parsed:
+                full_name = parsed
+                repo_url = origin_url
+
+    if full_name and not repo_url:
+        repo_url = f"https://github.com/{full_name}"
+
+    return full_name, repo_url
 
 
 # ── Request Models ──────────────────────────────────────────────────────
@@ -115,29 +205,17 @@ async def get_analysis_repo(analysisId: str):
         if not repo_doc:
             raise HTTPException(status_code=404, detail="Analysis repository not found")
         
-        # Extract GitHub repository info - try multiple field names
-        repo_url = (
-            repo_doc.get("repo_url") 
-            or repo_doc.get("github_url") 
-            or repo_doc.get("url")
-            or repo_doc.get("github_repo_url")
-            or ""
-        )
-        
-        if not repo_url:
+        full_name, repo_url = _extract_repo_linkage(repo_doc)
+
+        if not full_name:
             # Provide detailed error for debugging
-            logger.error(f"No GitHub URL found in repo doc {analysisId}. Available fields: {list(repo_doc.keys())}")
+            logger.error(f"No GitHub linkage found in repo doc {analysisId}. Available fields: {list(repo_doc.keys())}")
             raise HTTPException(
                 status_code=400, 
                 detail=f"Analysis doesn't have a GitHub repo URL. Please create a new analysis by selecting a GitHub repository from the connected repos section."
             )
-        
-        # Parse owner/repo from URL
-        # Format: https://github.com/owner/repo or https://github.com/owner/repo.git
-        parts = repo_url.rstrip("/").replace(".git", "").split("/")
-        owner = parts[-2]
-        repo_name = parts[-1]
-        full_name = f"{owner}/{repo_name}"
+
+        owner, repo_name = full_name.split("/", 1)
         
         # Fetch branches from GitHub
         branches = ["main", "develop", "staging"]  # Fallback default branches
@@ -184,7 +262,7 @@ async def get_analysis_repo(analysisId: str):
                 "full_name": full_name,
                 "owner": {"login": owner},
                 "default_branch": default_branch,
-                "url": repo_url,
+                "url": repo_url or f"https://github.com/{full_name}",
             },
             "branches": branches,
         }
@@ -854,7 +932,7 @@ async def check_github_connection(analysisId: str):
     }
     """
     try:
-        from backend.utils.db import get_users_collection, get_db
+        from backend.utils.db import get_users_collection, get_database
         
         repos_col = await get_repos_collection()
         
@@ -869,7 +947,7 @@ async def check_github_connection(analysisId: str):
         # Try analysis collection as well
         if not analysis_doc:
             try:
-                db = await get_db()
+                db = await get_database()
                 analysis_col = db.get_collection("analyses")
                 if ObjectId.is_valid(analysisId):
                     analysis_doc = await analysis_col.find_one({"_id": ObjectId(analysisId)})
@@ -900,7 +978,13 @@ async def check_github_connection(analysisId: str):
         
         # Get user and check for GitHub token
         users_col = await get_users_collection()
-        user = await users_col.find_one({"_id": user_id})
+        user = None
+        if isinstance(user_id, str) and ObjectId.is_valid(user_id):
+            user = await users_col.find_one({"_id": ObjectId(user_id)})
+        if not user:
+            user = await users_col.find_one({"_id": user_id})
+        if not user and isinstance(user_id, str):
+            user = await users_col.find_one({"user_id": user_id})
         
         if not user:
             logger.warning(f"User not found for ID: {user_id}")

@@ -36,13 +36,13 @@ from backend.routes.analysis_routes import router as analysis_router
 async def lifespan(app: FastAPI):
     # Startup: verify MongoDB is reachable
     if await db_ping():
-        print("✅ MongoDB connected")
+        print("[OK] MongoDB connected")
     else:
-        print("⚠️  MongoDB not reachable – repo endpoints will fail")
+        print("[WARN] MongoDB not reachable - repo endpoints will fail")
     yield
     # Shutdown: close MongoDB connection pool
     await close_connection()
-    print("🛑 MongoDB connection closed")
+    print("[STOP] MongoDB connection closed")
 # ============================================================================
 # FASTAPI APP SETUP
 # ============================================================================
@@ -140,11 +140,6 @@ def get_dag(repo_id: Optional[str] = None):
             "message": f"Error reading DAG file: {str(exc)}",
             "data": None,
         }
-
-
-# ============================================================================
-# REQUEST/RESPONSE MODELS
-# ============================================================================
 
 class AnalyzeRequest(BaseModel):
     repo_url: HttpUrl = Field(..., description="GitHub repository URL")
@@ -367,9 +362,9 @@ def analyze_repo(req: AnalyzeRequest):
         repo_name = extract_repo_name(str(req.repo_url))
         
         # Step 1: Clone repository
-        print(f"📥 Cloning repository: {req.repo_url}")
+        print(f"[CLONE] Cloning repository: {req.repo_url}")
         repo_path = clone_repo(str(req.repo_url))
-        print(f"🔍 Parsing repository at: {repo_path}")
+        print(f"[PARSE] Parsing repository at: {repo_path}")
         parser = RepositoryParser(repo_path)
         components = parser.parse()
         
@@ -380,12 +375,12 @@ def analyze_repo(req: AnalyzeRequest):
             )
         
         # Step 3: Build dependency graph
-        print(f"📊 Building dependency graph...")
+        print(f"[GRAPH] Building dependency graph...")
         graph = build_graph_from_components(components)
         graph = resolve_cycles(graph)
         
         # Step 4: Calculate ordering
-        print(f"🔄 Calculating topological order...")
+        print(f"[TOPO] Calculating topological order...")
         topo_order = topological_sort(graph)
         dfs_order = dependency_first_dfs(graph)
         
@@ -423,19 +418,19 @@ def analyze_repo(req: AnalyzeRequest):
         print_analysis_summary(components, graph, dfs_order, topo_order)
         
         # Step 9: Export IR and DAG
-        print(f"📦 Exporting IR and DAG...")
+        print(f"[EXPORT] Exporting IR and DAG...")
         export_ir(components, repo_name)
         export_dag(graph, repo_id=repo_name)
-        print(f"✅ IR and DAG exported for '{repo_name}'")
+        print(f"[OK] IR and DAG exported for '{repo_name}'")
         
         # Step 10: Save components to JSON file (in the required format)
         output_file = None
         if req.save_json:
-            print(f"💾 Saving components to JSON...")
+            print(f"[SAVE] Saving components to JSON...")
             output_file = save_analysis_to_json(components_dict, repo_name)
-            print(f"✅ Results saved to: {output_file}")
+            print(f"[OK] Results saved to: {output_file}")
         
-        print(f"✅ Analysis complete!")
+        print(f"[OK] Analysis complete!")
         print(f"   Total components: {stats.total_components}")
         print(f"   Functions: {stats.functions}")
         print(f"   Classes: {stats.classes}")
@@ -446,7 +441,7 @@ def analyze_repo(req: AnalyzeRequest):
         docs = []
         try:
             from backend.pipeline import run_pipeline
-            print(f"🚀 Running documentation pipeline for: {repo_path}")
+            print(f"[PIPELINE] Running documentation pipeline for: {repo_path}")
             result = run_pipeline(repo_path)
             docs = result.get("documentation", [])
             
@@ -455,9 +450,9 @@ def analyze_repo(req: AnalyzeRequest):
             reader_output_path.parent.mkdir(parents=True, exist_ok=True)
             pipeline_components = result.get("components", {})
             FileHandler.write_json(reader_output_path, {k: FileHandler.serialize_component(v) for k, v in pipeline_components.items()})
-            print(f"✅ Documentation pipeline complete.")
+            print(f"[OK] Documentation pipeline complete.")
         except Exception as pipeline_err:
-            print(f"⚠️  Documentation pipeline skipped: {pipeline_err}")
+            print(f"[WARN] Documentation pipeline skipped: {pipeline_err}")
             print(f"   Navigator results will be returned without LLM-generated docs.")
 
         return AnalyzeResponse(
@@ -476,7 +471,7 @@ def analyze_repo(req: AnalyzeRequest):
         )
         
     except Exception as e:
-        print(f"❌ Error during analysis: {str(e)}")
+        print(f"[ERROR] Error during analysis: {str(e)}")
         import traceback
         traceback.print_exc()
         raise HTTPException(
@@ -497,7 +492,7 @@ def evaluate_documentation(req: EvaluationRequest):
     - Truthfulness: verifies mentioned components actually exist
     """
     try:
-        print(f"🔍 Starting evaluation for: {req.repo_name}")
+        print(f"[EVAL] Starting evaluation for: {req.repo_name}")
 
         evaluator = UnifiedEvaluator(repo_name=req.repo_name)
         results = evaluator.evaluate_all()
@@ -515,10 +510,10 @@ def evaluate_documentation(req: EvaluationRequest):
         })
 
     except FileNotFoundError as e:
-        print(f"❌ File not found: {e}")
+        print(f"[ERROR] File not found: {e}")
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        print(f"❌ Evaluation error: {e}")
+        print(f"[ERROR] Evaluation error: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
