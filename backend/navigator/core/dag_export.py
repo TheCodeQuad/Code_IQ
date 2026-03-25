@@ -5,10 +5,11 @@ import os
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 
-def export_dag(dag, out_dir=os.path.join(DATA_DIR, "intermediate", "navigator_output")):
+def export_dag(dag, repo_id: str | None = None, out_dir=os.path.join(DATA_DIR, "intermediate", "navigator_output")):
     os.makedirs(out_dir, exist_ok=True)
 
-    dag_path = os.path.join(out_dir, "dag.json")
+    filename = f"dag_{repo_id}.json" if repo_id else "dag.json"
+    dag_path = os.path.join(out_dir, filename)
 
     with open(dag_path, "w", encoding="utf-8") as f:
         json.dump(

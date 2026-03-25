@@ -5,12 +5,16 @@ from backend.models.code_component import CodeComponent, Location, Parameter, Co
 def get_javadoc(node, source):
     """
     Extract Javadoc comment from a class, method, or field declaration.
+    Fixed: Uses prev_named_sibling and properly handles annotations between JavaDoc and declaration.
     Returns (has_javadoc: bool, javadoc_text: str)
     """
-    prev_sibling = node.prev_sibling
+    prev_sibling = node.prev_named_sibling
     
-    while prev_sibling and prev_sibling.type in ("line_comment", "comment", "block_comment"):
-        if prev_sibling.type in ("comment", "block_comment"):
+    # Walk backwards through named siblings to find JavaDoc
+    while prev_sibling:
+        node_type = prev_sibling.type
+        
+        if node_type in ("comment", "block_comment"):
             comment_text = prev_sibling.text.decode()
             if comment_text.startswith("/**") and comment_text.endswith("*/"):
                 javadoc_text = comment_text[3:-2].strip()
@@ -22,24 +26,41 @@ def get_javadoc(node, source):
                         line = line[1:].strip()
                     cleaned_lines.append(line)
                 return True, '\n'.join(cleaned_lines)
-        prev_sibling = prev_sibling.prev_sibling
+            else:
+                # It's a regular block/line comment, not JavaDoc - stop here
+                break
+        
+        elif node_type == "line_comment":
+            # Line comments are not JavaDoc, but keep looking further back
+            prev_sibling = prev_sibling.prev_named_sibling
+            continue
+        
+        elif node_type in ("modifiers", "annotation", "marker_annotation"):
+            # Skip over annotations and modifiers - they can sit between JavaDoc and declaration
+            prev_sibling = prev_sibling.prev_named_sibling
+            continue
+        
+        else:
+            # Hit something else (another declaration, statement, etc.) - stop
+            break
     
     return False, ""
 
 
-def extract_type_info(type_node):
-    """Extract type information from a type node"""
+def extract_type_info(type_node, source):
+    """Extract type information from a type node - returns full text representation"""
     if not type_node:
         return None
     
-    type_text = type_node.text.decode()
+    # Use source text directly to capture full type including generics
+    type_text = source[type_node.start_byte:type_node.end_byte]
     return type_text
 
 
-def extract_parameters(method_node):
+def extract_parameters(method_node, source):
     """
-    Extract parameters with full type information.
-    Enhanced for DocAgent: includes types for better documentation context.
+    Extract parameters with support for generics, varargs, annotations, and final modifiers.
+    Fixed: Uses source slicing instead of manually reconstructing types.
     """
     parameters = []
     params = method_node.child_by_field_name("parameters")
@@ -50,15 +71,23 @@ def extract_parameters(method_node):
                 param_name = None
                 param_type = None
                 
-                # Extract type
+                # Extract type using source slicing to capture full generic types
                 type_node = child.child_by_field_name("type")
                 if type_node:
-                    param_type = extract_type_info(type_node)
+                    param_type = source[type_node.start_byte:type_node.end_byte]
                 
                 # Extract name
                 name_node = child.child_by_field_name("name")
                 if name_node:
                     param_name = name_node.text.decode()
+                else:
+                    # Fallback: find variable_declarator
+                    for sub in child.children:
+                        if sub.type == "variable_declarator":
+                            n = sub.child_by_field_name("name")
+                            if n:
+                                param_name = n.text.decode()
+                            break
                 
                 if param_name:
                     parameters.append(Parameter(
@@ -69,11 +98,25 @@ def extract_parameters(method_node):
                     
             elif child.type == "spread_parameter":
                 # Varargs: String... args
+                param_type = None
+                param_name = None
+                
+                # Use field-based extraction with source slicing
                 type_node = child.child_by_field_name("type")
                 name_node = child.child_by_field_name("name")
                 
-                param_type = extract_type_info(type_node) if type_node else None
-                param_name = name_node.text.decode() if name_node else None
+                if type_node:
+                    param_type = source[type_node.start_byte:type_node.end_byte]
+                if name_node:
+                    param_name = name_node.text.decode()
+                else:
+                    # Fallback: find variable_declarator
+                    for sub in child.children:
+                        if sub.type == "variable_declarator":
+                            n = sub.child_by_field_name("name")
+                            if n:
+                                param_name = n.text.decode()
+                            break
                 
                 if param_name:
                     parameters.append(Parameter(
@@ -85,11 +128,11 @@ def extract_parameters(method_node):
     return parameters
 
 
-def extract_return_type(method_node):
+def extract_return_type(method_node, source):
     """Extract return type from method declaration"""
     return_type_node = method_node.child_by_field_name("type")
     if return_type_node:
-        return extract_type_info(return_type_node)
+        return source[return_type_node.start_byte:return_type_node.end_byte]
     return None
 
 
@@ -97,21 +140,32 @@ def extract_signature(node, source):
     """
     Extract clean method/class signature.
     Enhanced: Removes body but keeps full signature with annotations.
+    Handles multiline signatures properly.
     """
     sig_start = node.start_byte
     sig_end = node.end_byte
     source_text = source[sig_start:sig_end]
     
+    # Find the opening brace
     brace_pos = source_text.find('{')
     if brace_pos != -1:
-        return source_text[:brace_pos].strip()
+        sig = source_text[:brace_pos].strip()
+        # Clean up excessive whitespace but preserve structure
+        lines = sig.split('\n')
+        cleaned = ' '.join(line.strip() for line in lines if line.strip())
+        return cleaned
     
     # For abstract methods or interfaces (no body)
     semicolon_pos = source_text.find(';')
     if semicolon_pos != -1:
-        return source_text[:semicolon_pos].strip()
+        sig = source_text[:semicolon_pos].strip()
+        lines = sig.split('\n')
+        cleaned = ' '.join(line.strip() for line in lines if line.strip())
+        return cleaned
     
-    return source_text.split('\n')[0]
+    # Fallback: get first line
+    first_line = source_text.split('\n')[0].strip()
+    return first_line if first_line else source_text[:100].strip()
 
 
 def get_visibility(node):
@@ -183,18 +237,22 @@ def extract_imports(tree, source):
     return imports
 
 
-def extract_annotations(node):
+def extract_annotations(node, source):
     """
     Extract annotations/decorators with arguments.
-    Enhanced: Captures annotation values for better context.
+    Fixed: Walks all children, not just those nested in modifiers.
+    Captures annotation values for better context.
     """
     annotations = []
     
-    for child in node.children:
-        if child.type == "modifiers":
-            for mod_child in child.children:
-                if mod_child.type in ("annotation", "marker_annotation"):
-                    annotations.append(mod_child.text.decode())
+    def walk(n):
+        if n.type in ("annotation", "marker_annotation"):
+            annotations.append(source[n.start_byte:n.end_byte])
+        for child in n.children:
+            walk(child)
+    
+    # Walk the node to find all annotations
+    walk(node)
     
     return annotations
 
@@ -218,6 +276,7 @@ def extract_throws_exceptions(method_node):
 def extract_method_calls(method_node, source):
     """
     Extract all method invocations within a method.
+    Fixed: Also captures constructor chaining (super/this calls).
     Enhanced: Captures both simple calls and chained calls.
     """
     calls = []
@@ -237,6 +296,10 @@ def extract_method_calls(method_node, source):
                 obj_text = object_node.text.decode()
                 calls.append(f"{obj_text}.{call_name}" if method_name_node else obj_text)
         
+        elif node.type == "explicit_constructor_invocation":
+            # Capture constructor chaining: super(...) and this(...)
+            calls.append(source[node.start_byte:node.end_byte])
+        
         for child in node.children:
             walk(child)
     
@@ -244,35 +307,37 @@ def extract_method_calls(method_node, source):
     return calls
 
 
-def extract_field_type(field_node):
+def extract_field_type(field_node, source):
     """Extract type information from field declaration"""
     type_node = field_node.child_by_field_name("type")
     if type_node:
-        return extract_type_info(type_node)
+        return source[type_node.start_byte:type_node.end_byte]
     return None
 
 
-def extract_parent_classes(class_node):
+def extract_parent_classes(class_node, source):
     """
-    Extract superclass and implemented interfaces.
-    Critical for understanding inheritance hierarchy.
+    Extract parent classes and interfaces.
+    Fixed: Uses correct field names (superclass, super_interfaces) and preserves full generic types.
     """
     parent_classes = []
-    
-    # Superclass
+
+    # Extract superclass
     superclass_node = class_node.child_by_field_name("superclass")
     if superclass_node:
-        for child in superclass_node.children:
-            if child.type == "type_identifier":
-                parent_classes.append(child.text.decode())
-    
-    # Interfaces
-    interfaces_node = class_node.child_by_field_name("interfaces")
+        # Use full text to preserve generics
+        parent_text = source[superclass_node.start_byte:superclass_node.end_byte]
+        parent_classes.append(parent_text.strip())
+
+    # Extract interfaces using correct field name
+    interfaces_node = class_node.child_by_field_name("super_interfaces")
     if interfaces_node:
         for child in interfaces_node.children:
-            if child.type == "type_identifier":
-                parent_classes.append(child.text.decode())
-    
+            if child.type in ("type_identifier", "generic_type", "scoped_type_identifier"):
+                # Use full text to preserve generics
+                interface_text = source[child.start_byte:child.end_byte]
+                parent_classes.append(interface_text.strip())
+
     return parent_classes
 
 
@@ -313,6 +378,14 @@ def extract_components(tree, source, file_path, module_path):
     5. Call graph data (method invocations)
     6. Inheritance information
     7. Annotation metadata
+    
+    Fixed issues:
+    - Parameter extraction now handles generics, varargs, annotations
+    - JavaDoc extraction uses prev_named_sibling
+    - Parent class extraction uses correct field names
+    - Annotations extracted from all children, not just modifiers
+    - Constructor calls include super/this
+    - Class methods and attributes are properly linked
     """
     components = {}
     root = tree.root_node
@@ -341,30 +414,13 @@ def extract_components(tree, source, file_path, module_path):
                 class_id = f"{module_path}.{class_name}"
 
             has_javadoc, javadoc = get_javadoc(node, source)
-            annotations = extract_annotations(node)
+            annotations = extract_annotations(node, source)
             modifiers = get_modifiers(node)
-            parent_classes = extract_parent_classes(node)
-            
-            # Extract parent classes
-            parent_classes = []
-            superclass_node = node.child_by_field_name("superclass")
-            if superclass_node:
-                parent_classes = [superclass_node.text.decode()]
-            
-            # Check for interfaces
-            interfaces_types = []
-            for child in node.children:
-                if child.type == "super_interfaces":
-                    for intf_child in child.children:
-                        if intf_child.type == "type_list":
-                            for type_node in intf_child.children:
-                                if type_node.type != ",":
-                                    interfaces_types.append(type_node.text.decode())
-            
-            parent_classes.extend(interfaces_types)
+            parent_classes = extract_parent_classes(node, source)
             
             start_line = node.start_point[0] + 1
             end_line = node.end_point[0] + 1
+            lines_of_code = end_line - start_line + 1
             
             sig = extract_signature(node, source)
             is_public, is_private, is_protected = get_visibility(node)
@@ -380,9 +436,9 @@ def extract_components(tree, source, file_path, module_path):
                     end_line=end_line
                 ),
                 source_code=source[node.start_byte:node.end_byte],
-                signature=f"class {name}",
-                parent_classes=parent_classes,
+                signature=sig,
                 existing_docstring=javadoc if has_javadoc else None,
+                parameters=[],
                 decorators=annotations,
                 parent_classes=parent_classes,
                 imports=file_imports,
@@ -394,6 +450,8 @@ def extract_components(tree, source, file_path, module_path):
                 is_protected=is_protected,
                 is_abstract=modifiers['abstract'],
                 is_static=modifiers['static'],
+                methods=[],  # Initialize empty list for methods
+                attributes=[],  # Initialize empty list for attributes
                 metadata={
                     'modifiers': modifiers,
                     'package': package_name,
@@ -418,9 +476,9 @@ def extract_components(tree, source, file_path, module_path):
             method_id = f"{parent_id}.{method_name}"
 
             has_javadoc, javadoc = get_javadoc(node, source)
-            parameters = extract_parameters(node)
-            return_type = extract_return_type(node)
-            annotations = extract_annotations(node)
+            parameters = extract_parameters(node, source)
+            return_type = extract_return_type(node, source)
+            annotations = extract_annotations(node, source)
             modifiers = get_modifiers(node)
             exceptions = extract_throws_exceptions(node)
             method_calls = extract_method_calls(node, source)
@@ -464,12 +522,16 @@ def extract_components(tree, source, file_path, module_path):
                     'package': package_name,
                 }
             )
+            
+            # Link method to parent class
+            if parent_id in components:
+                components[parent_id].methods.append(method_id)
 
         # ============================================================
         # FIELD DECLARATION
         # ============================================================
         elif node.type == "field_declaration" and parent_id:
-            field_type = extract_field_type(node)
+            field_type = extract_field_type(node, source)
             
             for child in node.children:
                 if child.type == "variable_declarator":
@@ -480,7 +542,7 @@ def extract_components(tree, source, file_path, module_path):
                         
                         modifiers = get_modifiers(node)
                         is_public, is_private, is_protected = get_visibility(node)
-                        annotations = extract_annotations(node)
+                        annotations = extract_annotations(node, source)
                         has_javadoc, javadoc = get_javadoc(node, source)
 
                         comp_type = ComponentType.STATIC_FIELD if modifiers['static'] else ComponentType.FIELD
@@ -512,14 +574,18 @@ def extract_components(tree, source, file_path, module_path):
                                 'package': package_name,
                             }
                         )
+                        
+                        # Link field to parent class
+                        if parent_id in components:
+                            components[parent_id].attributes.append(field_id)
 
         # ============================================================
         # CONSTRUCTOR DECLARATION
         # ============================================================
         elif node.type == "constructor_declaration" and parent_id:
-            parameters = extract_parameters(node)
+            parameters = extract_parameters(node, source)
             has_javadoc, javadoc = get_javadoc(node, source)
-            annotations = extract_annotations(node)
+            annotations = extract_annotations(node, source)
             modifiers = get_modifiers(node)
             exceptions = extract_throws_exceptions(node)
             method_calls = extract_method_calls(node, source)
@@ -563,6 +629,10 @@ def extract_components(tree, source, file_path, module_path):
                     'package': package_name,
                 }
             )
+            
+            # Link constructor to parent class as a method
+            if parent_id in components:
+                components[parent_id].methods.append(constructor_id)
 
         # ============================================================
         # INTERFACE DECLARATION (treat as CLASS)
@@ -580,7 +650,8 @@ def extract_components(tree, source, file_path, module_path):
                 interface_id = f"{module_path}.{interface_name}"
 
             has_javadoc, javadoc = get_javadoc(node, source)
-            annotations = extract_annotations(node)
+            annotations = extract_annotations(node, source)
+            parent_classes = extract_parent_classes(node, source)
             
             start_line = node.start_point[0] + 1
             end_line = node.end_point[0] + 1
@@ -601,11 +672,14 @@ def extract_components(tree, source, file_path, module_path):
                 signature=sig,
                 existing_docstring=javadoc if has_javadoc else None,
                 decorators=annotations,
+                parent_classes=parent_classes,
                 imports=file_imports,
                 language="java",
                 lines_of_code=end_line - start_line + 1,
                 is_public=is_public,
                 is_abstract=True,  # Interfaces are abstract
+                methods=[],  # Initialize empty list for methods
+                attributes=[],  # Initialize empty list for attributes
                 metadata={
                     'is_interface': True,
                     'package': package_name,
@@ -622,35 +696,9 @@ def extract_components(tree, source, file_path, module_path):
         for child in node.children:
             walk(child, parent_id)
 
-def _extract_java_exceptions(self, source: str) -> List[Dict]:
-    """Extract throws declarations and actual throws in Java"""
-    exceptions = []
-    
-    # throws declaration
-    throws_pattern = r'throws\s+([\w\s.,]+)'
-    for match in re.finditer(throws_pattern, source):
-        exc_list = match.group(1).split(',')
-        for exc in exc_list:
-            exceptions.append({
-                'exception_type': exc.strip(),
-                'declared': True,
-                'raised': False
-            })
-    
-    # actual throw statements
-    throw_pattern = r'throw\s+new\s+(\w+)'
-    for match in re.finditer(throw_pattern, source):
-        exc_type = match.group(1)
-        # Check if already in list
-        existing = next((e for e in exceptions if e['exception_type'] == exc_type), None)
-        if existing:
-            existing['raised'] = True
-        else:
-            exceptions.append({
-                'exception_type': exc_type,
-                'declared': False,
-                'raised': True
-            })
+    # Start walking from root
+    for child in root.children:
+        walk(child, None)
     
     # Add module_path to all components
     for comp in components.values():

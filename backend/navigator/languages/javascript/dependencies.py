@@ -8,6 +8,16 @@ EXTERNAL_MODULES = {
     "big.js"
 }
 
+# Node types considered as local bindings (not cross-component references)
+_LOCAL_PARENT_TYPES = {
+    "formal_parameters",
+    "variable_declarator",
+    "property_identifier",
+    "member_expression",
+    "object_pattern",
+    "array_pattern",
+}
+
 
 def resolve_dependencies(component, tree, source, all_components):
     """
@@ -17,6 +27,9 @@ def resolve_dependencies(component, tree, source, all_components):
     - Import aware
     - Test-safe
     - Arrow function aware
+    - Object-method aware
+    - Generator / constructor safe
+    - Class field aware
     """
 
     deps = set()
@@ -122,6 +135,12 @@ def resolve_dependencies(component, tree, source, all_components):
             name = node.child_by_field_name("name")
             if name and comp_id.endswith(name.text.decode()):
                 return node
+
+        # Generator function declaration
+        if type_str == "function" and node.type == "generator_function_declaration":
+            name = node.child_by_field_name("name")
+            if name and comp_id.endswith(name.text.decode()):
+                return node
         
         # Arrow function: const foo = () => {}
         if type_str == "function" and node.type == "variable_declarator":
@@ -131,17 +150,61 @@ def resolve_dependencies(component, tree, source, all_components):
                 if comp_id.endswith(name.text.decode()):
                     return value  # Return the arrow_function node
 
+        # Function expression in variable: const foo = function() {}
+        if type_str == "function" and node.type == "variable_declarator":
+            name = node.child_by_field_name("name")
+            value = node.child_by_field_name("value")
+            if name and value and value.type in ("function_expression", "function",
+                                                   "generator_function",
+                                                   "generator_function_expression"):
+                if comp_id.endswith(name.text.decode()):
+                    return value
+
         # Class declaration
         if type_str == "class" and node.type == "class_declaration":
             name = node.child_by_field_name("name")
             if name and comp_id.endswith(name.text.decode()):
                 return node
 
-        # Method definition
+        # Class expression: const Foo = class {}
+        if type_str == "class" and node.type == "variable_declarator":
+            name = node.child_by_field_name("name")
+            value = node.child_by_field_name("value")
+            if name and value and value.type in ("class", "class_expression"):
+                if comp_id.endswith(name.text.decode()):
+                    return value
+
+        # Method definition (regular methods and constructors)
+        if type_str in ("method", "constructor") and node.type == "method_definition":
+            name = node.child_by_field_name("name")
+            if name and comp_id.endswith(name.text.decode()):
+                return node
+
+        # Field arrow methods: class field with arrow function value
+        if type_str == "method" and node.type in ("field_definition", "public_field_definition"):
+            prop = node.child_by_field_name("property")
+            value = node.child_by_field_name("value")
+            if prop and value and value.type == "arrow_function":
+                if comp_id.endswith(prop.text.decode()):
+                    return value
+
+        # Object literal method (shorthand)
         if type_str == "method" and node.type == "method_definition":
             name = node.child_by_field_name("name")
             if name and comp_id.endswith(name.text.decode()):
                 return node
+
+        # Object literal pair with function value
+        if type_str == "method" and node.type == "pair":
+            key = node.child_by_field_name("key")
+            value = node.child_by_field_name("value")
+            if key and value and value.type in ("arrow_function", "function_expression", "function"):
+                if comp_id.endswith(key.text.decode().strip("'\"")):
+                    return value
+
+        # Global variable / variable / field / static_field — no body to walk
+        if type_str in ("global_variable", "variable", "field", "static_field"):
+            return None
 
         # Recursively search children
         for c in node.children:
@@ -161,15 +224,7 @@ def resolve_dependencies(component, tree, source, all_components):
         parent = getattr(node, "parent", None)
         if not parent:
             return False
-
-        return parent.type in {
-            "formal_parameters",
-            "variable_declarator",
-            "property_identifier",
-            "member_expression",
-            "object_pattern",
-            "array_pattern",
-        }
+        return parent.type in _LOCAL_PARENT_TYPES
 
     # --------------------------------------------------
     # Walk ONLY component body
@@ -211,6 +266,15 @@ def resolve_dependencies(component, tree, source, all_components):
                 if name in symbol_map:
                     for cid in symbol_map[name]:
                         deps.add(cid)
+
+        # -------- yield <expr> (generator delegation) --------
+        if node.type == "yield_expression":
+            for child in node.children:
+                if child.type == "identifier":
+                    name = child.text.decode()
+                    if name in symbol_map:
+                        for cid in symbol_map[name]:
+                            deps.add(cid)
 
         # -------- imported symbol usage --------
         if node.type == "identifier" and not is_local_identifier(node):

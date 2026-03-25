@@ -1,989 +1,624 @@
-"""
-Optimized Writer Agent - Single LLM Call Architecture
-Generates grounded, code-specific documentation with ONE comprehensive LLM call
-"""
-from typing import Dict, Any, List, Optional
-import re
-import ast
-import json
+# """
+# Writer Agent - Language-Aware Documentation Generator
+# Generates high-quality docstrings with language-specific formatting,
+# structured context from Reader/Searcher agents, and iterative refinement.
+# """
+# import json
+# import re
+# from dataclasses import dataclass
+# from datetime import datetime
+# from pathlib import Path
+# from typing import Dict, Any, Optional, List
 
-from backend.agents.base_agent import BaseAgent, AgentContext, AgentResult, AgentStatus
-from backend.agents.reader_agent import ReaderOutput
-from backend.agents.searcher_agent import SearcherOutput
-from backend.models.code_component import CodeComponent, ComponentType
-from backend.models.documentation import Documentation, Example
-from backend.utils.logger import get_logger
+# from backend.agents.base_agent import BaseAgent, AgentContext, AgentResult, AgentStatus
+# from backend.models.code_component import CodeComponent, ComponentType
+# from backend.models.documentation import Documentation
+# from backend.utils.logger import get_logger
 
-logger = get_logger(__name__)
+# logger = get_logger(__name__)
 
 
-class WriterAgent(BaseAgent):
-    """
-    Optimized Writer Agent that generates documentation with a single LLM call.
-    
-    Architecture:
-    1. Extract ALL code facts upfront (no LLM)
-    2. Build ONE comprehensive grounded prompt
-    3. Single LLM call returns complete documentation
-    4. Parse structured response
-    
-    Performance: 75% reduction in LLM calls, time, and cost
-    """
+# # ---------------------------------------------------------------------------
+# # Language-specific documentation styles
+# # ---------------------------------------------------------------------------
 
-    def __init__(self):
-        super().__init__("writer")
-        
-        # Load configuration
-        self.docstring_style = self.agent_config.get('docstring_style', 'google')
-        self.include_examples = self.agent_config.get('include_examples', True)
-        self.include_type_hints = self.agent_config.get('include_type_hints', True)
+# @dataclass
+# class DocumentationStyle:
+#     """Language-specific documentation style configuration."""
+#     name: str           # e.g. "google", "jsdoc", "tsdoc", "javadoc"
+#     language: str       # e.g. "python", "javascript"
+#     comment_prefix: str # e.g. '\"\"\"', '/**'
+#     comment_suffix: str # e.g. '\"\"\"', ' */'
+#     param_tag: str      # e.g. "Args:", "@param"
+#     return_tag: str     # e.g. "Returns:", "@returns"
+#     raises_tag: str     # e.g. "Raises:", "@throws"
+#     example_tag: str    # e.g. "Examples:", "@example"
 
-    def process(self, context: AgentContext) -> AgentResult:
-        """Generate documentation for component (supports XML and legacy Reader outputs)"""
-        try:
-            component = context.component
-            reader_result = context.get_result('reader')
-            searcher_output = context.get_result('searcher')
-            
-            if not reader_result:
-                return AgentResult(
-                    agent_name=self.agent_name,
-                    status=AgentStatus.FAILED,
-                    output=None,
-                    error="No Reader output available"
-                )
-            
-            self.logger.info(f"Generating documentation for: {component.name}")
-            
-            # Extract metadata from context (set by Reader Agent)
-            context_metadata = context.metadata or {}
-            complexity_assessment = context_metadata.get('complexity_assessment')
-            needs_context = context_metadata.get('needs_additional_context', False)
-            
-            # Fallback: Extract metadata from reader output (support both XML and legacy)
-            if isinstance(reader_result, str):
-                # New XML format
-                complexity_level = context_metadata.get('complexity_level', 'simple')
-                if complexity_assessment is None:
-                    complexity_assessment = {
-                        'complexity_level': complexity_level,
-                        'lines_of_code': context_metadata.get('lines_of_code', 0),
-                        'is_async': context_metadata.get('is_async', False),
-                        'has_loops': context_metadata.get('has_loops', False),
-                        'num_dependencies': context_metadata.get('num_dependencies', 0),
-                        'num_calls': context_metadata.get('num_calls', 0),
-                    }
-                # Create dict for _build_context
-                reader_output = {
-                    'complexity_assessment': complexity_assessment,
-                    'needs_additional_context': needs_context,
-                    'internal_requests': context_metadata.get('internal_requests', []),
-                    'external_requests': context_metadata.get('external_requests', []),
-                }
-            else:
-                # Legacy ReaderOutput object
-                reader_output = reader_result
-                complexity_assessment = reader_output.complexity_assessment
-            
-            # Build context
-            ctx = self._build_context(component, reader_output, searcher_output)
-            
-            # Extract code facts (complexity-aware)
-            complexity_level = complexity_assessment.get('complexity_level', 'simple')
-            if complexity_level in ['complex', 'moderate']:
-                code_facts = self._extract_all_code_facts(component, ctx)
-            else:
-                code_facts = self._extract_minimal_facts(component)
-            
-            # ONE comprehensive LLM call
-            doc_data = self._generate_documentation_single_call(component, ctx, code_facts)
-            
-            # Build Documentation object
-            doc = Documentation(
-                component_id=component.id,
-                component_name=component.name,
-                component_type=component.type.value,
-                summary=doc_data['summary'],
-                description=doc_data['description'],
-                parameters_doc=doc_data.get('parameters', []),
-                returns_doc=doc_data.get('returns'),
-                raises_doc=doc_data.get('raises', []),
-                examples=doc_data.get('examples', []),
-                notes=doc_data.get('notes', []),
-                warnings=doc_data.get('warnings', []),
-                style=self.docstring_style,
-                attributes_doc=doc_data.get('attributes', []), # NEW: Pass to model
-            )
-            
-            # FIX 1: COMPUTE ACTUAL SCORES
-            doc.completeness_score = self._compute_completeness_score(doc_data, component)
-            doc.clarity_score = self._compute_clarity_score(doc_data, component, code_facts)
-            
-            doc.docstring = doc.format_docstring(self.docstring_style)
-            
-            self.logger.info(
-                f"Documentation generated: {len(doc.docstring)} chars, "
-                f"{len(doc.examples)} examples, 1 LLM call"
-            )
-            
-            return AgentResult(
-                agent_name=self.agent_name,
-                status=AgentStatus.SUCCESS,
-                output=doc
-            )
-            
-        except Exception as e:
-            self.logger.error(f"Writer agent error: {e}", exc_info=True)
-            return AgentResult(
-                agent_name=self.agent_name,
-                status=AgentStatus.FAILED,
-                output=None,
-                error=str(e)
-            )
 
-    # ============================================================================
-    # FIX 1: EXTRACTION - Add missing data to code_facts
-    # ============================================================================
+# DOCUMENTATION_STYLES: Dict[str, DocumentationStyle] = {
+#     "python": DocumentationStyle(
+#         name="google", language="python",
+#         comment_prefix='"""', comment_suffix='"""',
+#         param_tag="Args:", return_tag="Returns:",
+#         raises_tag="Raises:", example_tag="Examples:",
+#     ),
+#     "javascript": DocumentationStyle(
+#         name="jsdoc", language="javascript",
+#         comment_prefix="/**", comment_suffix=" */",
+#         param_tag="@param", return_tag="@returns",
+#         raises_tag="@throws", example_tag="@example",
+#     ),
+#     "typescript": DocumentationStyle(
+#         name="tsdoc", language="typescript",
+#         comment_prefix="/**", comment_suffix=" */",
+#         param_tag="@param", return_tag="@returns",
+#         raises_tag="@throws", example_tag="@example",
+#     ),
+#     "java": DocumentationStyle(
+#         name="javadoc", language="java",
+#         comment_prefix="/**", comment_suffix=" */",
+#         param_tag="@param", return_tag="@return",
+#         raises_tag="@throws", example_tag="{@code",
+#     ),
+#     "c": DocumentationStyle(
+#         name="doxygen", language="c",
+#         comment_prefix="/**", comment_suffix=" */",
+#         param_tag="@param", return_tag="@return",
+#         raises_tag="@throws", example_tag="@code",
+#     ),
+#     "go": DocumentationStyle(
+#         name="godoc", language="go",
+#         comment_prefix="//", comment_suffix="",
+#         param_tag="", return_tag="",
+#         raises_tag="", example_tag="",
+#     ),
+#     "rust": DocumentationStyle(
+#         name="rustdoc", language="rust",
+#         comment_prefix="///", comment_suffix="",
+#         param_tag="# Arguments", return_tag="# Returns",
+#         raises_tag="# Panics", example_tag="# Examples",
+#     ),
+# }
 
-    def _extract_minimal_facts(self, component: CodeComponent) -> Dict[str, Any]:
-        """Extract minimal facts for simple components"""
-        control_flow = component.metadata.get('control_flow', {})
-        exceptions = component.metadata.get('exceptions', [])
-        source = component.source_code
-        
-        # For classes, use attributes directly from Navigator (no fallback)
-        class_attributes = component.attributes if component.type == ComponentType.CLASS else []
-        
-        # Extract basic parameter usage even for simple components
-        parameter_usage = {}
-        if component.parameters:
-            for param in component.parameters:
-                param_name = param.name
-                count = source.count(param_name)
-                parameter_usage[param_name] = {
-                    'usage_type': 'used' if count > 0 else 'unused',
-                    'usage_description': f"Used {count} times in function",
-                    'type': param.type_hint or 'unknown',
-                    'default': param.default_value
-                }
-    
-        return {
-            'decorators': component.decorators or [],
-            'is_async': component.is_async or control_flow.get('is_async', False),
-            'is_generator': component.is_generator,
-            'return_type': component.return_type,
-            'raises': exceptions,
-            'parameters': [
-                {'name': p.name, 'type': p.type_hint or 'unknown', 'default': p.default_value}
-                for p in (component.parameters or [])
-            ],
-            'parameter_usage': parameter_usage,
-            'modifies_global_state': component.metadata.get('shared_state_dependencies', []),
-            'reads_global_state': [],
-            'has_loop': control_flow.get('has_loop', False),
-            'operations': [],
-            'data_structures_used': [],
-            'control_flow': ['async'] if component.is_async else [],
-            'actual_returns': [],
-            'state_mutations': {},
-            'invariants': [],
-            'roles': [],
-            'attributes': class_attributes,  # NEW: Add attributes
-        }
+# _LANGUAGE_ALIASES: Dict[str, str] = {
+#     "js": "javascript", "jsx": "javascript",
+#     "ts": "typescript", "tsx": "typescript",
+#     "py": "python", "cpp": "c", "c++": "c",
+#     "rs": "rust",
+# }
 
-    def _extract_all_code_facts(self, component: CodeComponent, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract comprehensive code facts for complex components"""
-        source = component.source_code
-        clean_source = self._strip_noise(source, component.language)
-        
-        # Extract parameters WITH usage analysis (matching _extract_minimal_facts)
-        parameters = []
-        parameter_usage = {}
-        for p in (component.parameters or []):
-            param_name = p.name
-            count = source.count(param_name)
-            
-            parameters.append({
-                'name': p.name,
-                'type': p.type_hint or 'any',
-                'required': p.is_required,
-                'default': p.default_value
-            })
-            
-            # FIX #6: Include usage context
-            parameter_usage[param_name] = {
-                'usage_type': 'used' if count > 0 else 'unused',
-                'usage_description': f"Used {count} times in function",
-                'type': p.type_hint or 'unknown',
-                'default': p.default_value
-            }
 
-        return {
-            'decorators': component.decorators or [],
-            'is_async': component.is_async,
-            'is_generator': component.is_generator,
-            'raises': component.metadata.get('exceptions', []),
-            'modifies_global_state': component.metadata.get('shared_state_dependencies', []),
-            'reads_global_state': [],
-            'parameter_usage': parameter_usage,  # FIX #6: Added parameter usage
-            'operations': [],
-            'data_structures_used': [],
-            'control_flow': [],
-            'return_type': component.return_type or 'any',
-            'actual_returns': self._extract_actual_returns(clean_source, component.language),
-            'parameters': parameters,
-            'attributes': component.attributes or [],
-            'roles': [],
-            'invariants': []
-        }
+# def get_documentation_style(language: str) -> DocumentationStyle:
+#     """Resolve language string to a DocumentationStyle (defaults to Python/Google)."""
+#     lang = _LANGUAGE_ALIASES.get(language.lower().strip(), language.lower().strip())
+#     return DOCUMENTATION_STYLES.get(lang, DOCUMENTATION_STYLES["python"])
 
-    def _strip_noise(self, source: str, language: str) -> str:
-        """Remove comments and strings to allow accurate regex matching across languages"""
-        # Remove multiline comments
-        source = re.sub(r'/\*.*?\*/', '', source, flags=re.DOTALL) # C-style
-        source = re.sub(r'"""(.*?)"""', '', source, flags=re.DOTALL) # Python
-        # Remove single line comments
-        source = re.sub(r'//.*', '', source) # C-style
-        source = re.sub(r'#.*', '', source)  # Python
-        # Remove string literals
-        source = re.sub(r"'(.*?)'|\"(.*?)\"", '', source)
-        return source
 
-    def _extract_actual_returns(self, clean_source: str, language: str) -> List[str]:
-        """Extract return expressions (Fixes 'return type inconsistencies')"""
-        # Look for return keyword and capture until end of expression
-        # Works for: return x; (C/JS/Java) and return x (Python)
-        pattern = r'\breturn\s+([^;}\n#]+)'
-        matches = re.findall(pattern, clean_source)
-        return [m.strip() for m in matches if m.strip()][:3]
+# # ---------------------------------------------------------------------------
+# # Writer Agent
+# # ---------------------------------------------------------------------------
 
-    def _validate_documentation(self, doc_data: Dict[str, Any], component: CodeComponent) -> Dict[str, Any]:
-        """
-        Validate and fix documentation based on component type.
-        This prevents inappropriate fields (e.g., returns_doc on globals).
-        """
-        
-        # GLOBAL VARIABLES should NOT have returns or parameters
-        if component.type == ComponentType.GLOBAL_VARIABLE:
-            doc_data['returns'] = None
-            doc_data['parameters'] = []
-        
-        # CLASSES should NOT have returns
-        if component.type == ComponentType.CLASS:
-            doc_data['returns'] = None
-        
-        # PROPERTIES should NOT have parameters
-        modifiers = component.metadata.get('modifiers', {})
-        if modifiers.get('is_property'):
-            doc_data['parameters'] = []
-        
-        # STATIC/CLASS METHODS: parameters doc OK, but no self/cls
-        actual_params = {p.name for p in (component.parameters or [])}
-        if modifiers.get('is_static') or modifiers.get('is_class_method'):
-            if 'self' in actual_params:
-                actual_params.discard('self')
-            if 'cls' in actual_params:
-                actual_params.discard('cls')
-            doc_data['parameters'] = [
-                p for p in doc_data.get('parameters', [])
-                if p.get('name') in actual_params
-            ]
-        
-        return doc_data
+# class WriterAgent(BaseAgent):
+#     """
+#     Language-aware documentation writer agent.
 
-    def _generate_documentation_single_call(
-        self,
-        component: CodeComponent,
-        context: Dict[str, Any],
-        code_facts: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """ONE comprehensive LLM call with validation"""
-        prompt = self._build_comprehensive_prompt(component, context, code_facts)
-        system_prompt = self._get_system_prompt()
-        
-        try:
-            response = self.generate_with_llm(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                temperature=0.3,
-                max_tokens=3500
-            )
-            
-            doc_data = self._parse_response(response, component, code_facts)
-            
-            # ✓ VALIDATE documentation AFTER LLM
-            doc_data = self._validate_documentation(doc_data, component)
-            
-            # Auto-generate notes/warnings from IR metadata
-            doc_data['notes'] = self._extract_notes_from_metadata(component, code_facts)
-            doc_data['warnings'] = self._extract_warnings_from_metadata(code_facts)
-            
-            return doc_data
-            
-        except Exception as e:
-            self.logger.error(f"LLM call failed: {e}")
-            return self._create_fallback_doc(component, code_facts)
+#     Pipeline:
+#         1. Resolve language-specific documentation style
+#         2. Format reader/searcher context into structured prompt sections
+#         3. Build system + user prompts tailored to component type & language
+#         4. Single LLM call via BaseAgent memory API
+#         5. Wrap raw response in Documentation object
+#         6. Persist output to data/intermediate/agent_output/writer/
 
-    def _build_comprehensive_prompt(
-        self,
-        component: CodeComponent,
-        context: Dict[str, Any],
-        code_facts: Dict[str, Any]
-    ) -> str:
-        """Build comprehensive prompt - FIXED for role-specific efficiency and missing keys"""
-        complexity = context.get('complexity_level', 'simple')
-        
-        # ========== SPECIAL CASE: GLOBAL VARIABLES (Constants vs State) ==========
-        if component.type == ComponentType.GLOBAL_VARIABLE:
-            # Check if it's a constant (no mutations found by Navigator)
-            is_constant = not code_facts.get('modifies_global_state')
-            role_type = "Configuration Constant" if is_constant else "Mutable State"
-            
-            # Build usage context from existing code_facts
-            usage_lines = []
-            shared_deps = code_facts.get('modifies_global_state', [])
-            if shared_deps:
-                deps_str = ', '.join(shared_deps[:3])
-                usage_lines.append(f"Modified by: {deps_str}")
-            else:
-                usage_lines.append("Read-only constant")
-            
-            usage_context = "\n".join(usage_lines) if usage_lines else "Module-level variable"
-            
-            return f"""Generate documentation for this {role_type}. 
-            
-Name: {component.name}
-Value/Code: {component.source_code.strip()}
+#     The raw LLM response (containing <DOCSTRING> tags) is stored in
+#     Documentation.docstring so that the downstream DocstringInserter can
+#     extract and clean it as usual.
+#     """
 
-CONTEXT:
-{usage_context}
+#     def __init__(self):
+#         super().__init__("writer")
+#         self.output_dir = Path("data/intermediate/agent_output/writer")
+#         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-RULES:
-1. SUMMARY: Active verb only (e.g., "Defines...", "Tracks...").
-2. DESCRIPTION: If constant, explain the IMPACT of changing this value. DO NOT describe the syntax.
-3. NO 'parameters' or 'returns' fields.
+#     # ------------------------------------------------------------------
+#     # Style helpers
+#     # ------------------------------------------------------------------
 
-Output JSON:
-{{
-  "summary": "High-level purpose (max 100 chars)",
-  "description": "Functional impact or synchronization role (2 sentences)",
-  "notes": ["Note on initialization/dependency"],
-  "warnings": []
-}}
-"""
-        # ========== SPECIAL CASE: CLASSES (Handling empty/data classes) ==========
-        if component.type == ComponentType.CLASS:
-            is_data_class = not component.methods or len(component.methods) <= 1
-            
-            # Build attributes section
-            attributes_section = ""
-            if code_facts.get('attributes'):
-                attributes_section = "\n=== CLASS ATTRIBUTES ===\n"
-                for attr in code_facts['attributes']:
-                    attr_type = attr.get('type', 'any')
-                    attr_name = attr.get('name', '')
-                    attributes_section += f"- {attr_name}: {attr_type}\n"
-            else:
-                attributes_section = "\n=== CLASS ATTRIBUTES ===\nNo attributes defined (see source code)\n"
-            
-            return f"""Generate documentation for this {component.name} ({'Data Model' if is_data_class else 'Service Class'}):
+#     @staticmethod
+#     def _get_style(component: CodeComponent) -> DocumentationStyle:
+#         """Get the documentation style for a component's language."""
+#         return get_documentation_style(component.language)
 
-Code:
-```{component.language}
-{component.source_code}
-```
+#     # ------------------------------------------------------------------
+#     # System prompt
+#     # ------------------------------------------------------------------
 
-=== DATA FIELDS ===
-{', '.join([a.get('name') for a in component.attributes]) or 'Attributes are defined in constructor'}
+#     def _build_system_prompt(self, style: DocumentationStyle) -> str:
+#         """Build a language-aware system prompt with concrete format examples."""
 
-CRITICAL: 
-- If this is a simple data holder, focus the DESCRIPTION on what entities this model represents.
-- If it has logic, focus on the primary responsibility.
-- Do NOT leave fields empty if no docstring exists; derive from code structure.
+#         if style.language == "python":
+#             format_block = """FORMAT: Google-style Python docstring (NO triple quotes).
+# - First line: one-sentence summary.
+# - Blank line after summary if more sections follow.
+# - Args: section for parameters (indented 4 spaces under heading).
+# - Returns: section for return value.
+# - Raises: section for exceptions.
+# - Do NOT include triple quotes — they are added by the system.
 
-{attributes_section}
-"""
+# EXAMPLE OUTPUT FORMAT:
+# Calculate the sum of two numbers.
 
-        # ========== BASE PROMPT CONSTRUCTION ==========
-        async_prefix = "[ASYNC] " if code_facts.get('is_async') else ""
-        
-        # OPTIMIZATION: For simple functions, use minimal prompt
-        is_simple = (
-            component.lines_of_code <= 15 and
-            len(component.parameters or []) <= 3 and
-            not code_facts.get('raises') and
-            not code_facts.get('modifies_global_state')
-        )
-        
-        # Truncate source code for large functions to reduce prefill time
-        source_code = component.source_code
-        if len(source_code) > 2000 and not is_simple:
-            source_code = source_code[:1500] + "\n# ... (truncated) ...\n" + source_code[-400:]
-        
-        prompt = f"""Document this {component.type.value}: {component.name}
-{async_prefix}
-Signature: {component.signature or 'N/A'}
+# Args:
+#     x (int): First number.
+#     y (int): Second number.
 
-```{component.language}
-{source_code}
-```
-"""
+# Returns:
+#     int: Sum of x and y."""
 
-        # ========== SIMPLE FUNCTION: MINIMAL PROMPT ==========
-        if is_simple and component.type in [ComponentType.FUNCTION, ComponentType.METHOD]:
-            # Compact JSON schema for simple functions
-            prompt += f"""
-Return: {code_facts.get('return_type', 'any')}
-Output JSON: {{"summary": "verb phrase", "description": "how it works", "parameters": [...], "returns": {{"type": "{code_facts.get('return_type', 'any')}", "description": "..."}}}}
-"""
-            return prompt
+#         elif style.language in ("javascript", "typescript"):
+#             format_block = f"""FORMAT: JSDoc/TSDoc-style documentation (NO comment delimiters).
+# - First line: one-sentence summary.
+# - Blank line after summary if more sections follow.
+# - {style.param_tag} {{{{type}}}} name - description (for each parameter).
+# - {style.return_tag} {{{{type}}}} description.
+# - {style.raises_tag} {{{{type}}}} description (if applicable).
+# - Do NOT include /** or */ — they are added by the system.
+# - Do NOT use Python-specific terms (self, __init__, def, etc.).
 
-        # ========== CLASS SPECIFIC LOGIC ==========
-        if component.type == ComponentType.CLASS:
-            is_data_class = not component.methods or len(component.methods) <= 1
-            prompt += f"\nCategory: {'Data Model' if is_data_class else 'Service/Logic Class'}\n"
-            
-            # Build attributes section - only if attributes exist
-            if code_facts.get('attributes'):
-                prompt += "Attributes: "
-                prompt += ", ".join([f"{a.get('name')}:{a.get('type', 'any')}" for a in code_facts['attributes'][:5]])
-                prompt += "\n"
+# EXAMPLE OUTPUT FORMAT:
+# Calculates the sum of two numbers.
 
-        # ========== CODE FACTS (ONLY NON-EMPTY) ==========
-        facts = []
-        if code_facts.get('modifies_global_state'):
-            facts.append(f"Modifies: {', '.join(code_facts['modifies_global_state'][:3])}")
-        if code_facts.get('operations'):
-            facts.append(f"Ops: {', '.join(code_facts['operations'][:3])}")
-        if code_facts.get('control_flow') and code_facts['control_flow'] != ['linear']:
-            facts.append(f"Flow: {', '.join(code_facts['control_flow'])}")
-        
-        if facts:
-            prompt += "\nFacts: " + " | ".join(facts) + "\n"
+# @param {{number}} x - First number.
+# @param {{number}} y - Second number.
+# @returns {{number}} Sum of x and y."""
 
-        # Add parameter types (compact format)
-        if code_facts.get('parameters'):
-            param_types = [f"{p['name']}:{p['type']}" for p in code_facts['parameters'][:6]]
-            prompt += f"\nParams: {', '.join(param_types)}\n"
+#         elif style.language == "java":
+#             format_block = """FORMAT: Javadoc-style documentation (NO comment delimiters).
+# - First line: one-sentence summary.
+# - Blank line after summary if more sections follow.
+# - @param name description.
+# - @return description.
+# - @throws ExceptionType description.
+# - Do NOT include /** or */ — they are added by the system.
 
-        # Add exceptions (only if present)
-        if code_facts.get('raises'):
-            exc_list = [f"{e['exception']}" for e in code_facts['raises'][:3]]
-            prompt += f"Raises: {', '.join(exc_list)}\n"
+# EXAMPLE OUTPUT FORMAT:
+# Calculates the sum of two integers.
 
-        # Compact JSON output format
-        prompt += f"""
-Return type: {code_facts.get('return_type', 'any')}
+# @param x the first integer
+# @param y the second integer
+# @return the sum of x and y"""
 
-Output JSON:
-{{"summary": "active verb phrase (max 100 chars)", "description": "implementation details", "parameters": [{{"name": "...", "type": "...", "description": "..."}}], "returns": {{"type": "{code_facts.get('return_type', 'any')}", "description": "..."}}, "raises": [], "notes": []}}
-"""
-        return prompt
+#         else:
+#             format_block = f"""FORMAT: Standard documentation for {style.language}.
+# - First line: one-sentence summary.
+# - Additional description if needed.
+# - Document parameters, return values, and exceptions as appropriate
+#   using the conventions of {style.language}."""
 
-    def _get_system_prompt(self) -> str:
-        """Concise system prompt for faster processing"""
-        return """Technical documentation expert. Output valid JSON only.
-Rules: Start summary with active verb. No "This function/class". Summary=What, Description=How."""
+#         return f"""You are a precise code documentation generator for {style.language}.
 
-    def _parse_response(
-        self,
-        response: str,
-        component: CodeComponent,
-        code_facts: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """
-        Parse JSON response and FORCE-INJECT truth from Navigator.
-        This fixes parameter and return type inconsistencies caused by LLM hallucinations.
-        """
-        try:
-            # 1. Clean and parse JSON
-            cleaned = self._clean_json(response)
-            data = json.loads(cleaned)
-            
-            # 2. Extract structured data with safety defaults
-            parsed = {
-                'summary': data.get('summary', '').strip()[:100],
-                'description': data.get('description', '').strip(),
-                'attributes': data.get('attributes', []),  # NEW: Extract attributes
-                'parameters': data.get('parameters', []),
-                'returns': data.get('returns') or {'type': 'any', 'description': ''},
-                'raises': data.get('raises', []),
-                'examples': self._parse_examples(data.get('examples', [])),
-                'notes': data.get('notes', []),
-                'warnings': data.get('warnings', [])
-            }
+# STRICT RULES:
+# 1. Output ONLY the documentation content between <DOCSTRING> and </DOCSTRING>.
+# 2. Do NOT include comment delimiters ({style.comment_prefix}, {style.comment_suffix}).
+# 3. Do NOT include markdown, backticks, analysis, or explanations outside the tags.
+# 4. Do NOT invent behavior not explicitly visible in the source code.
+# 5. Do NOT infer external system behavior.
+# 6. Keep the documentation concise and precise.
+# 7. Only include sections that are directly justified by the code.
 
-            # ========================================================================
-            # FIX: FORCE-OVERWRITE LLM Hallucinations with Navigator Truth
-            # ========================================================================
-            
-            # A) Force correct Return Type from Navigator
-            nav_return_type = component.return_type or 'any'
-            if parsed['returns']:
-                # The LLM is only allowed to change the description, NOT the type
-                parsed['returns']['type'] = nav_return_type
+# STRUCTURAL RULES (CRITICAL):
+# - Always include a one-sentence summary.
+# - Include "{style.param_tag}" ONLY if the component has parameters.
+# - Include "{style.return_tag}" ONLY if the function returns a value or has an implicit return.
+# - Include "{style.raises_tag}" ONLY if:
+#     - The code explicitly raises an exception, OR
+#     - The code performs dictionary access, indexing, file I/O, or JSON parsing that may raise built-in exceptions.
+# - Do NOT include empty sections.
+# - Do NOT include examples unless the code clearly demonstrates usage patterns.
+# - If behavior is uncertain, omit it rather than guessing.
 
-            # B) Force correct Parameter Types and Names
-            nav_params = {p.name: p.type_hint for p in (component.parameters or [])}
-            if nav_params:  # Always validate if we have navigator params, regardless of LLM output
-                valid_params = []
-                for p_doc in parsed['parameters']:
-                    name = p_doc.get('name')
-                    if name in nav_params:
-                        # Overwrite the hallucinated type with the Navigator's discovered type
-                        p_doc['type'] = nav_params[name] or 'any'
-                        valid_params.append(p_doc)
-                
-                # If the LLM missed a parameter, add it back as a placeholder to ensure completeness
-                doc_param_names = {p.get('name') for p in valid_params}
-                for p_name, p_type in nav_params.items():
-                    if p_name not in doc_param_names:
-                        valid_params.append({
-                            'name': p_name,
-                            'type': p_type or 'any',
-                            'description': 'Parameter description missing from LLM response.'
-                        })
-                parsed['parameters'] = valid_params
+# {format_block}
 
-                # AFTER setting parsed['parameters'] = valid_params, add:
-                if len(valid_params) != len(nav_params):
-                    self.logger.warning(
-                        f"Parameter count mismatch for {component.name}: "
-                        f"LLM returned {len(valid_params)}, Navigator found {len(nav_params)}"
-                    )
+# Brevity Requirement:
+# - Maximum 8-15 lines unless complexity demands more.
+# - Avoid generic phrases like "This function is used to..."
+# - Avoid repeating parameter names in the summary.
+# - Prefer direct, technical language.
 
-            # C) Filter verified exceptions
-            parsed['raises'] = self._validate_raises_against_code_facts(
-                parsed['raises'],
-                code_facts,
-                component
-            )
-            
-            return parsed
-        
-        except json.JSONDecodeError as e:
-            self.logger.error(f"JSON parse error: {e}")
-            return self._create_fallback_doc(component, code_facts)
+# Evidence Constraint:
+# Every documented behavior must be traceable to visible code.
+# If you cannot point to a specific statement in the source code that supports a claim, do not include it.
 
-    def _clean_json(self, response: str) -> str:
-        """Extract JSON from response and remove markdown markers"""
-        response = re.sub(r'```json\s*', '', response)
-        response = re.sub(r'```\s*', '', response)
-        
-        start = response.find('{')
-        end = response.rfind('}')
-        
-        return response[start:end+1] if start != -1 and end != -1 else response
+# CRITICAL: Your ENTIRE useful output must be wrapped in <DOCSTRING>...</DOCSTRING> tags."""
 
-    def _parse_examples(self, examples_data: List[Dict]) -> List[Example]:
-        """Convert raw example dicts from LLM to Example objects"""
-        return [
-            Example(
-                description=ex.get('description', ''),
-                code=ex.get('code', ''),
-                output=ex.get('output')
-            )
-            for ex in examples_data if isinstance(ex, dict)
-        ]
+#     # ------------------------------------------------------------------
+#     # Component-type instructions
+#     # ------------------------------------------------------------------
 
-    def _extract_notes_from_metadata(self, component: CodeComponent, code_facts: Dict[str, Any]) -> List[str]:
-        """Generate notes from navigator's extracted metadata"""
-        notes = []
-        
-        if code_facts.get('is_async'):
-            notes.append("This is an asynchronous function - must be awaited")
-        
-        if code_facts.get('is_generator'):
-            notes.append("This is a generator function - returns an iterator")
-        
-        if code_facts.get('decorators'):
-            notes.append(f"Decorators: {', '.join(code_facts['decorators'])}")
-        
-        if code_facts.get('modifies_global_state'):
-            notes.append(f"Modifies global state: {', '.join(code_facts['modifies_global_state'][:3])}")
-        
-        if code_facts.get('has_loop'):
-            loop_type = code_facts.get('loop_type', 'infinite')
-            notes.append(f"Contains {loop_type} loop")
-        
-        return notes
+#     @staticmethod
+#     def _build_type_instructions(component: CodeComponent) -> str:
+#         """Return component-type-specific documentation guidance."""
 
-    def _extract_warnings_from_metadata(self, code_facts: Dict[str, Any]) -> List[str]:
-        """Generate warnings from navigator's extracted metadata"""
-        warnings = []
-        
-        if code_facts.get('has_try_except'):
-            warnings.append("Has error handling - check for exceptions that may be raised")
-        
-        if code_facts.get('modifies_global_state'):
-            warnings.append("Modifies shared state - consider thread safety")
-        
-        if code_facts.get('has_loop') and 'while True' in code_facts.get('source', ''):
-            warnings.append("Contains infinite loop - runs continuously")
-        
-        return warnings
+#         t = component.type
 
-    def _create_fallback_doc(self, component: CodeComponent, code_facts: Dict[str, Any]) -> Dict[str, Any]:
-        """Fallback documentation when LLM fails"""
-        return {
-            'summary': f"{component.name} - {component.type.value}",
-            'description': f"Component {component.name} performs: {', '.join(code_facts['operations'][:3]) or 'processing'}",
-            'parameters': [
-                {
-                    'name': p.name,
-                    'type': p.type_hint or '',
-                    'description': code_facts['parameter_usage'].get(p.name, {}).get('usage_description', 'Parameter'),
-                    'default': str(p.default_value) if p.default_value else None
-                }
-                for p in (component.parameters or [])
-            ],
-            'returns': {
-                'type': component.return_type or 'unknown',
-                'description': f"Returns: {code_facts['actual_returns'][0] if code_facts['actual_returns'] else 'value'}"
-            } if component.return_type else None,
-            'raises': [
-                {'exception': exc['exception'], 'description': f"Raised when {exc['condition']}"}
-                for exc in code_facts['raises']
-            ],
-            'examples': [],
-            'notes': self._extract_notes_from_metadata(component, code_facts),
-            'warnings': self._extract_warnings_from_metadata(code_facts)
-        }
+#         if t == ComponentType.CLASS:
+#             return """DOCUMENTING A CLASS:
+# - Summary: What the class represents and its role.
+# - Attributes with types and descriptions (if observable).
+# - Constructor parameters (Args) if applicable.
+# - Inheritance relationships if visible.
+# - Do NOT document individual methods here."""
 
-    def _build_context(
-        self,
-        component: CodeComponent,
-        reader_output,  # Can be ReaderOutput object or dict from XML parsing
-        searcher_output: Optional[SearcherOutput]
-    ) -> Dict[str, Any]:
-        """Build comprehensive context"""
-        # Handle both dict (from XML parsing) and ReaderOutput object
-        if isinstance(reader_output, dict):
-            complexity = reader_output.get('complexity_assessment', {'complexity_level': 'unknown'})
-            needs_context = reader_output.get('needs_additional_context', False)
-            internal_requests = reader_output.get('internal_requests', [])
-            external_requests = reader_output.get('external_requests', [])
-        else:
-            # Legacy ReaderOutput object
-            complexity = reader_output.complexity_assessment
-            needs_context = reader_output.needs_additional_context
-            internal_requests = reader_output.internal_requests
-            external_requests = reader_output.external_requests
-        
-        context = {
-            'component': component,
-            'complexity': complexity,
-            'needs_additional_context': needs_context,
-            'complexity_level': complexity.get('complexity_level', 'unknown'),
-            'internal_requests': internal_requests,
-            'external_requests': external_requests,
-        }
-        
-        if searcher_output:
-            if searcher_output.dependency_contexts:
-                context['dependencies'] = [
-                    {
-                        'name': dep.component_name,
-                        'summary': dep.summary,
-                        'signature': dep.signature
-                    }
-                    for dep in searcher_output.dependency_contexts
-                ]
-            
-            if searcher_output.reference_contexts:
-                context['usage_examples'] = []
-                for ref in searcher_output.reference_contexts:
-                    if ref.usage_examples:
-                        context['usage_examples'].extend(ref.usage_examples)
-        
-        context['domain'] = self._extract_domain_context(component, context)
-        
-        return context
+#         if t == ComponentType.MODULE:
+#             return """DOCUMENTING A MODULE:
+# - Summary: What the module provides.
+# - Key exports / public components.
+# - Module-level side effects if any."""
 
-    def _extract_domain_context(self, component: CodeComponent, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract domain-specific terms from function calls"""
-        domain_info = {'domain_terms': set(), 'system_name': None}
-        
-        # Use actual function calls as domain terms (better than regex extraction)
-        if component.calls:
-            for call in component.calls[:8]:
-                # Extract function name from full call path
-                call_name = call.split('.')[-1] if '.' in call else call
-                if len(call_name) > 2 and not call_name.startswith('_'):
-                    domain_info['domain_terms'].add(call_name)
-        
-        # Keep top 8
-        domain_info['domain_terms'] = set(sorted(list(domain_info['domain_terms']))[:8])
-        
-        return domain_info
-    
-    def _compute_completeness_score(self, doc_data: Dict[str, Any], component: CodeComponent) -> float:
-        """
-        Compute completeness score based on populated fields.
-        
-        Returns:
-            float: 0.0-1.0 representing documentation completeness
-        """
-        # Define required fields by component type
-        if component.type == ComponentType.GLOBAL_VARIABLE:
-            required = ['summary', 'description']
-        elif component.type == ComponentType.CLASS:
-            # FIX: Changed 'attributes_doc' to 'attributes' to match doc_data keys
-            required = ['summary', 'description', 'attributes']
-        else:  # FUNCTION, METHOD
-            required = ['summary', 'description', 'parameters', 'returns']
-        
-        # Count populated fields
-        populated = sum(1 for field in required if doc_data.get(field))
-        
-        # Additional points for optional fields
-        bonus = 0
-        if doc_data.get('examples'):
-            bonus += 0.1
-        if doc_data.get('raises'):
-            bonus += 0.05
-        if doc_data.get('notes'):
-            bonus += 0.05
-        
-        score = (populated / len(required)) + bonus
-        return min(1.0, max(0.0, score))
+#         if t in (ComponentType.GLOBAL_VARIABLE, ComponentType.STATIC_FIELD,
+#                  ComponentType.VARIABLE, ComponentType.FIELD):
+#             return """DOCUMENTING A VARIABLE / CONSTANT:
+# - Summary: What the variable represents and its purpose.
+# - Constraints or valid value ranges if apparent.
+# - Do NOT include Args, Returns, or Raises sections."""
 
-    def _compute_clarity_score(self, doc_data: Dict[str, Any], component: CodeComponent, code_facts: Dict[str, Any]) -> float:
-        """
-        Improved clarity scoring that rewards:
-        1. No boilerplate (summary ≠ description)
-        2. Code-specific language (actual names)
-        3. Behavioral description (not structural)
-        4. Completeness with appropriate fields
-        
-        Returns: 0.0-1.0
-        """
-        
-        summary = doc_data.get('summary', '')
-        description = doc_data.get('description', '')
-        
-        if not summary or not description:
-            return 0.0
-        
-        score = 0.0
-        max_score = 10.0
-        
-        # ===== FACTOR 1: DEDUPLICATION (0-2 points) =====
-        # Penalize if description just repeats summary
-        summary_words = set(summary.lower().split())
-        desc_words = set(description.lower().split())
-        
-        if summary_words and desc_words:
-            union_size = len(summary_words | desc_words)
-            intersection_size = len(summary_words & desc_words)
-            overlap_ratio = intersection_size / union_size if union_size > 0 else 0
-            
-            # Less overlap = higher score
-            # 0% overlap = 2 points (perfect)
-            # 50% overlap = 1 point (mediocre)
-            # 70%+ overlap = 0 points (boilerplate)
-            if overlap_ratio < 0.3:
-                score += 2.0
-            elif overlap_ratio < 0.5:
-                score += 1.5
-            elif overlap_ratio < 0.7:
-                score += 0.5
-            # else: score += 0
-        
-        # ===== FACTOR 2: CODE-SPECIFICITY (0-3 points) =====
-        # Reward using actual component names
-        code_keywords = set()
-        
-        # Add parameter names
-        if component.parameters:
-            code_keywords.update(p.name.lower() for p in component.parameters)
-        
-        # Add API-specific keywords
-        if component.type == ComponentType.API_ENDPOINT:
-            if component.http_method:
-                code_keywords.add(component.http_method.lower())
-            if component.path_parameters:
-                code_keywords.update(p.lower() for p in component.path_parameters)
+#         if t == ComponentType.CONSTRUCTOR:
+#             return """DOCUMENTING A CONSTRUCTOR:
+# - Summary: What object is created and under what conditions.
+# - Document all parameters.
+# - Note side effects of construction."""
 
-        # Add global state names
-        if code_facts.get('modifies_global_state'):
-            code_keywords.update(code_facts['modifies_global_state'])
-        
-        # Add operation keywords
-        if code_facts.get('operations'):
-            code_keywords.update(code_facts['operations'])
-        
-        # Add exception names
-        if code_facts.get('raises'):
-            code_keywords.update(e.get('exception', '').lower() for e in code_facts['raises'])
-        
-        if code_keywords:
-            mentions = len(code_keywords & set(description.lower().split()))
-            specificity_score = (mentions / len(code_keywords)) * 3.0
-            score += min(3.0, specificity_score)
-        
-        # ===== FACTOR 3: BEHAVIORAL VS STRUCTURAL (0-2 points) =====
-        # Reward behavioral language, penalize structural
-        behavioral_keywords = {
-            'creates', 'returns', 'raises', 'modifies', 'updates', 'manages',
-            'coordinates', 'transitions', 'handles', 'processes', 'validates',
-            'ensures', 'guarantees', 'maintains', 'tracks', 'schedules',
-            'initializes', 'cleans', 'removes', 'adds', 'blocks', 'releases'
-        }
-        
-        structural_keywords = {
-            'contains', 'has', 'stores', 'represents', 'defines', 'includes',
-            'this function', 'this class', 'this variable', 'the code',
-            'does something', 'performs', 'handles things', 'manages data'
-        }
-        
-        behavioral_count = len(behavioral_keywords & set(description.lower().split()))
-        structural_count = len(structural_keywords & set(description.lower().split()))
-        
-        behavioral_score = behavioral_count / max(behavioral_count + structural_count, 1)
-        score += behavioral_score * 2.0
-        
-        # ===== FACTOR 4: COMPLETENESS (0-2 points) =====
-        completeness = 0.0
-        
-        # Parameters documented
-        if component.parameters and doc_data.get('parameters'):
-            actual_params = {p.name for p in component.parameters}
-            documented_params = {p.get('name') for p in doc_data.get('parameters', []) if p.get('name')}
-            if actual_params & documented_params:
-                completeness += min(1.0, len(actual_params & documented_params) / len(actual_params))
-        
-        # Returns documented (if applicable)
-        if component.return_type and component.return_type != 'None':
-            if doc_data.get('returns') and doc_data['returns'].get('description'):
-                completeness += 0.5
-        
-        # Exceptions documented (if applicable)
-        if code_facts.get('raises'):
-            if doc_data.get('raises') and len(doc_data['raises']) > 0:
-                completeness += 0.5
-        
-        score += completeness
-        
-        # ===== FACTOR 5: LENGTH APPROPRIATENESS (0-1 point) =====
-        # Good description: 100-400 chars
-        desc_len = len(description)
-        if 100 <= desc_len <= 400:
-            score += 1.0
-        elif 50 <= desc_len < 100 or 400 < desc_len <= 600:
-            score += 0.5
-        
-        # Normalize to 0-1 range
-        normalized = score / max_score
-        return min(1.0, max(0.0, normalized))
+#         if t == ComponentType.API_ENDPOINT:
+#             extra = ""
+#             if component.http_method:
+#                 extra += f"\n- HTTP method: {component.http_method}"
+#             if component.http_path:
+#                 extra += f"\n- Path: {component.http_path}"
+#             return f"""DOCUMENTING AN API ENDPOINT:
+# - Summary: What the endpoint does.{extra}
+# - Document path parameters, query parameters, request body ONLY if they appear in the function signature.
+# - Document the return value based on what the function actually returns.
+# - Include Raises ONLY if the function body explicitly raises an exception (e.g., 'raise HTTPException').
+# - Do NOT infer exceptions from imports, decorators, or framework conventions.
+# - Do NOT document status codes unless they are explicitly set in the code.
+# - Note authentication requirements ONLY if visible in the function body."""
 
-   
-    def _validate_raises_against_code_facts(
-        self,
-        raises_from_llm: List[Dict[str, str]],
-        code_facts: Dict[str, Any],
-        component: CodeComponent
-    ) -> List[Dict[str, str]]:
-        """
-        FIX: Don't filter out everything if Navigator found 0 exceptions.
-        Sometimes the LLM is right and the tool missed it.
-        """
-        if not raises_from_llm:
-            return []
-        
-        # Get verified exceptions from Navigator
-        verified_exceptions = {
-            exc.get('exception', '').lower() 
-            for exc in code_facts.get('raises', [])
-        }
-        
-        # INEFFICIENCY FIX: If Navigator found 0, trust LLM but warn. 
-        # Only filter if Navigator found SOME but not THIS ONE.
-        if not verified_exceptions:
-            return raises_from_llm[:2] # Limit hallucinations to 2 if unverified
-        
-        filtered_raises = []
-        for llm_raise in raises_from_llm:
-            exc_name = llm_raise.get('exception', '').lower()
-            if exc_name in verified_exceptions:
-                filtered_raises.append(llm_raise)
-            else:
-                self.logger.debug(
-                    f"[EXCEPTION FILTER] {component.name}: "
-                    f"Filtering unverified exception '{exc_name}'. "
-                    f"Verified: {verified_exceptions}"
-                )
-        
-        return filtered_raises
+#         # FUNCTION / METHOD (default)
+#         return """DOCUMENTING A FUNCTION / METHOD:
+# - Summary: Describe the action performed and its outcome.
+# - Document parameters if present.
+# - Document return value if present or implicitly returned.
+# - Document exceptions only if justified by visible code.
+# - Mention side effects only if the code performs I/O, state mutation, or external calls.
+# - Keep documentation minimal and precise."""
 
-    def _extract_global_usage(self, component: CodeComponent, context: Dict[str, Any]) -> str:
-        """
-        Extract usage context for global variables.
-        Analyzes where the global is read/modified in the codebase.
-        """
-        if component.type != ComponentType.GLOBAL_VARIABLE:
-            return ""
-        
-        usage_lines = []
-        
-        # Check shared state dependencies
-        shared_deps = component.metadata.get('shared_state_dependencies', [])
-        if shared_deps:
-            usage_lines.append(f"Modified by: {', '.join(shared_deps[:3])}")
-        
-        # Check if it's marked as constant (immutable)
-        is_constant = not shared_deps
-        if is_constant:
-            usage_lines.append("Read-only constant - used for configuration")
-        else:
-            usage_lines.append("Mutable state - tracked and modified during execution")
-        
-        # Get type from source code
-        source = component.source_code
-        if '=' in source:
-            rhs = source.split('=', 1)[1].strip()
-            usage_lines.append(f"Initialized as: {rhs[:50]}")
-        
-        return "\n".join(usage_lines) if usage_lines else "Module-level constant or state variable"
+#     # ------------------------------------------------------------------
+#     # Context formatting (Reader / Searcher)
+#     # ------------------------------------------------------------------
 
-    def _analyze_return_values(self, component: CodeComponent, code_facts: Dict[str, Any]) -> str:
-        """
-        Analyze what return statements actually produce.
-        Generates semantic meaning for return types.
-        """
-        return_type = component.return_type or 'any'
-        actual_returns = code_facts.get('actual_returns', [])
-        
-        if not actual_returns or return_type == 'None':
-            return "None; modifies state or side effects only"
-        
-        if len(actual_returns) == 0:
-            return f"Returns {return_type}"
-        
-        first_return = actual_returns[0]
-        
-        # Analyze return statement patterns
-        if first_return in ('True', 'False'):
-            return f"{return_type}: Boolean success/failure indicator"
-        
-        if first_return == 'None':
-            return "None; function completes without returning value"
-        
-        if '{' in first_return or return_type in ('dict', 'Dict'):
-            # Extract dict keys if possible
-            key_pattern = r'"(\w+)":|\'(\w+)\':'
-            keys = re.findall(key_pattern, first_return)
-            if keys:
-                key_names = [k[0] or k[1] for k in keys]
-                return f"{return_type}: Dictionary with keys {{{', '.join(key_names[:3])}}}"
-            return f"{return_type}: Structured dictionary response"
-        
-        if '[' in first_return or return_type in ('list', 'List'):
-            return f"{return_type}: Collection of items"
-        
-        if '(' in first_return and ')' in first_return:
-            # Likely a function call
-            func_name = first_return.split('(')[0].strip()
-            return f"{return_type}: Result from {func_name}()"
-        
-        return f"{return_type}: {first_return[:50]}"
+#     @staticmethod
+#     def _format_reader_context(reader_output: Any) -> str:
+#         """Extract useful Reader information for the prompt."""
+#         if not reader_output:
+#             return ""
+
+#         # Handle XML string (primary format from Reader)
+#         if isinstance(reader_output, str):
+#             parts: List[str] = []
+#             complexity_m = re.search(
+#                 r'<COMPLEXITY>(.*?)</COMPLEXITY>', reader_output, re.DOTALL
+#             )
+#             if complexity_m:
+#                 parts.append(f"Complexity: {complexity_m.group(1).strip()}")
+
+#             info_m = re.search(
+#                 r'<INFO_NEED>(.*?)</INFO_NEED>', reader_output, re.DOTALL
+#             )
+#             if info_m:
+#                 parts.append(f"Info needs: {info_m.group(1).strip()}")
+#             return "\n".join(parts)
+
+#         # Handle ReaderOutput dataclass
+#         if hasattr(reader_output, 'xml_output'):
+#             return WriterAgent._format_reader_context(reader_output.xml_output)
+
+#         return str(reader_output)[:1000]
+
+#     @staticmethod
+#     def _format_searcher_context(searcher_output: Any) -> str:
+#         """Format Searcher output into a readable context block."""
+#         if not searcher_output:
+#             return ""
+
+#         sections: List[str] = []
+
+#         # SearcherOutput dataclass
+#         if hasattr(searcher_output, 'dependency_contexts'):
+#             deps = searcher_output.dependency_contexts
+#             if deps:
+#                 lines = ["Dependencies:"]
+#                 for dep in deps:
+#                     name = getattr(dep, 'component_name', str(dep))
+#                     sig = getattr(dep, 'signature', '')
+#                     summary = getattr(dep, 'summary', '')
+#                     lines.append(f"  - {name}: {sig}")
+#                     if summary:
+#                         lines.append(f"    {summary}")
+#                 sections.append("\n".join(lines))
+
+#         if hasattr(searcher_output, 'reference_contexts'):
+#             refs = searcher_output.reference_contexts
+#             if refs:
+#                 lines = ["Usage references:"]
+#                 for ref in refs:
+#                     name = getattr(ref, 'component_name', str(ref))
+#                     usage = getattr(ref, 'usage_summary', '')
+#                     lines.append(f"  - {name}: {usage}")
+#                 sections.append("\n".join(lines))
+
+#         if hasattr(searcher_output, 'external_contexts'):
+#             exts = searcher_output.external_contexts
+#             if exts:
+#                 lines = ["External context:"]
+#                 for ext in exts:
+#                     query = getattr(ext, 'query', str(ext))
+#                     summary = getattr(ext, 'summary', '')
+#                     lines.append(f"  - {query}: {summary}")
+#                 sections.append("\n".join(lines))
+
+#         # Legacy dict format
+#         if isinstance(searcher_output, dict):
+#             for key in ('internal', 'external'):
+#                 data = searcher_output.get(key)
+#                 if data:
+#                     sections.append(
+#                         f"{key.title()} context:\n"
+#                         + json.dumps(data, indent=2, default=str)[:1000]
+#                     )
+
+#         # Raw string fallback
+#         if isinstance(searcher_output, str):
+#             sections.append(searcher_output[:2000])
+
+#         return "\n\n".join(sections)
+
+#     # ------------------------------------------------------------------
+#     # User prompt builder
+#     # ------------------------------------------------------------------
+
+#     def _build_user_prompt(
+#         self,
+#         component: CodeComponent,
+#         style: DocumentationStyle,
+#         reader_context: str,
+#         searcher_context: str,
+#         verifier_feedback: Optional[str] = None,
+#     ) -> str:
+#         """Assemble the user prompt with code, context, and instructions."""
+
+#         type_instructions = self._build_type_instructions(component)
+
+#         # Parameter metadata
+#         param_info = ""
+#         if component.parameters:
+#             lines = ["Known parameters:"]
+#             for p in component.parameters:
+#                 if hasattr(p, 'name'):
+#                     t = f" ({p.type_hint})" if getattr(p, 'type_hint', None) else ""
+#                     d = f" = {p.default_value}" if getattr(p, 'default_value', None) else ""
+#                     lines.append(f"  - {p.name}{t}{d}")
+#                 else:
+#                     lines.append(f"  - {p}")
+#             param_info = "\n".join(lines)
+
+#         # Gather context sections
+#         ctx_parts: List[str] = []
+#         if reader_context:
+#             ctx_parts.append(f"Reader analysis:\n{reader_context}")
+#         if searcher_context:
+#             ctx_parts.append(f"Gathered context:\n{searcher_context}")
+#         context_block = "\n\n".join(ctx_parts) if ctx_parts else "No additional context."
+
+#         # Optional refinement block
+#         refinement_block = ""
+#         if verifier_feedback:
+#             refinement_block = f"""
+# REFINEMENT REQUEST:
+# Fix ALL listed issues while preserving correct parts.
+# Feedback:
+# {verifier_feedback}
+# """
+
+#         async_note = "ASYNC: Yes" if component.is_async else ""
+
+#         return f"""{type_instructions}
+
+# TARGET LANGUAGE: {style.language}
+# DOCUMENTATION STYLE: {style.name}
+# COMPONENT TYPE: {component.type.value}
+# COMPONENT NAME: {component.name}
+# {async_note}
+# {param_info}
+
+# AVAILABLE CONTEXT:
+# {context_block}
+# {refinement_block}
+# SOURCE CODE:
+# <FOCAL_CODE>
+# {component.source_code}
+# </FOCAL_CODE>
+
+# Generate the documentation now. Remember:
+# 1. Wrap output in <DOCSTRING> and </DOCSTRING> tags.
+# 2. Do NOT include comment delimiters ({style.comment_prefix} / {style.comment_suffix}).
+# 3. Do NOT include triple quotes, code fences, or markdown formatting.
+# 4. Only document what is visible in the code.
+# 5. NEVER add a Raises/Throws section unless the function body contains an explicit raise/throw statement.
+# 6. Do NOT infer exceptions from imports, type hints, decorators, or framework behavior."""
+
+#     # ------------------------------------------------------------------
+#     # Documentation object factory
+#     # ------------------------------------------------------------------
+
+#     @staticmethod
+#     def _create_documentation(
+#         component: CodeComponent,
+#         raw_response: str,
+#         style: DocumentationStyle,
+#     ) -> Documentation:
+#         """Wrap the raw LLM response in a Documentation dataclass.
+
+#         The raw response (with <DOCSTRING> XML tags) is stored in
+#         `Documentation.docstring` so the DocstringInserter can extract
+#         and clean it downstream.
+#         """
+#         return Documentation(
+#             component_id=component.id,
+#             component_name=component.name,
+#             component_type=component.type.value,
+#             summary="",       # populated by downstream processing
+#             description="",
+#             docstring=raw_response,
+#             style=style.name,
+#             generated_by="writer-agent",
+#             metadata={
+#                 "component_language": component.language,
+#                 "documentation_style": style.name,
+#                 "is_async": component.is_async,
+#             },
+#         )
+
+#     # ------------------------------------------------------------------
+#     # Persistence
+#     # ------------------------------------------------------------------
+
+#     def _save_output(self, component: CodeComponent, doc: Documentation) -> None:
+#         """Persist writer output to data/intermediate/agent_output/writer/."""
+#         try:
+#             output_data = {
+#                 "component_id": component.id,
+#                 "component_name": component.name,
+#                 "component_type": component.type.value,
+#                 "language": component.language,
+#                 "docstring": doc.docstring,
+#                 "style": doc.style,
+#                 "generated_at": datetime.now().isoformat(),
+#             }
+#             safe = re.sub(r'[^\w\-.]', '_', component.name)
+#             path = self.output_dir / f"{safe}_{component.id[:8]}.json"
+#             with open(path, "w", encoding="utf-8") as f:
+#                 json.dump(output_data, f, indent=2, ensure_ascii=False)
+#             self.logger.debug(f"Saved writer output to {path}")
+#         except Exception as e:
+#             self.logger.warning(f"Failed to save writer output: {e}")
+
+#     # ------------------------------------------------------------------
+#     # Main process
+#     # ------------------------------------------------------------------
+
+#     def process(self, context: AgentContext) -> AgentResult:
+#         """Generate documentation for a code component.
+
+#         Returns an AgentResult whose *output* is a ``Documentation`` object.
+#         ``Documentation.docstring`` contains the raw LLM response (with
+#         <DOCSTRING> XML tags) for the DocstringInserter to extract.
+#         """
+#         try:
+#             component = context.component
+#             style = self._get_style(component)
+#             self.logger.info(
+#                 f"Generating docs for {component.name} "
+#                 f"[{component.language}/{style.name}]"
+#             )
+
+#             # Gather upstream context
+#             reader_ctx = self._format_reader_context(context.get_result('reader'))
+#             searcher_ctx = self._format_searcher_context(context.get_result('searcher'))
+
+#             # Build prompts
+#             system_prompt = self._build_system_prompt(style)
+#             user_prompt = self._build_user_prompt(
+#                 component, style, reader_ctx, searcher_ctx
+#             )
+
+#             # LLM call via BaseAgent memory API
+#             self.clear_memory()
+#             self.add_to_memory("system", system_prompt)
+#             self.add_to_memory("user", user_prompt)
+
+#             response = self.generate_response(temperature=0.2, max_tokens=2000)
+#             self.logger.debug(f"Raw LLM response for {component.name}: {response[:500]}")
+
+#             # Wrap in Documentation object
+#             documentation = self._create_documentation(component, response, style)
+#             self._save_output(component, documentation)
+
+#             return AgentResult(
+#                 agent_name=self.agent_name,
+#                 status=AgentStatus.SUCCESS,
+#                 output=documentation,
+#             )
+
+#         except Exception as e:
+#             self.logger.error(f"Writer agent error: {e}", exc_info=True)
+#             return AgentResult(
+#                 agent_name=self.agent_name,
+#                 status=AgentStatus.FAILED,
+#                 output=None,
+#                 error=str(e),
+#             )
+
+#     # ------------------------------------------------------------------
+#     # Refinement (called by orchestrator after verifier feedback)
+#     # ------------------------------------------------------------------
+
+#     def refine_documentation(
+#         self,
+#         context: AgentContext,
+#         verifier_feedback: str,
+#     ) -> AgentResult:
+#         """Re-generate documentation incorporating verifier feedback.
+
+#         Args:
+#             context: AgentContext with component and prior agent results.
+#             verifier_feedback: Plain-text feedback from the Verifier agent.
+
+#         Returns:
+#             AgentResult with a refined Documentation object.
+#         """
+#         try:
+#             component = context.component
+#             style = self._get_style(component)
+#             self.logger.info(f"Refining docs for {component.name}")
+
+#             reader_ctx = self._format_reader_context(context.get_result('reader'))
+#             searcher_ctx = self._format_searcher_context(context.get_result('searcher'))
+
+#             system_prompt = self._build_system_prompt(style)
+#             user_prompt = self._build_user_prompt(
+#                 component, style, reader_ctx, searcher_ctx,
+#                 verifier_feedback=verifier_feedback,
+#             )
+
+#             self.clear_memory()
+#             self.add_to_memory("system", system_prompt)
+#             self.add_to_memory("user", user_prompt)
+
+#             response = self.generate_response(temperature=0.2, max_tokens=2000)
+
+#             documentation = self._create_documentation(component, response, style)
+#             self._save_output(component, documentation)
+
+#             return AgentResult(
+#                 agent_name=self.agent_name,
+#                 status=AgentStatus.SUCCESS,
+#                 output=documentation,
+#             )
+#         except Exception as e:
+#             self.logger.error(f"Refinement error: {e}", exc_info=True)
+#             return AgentResult(
+#                 agent_name=self.agent_name,
+#                 status=AgentStatus.FAILED,
+#                 output=None,
+#                 error=str(e),
+#             )
