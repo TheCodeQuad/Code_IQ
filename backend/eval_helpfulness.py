@@ -31,14 +31,9 @@ from tabulate import tabulate
 # Your existing LLM client — no new dependencies needed
 from backend.utils.llm_client import get_llm_client, LLMRequest
 
-try:
-    from backend.evaluator.helpfulness_summary import DocstringSummaryEvaluator
-    from backend.evaluator.helpfulness_description import DocstringDescriptionEvaluator
-    from backend.evaluator.helpfulness_parameters import DocstringParametersEvaluator
-except ImportError:
-    from evaluator.helpfulness_summary import DocstringSummaryEvaluator
-    from evaluator.helpfulness_description import DocstringDescriptionEvaluator
-    from evaluator.helpfulness_parameters import DocstringParametersEvaluator
+from backend.evaluator.helpfulness_summary import DocstringSummaryEvaluator
+from backend.evaluator.helpfulness_description import DocstringDescriptionEvaluator
+from backend.evaluator.helpfulness_parameters import DocstringParametersEvaluator
 
 
 # ================================================================
