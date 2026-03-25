@@ -59,7 +59,7 @@ class WorkflowManager:
             WorkflowStep(
                 stage=WorkflowStage.VERIFY,
                 agent_name="verifier",
-                required=False,
+                required=True,
                 retry_on_failure=True,
                 depends_on=[WorkflowStage.WRITE]
             )

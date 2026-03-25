@@ -9,16 +9,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel, HttpUrl, Field
 
-from navigator.core.repo_loader import clone_repo
-from navigator.core.repository_parser import RepositoryParser
-from navigator.core.topo import (
+from .navigator.core.repo_loader import clone_repo, extract_repo_name as _extract_repo_name
+from .navigator.core.repository_parser import RepositoryParser
+from .navigator.core.topo import (
     build_graph_from_components,
     topological_sort,
     dependency_first_dfs,
     resolve_cycles
 )
-from agents.orchestrator.orchestrator import Orchestrator
-from backend.pipeline.pipeline import run_pipeline
+from .navigator.core.ir_export import export_ir
+from .navigator.core.dag_export import export_dag
 from backend.utils.file_handler import FileHandler
 # ============================================================================
 # FASTAPI APP SETUP
@@ -106,6 +106,7 @@ class AnalyzeResponse(BaseModel):
     formatted_output: Optional[str] = None
     output_file: Optional[str] = None
     message: Optional[str] = None
+    documentation: Optional[List] = None
 
 # ============================================================================
 # HELPER FUNCTIONS
@@ -337,27 +338,18 @@ def analyze_repo(req: AnalyzeRequest):
         # Step 8: Print summary to console
         print_analysis_summary(components, graph, dfs_order, topo_order)
         
-        # Step 9: Save components to JSON file (in the required format)
+        # Step 9: Export IR and DAG
+        print(f"📦 Exporting IR and DAG...")
+        export_ir(components, repo_name)
+        export_dag(graph, repo_id=repo_name)
+        print(f"✅ IR and DAG exported for '{repo_name}'")
+        
+        # Step 10: Save components to JSON file (in the required format)
         output_file = None
         if req.save_json:
             print(f"💾 Saving components to JSON...")
             output_file = save_analysis_to_json(components_dict, repo_name)
             print(f"✅ Results saved to: {output_file}")
-        
-        # Step 10: Prepare response data
-        response_data = {
-            "success": True,
-            "repo_url": str(req.repo_url),
-            "timestamp": datetime.now().isoformat(),
-            "stats": stats.dict(),
-            "components": components_dict,
-            "topological_order": topo_order,
-            "dfs_order": dfs_order,
-            "dag": {k: list(v) for k, v in graph.items()},
-            "formatted_output": formatted_output,
-            "output_file": output_file,
-            "message": f"Analysis complete. Results saved to {output_file}" if output_file else "Analysis complete."
-        }
         
         print(f"✅ Analysis complete!")
         print(f"   Total components: {stats.total_components}")
@@ -366,46 +358,23 @@ def analyze_repo(req: AnalyzeRequest):
         print(f"   Methods: {stats.methods}")
         print(f"   Global Variables: {stats.global_variables}")
         
-    
-        # Use the pipeline function
-        print(f"🚀 Running documentation pipeline for: {repo_path}")
-        result = run_pipeline(repo_path)
-        components = result["components"]
-        # print(components)
-        # print("Reader output (components):", result["components"]) 
-        reader_output_path = PROJECT_ROOT / "data" / "intermediate" / "agent_output" / "reader" / f"{repo_name}_reader_output.json"
-        FileHandler.write_json(reader_output_path,{k: FileHandler.serialize_component(v) for k, v in components.items()})
-
-        
-        # Print reader output like in main.py
-        # for idx, component in enumerate(components.values()):
-        #     print(f"Component {idx}: type={type(component)}, value={component}")
-        graph = result["graph"]
-        topo_order = result["topological_order"]
-        dfs_order = result["dfs_order"]
-        docs = result["documentation"]
-
-        # Prepare component data for response
-        components_dict = {}
-        for comp_id, comp in components.items():
-            comp_info = {
-                "id": comp.id,
-                "language": comp.language,
-                "type": comp.type.value if hasattr(comp.type, "value") else comp.type,
-                "file_path": getattr(comp, "file_path", ""),
-                "module_path": getattr(comp, "module_path", ""),
-                "depends_on": list(getattr(comp, "depends_on", [])),
-                "start_line": getattr(comp, "start_line", 0),
-                "end_line": getattr(comp, "end_line", 0),
-                "has_docstring": getattr(comp, "has_docstring", False),
-                "docstring": getattr(comp, "docstring", ""),
-            }
-            if req.include_source and getattr(comp, "source_code", None):
-                comp_info["source_code"] = truncate_source_code(comp.source_code)
-            components_dict[comp_id] = comp_info
-
-        formatted_output = format_analysis_output(components, graph, dfs_order, topo_order)
-        stats = calculate_stats(components)
+        # Step 11: Try running the documentation pipeline (optional - requires LLM)
+        docs = []
+        try:
+            from backend.pipeline import run_pipeline
+            print(f"🚀 Running documentation pipeline for: {repo_path}")
+            result = run_pipeline(repo_path)
+            docs = result.get("documentation", [])
+            
+            # Save reader output
+            reader_output_path = PROJECT_ROOT / "data" / "intermediate" / "agent_output" / "reader" / f"{repo_name}_reader_output.json"
+            reader_output_path.parent.mkdir(parents=True, exist_ok=True)
+            pipeline_components = result.get("components", {})
+            FileHandler.write_json(reader_output_path, {k: FileHandler.serialize_component(v) for k, v in pipeline_components.items()})
+            print(f"✅ Documentation pipeline complete.")
+        except Exception as pipeline_err:
+            print(f"⚠️  Documentation pipeline skipped: {pipeline_err}")
+            print(f"   Navigator results will be returned without LLM-generated docs.")
 
         return AnalyzeResponse(
             success=True,
@@ -417,9 +386,9 @@ def analyze_repo(req: AnalyzeRequest):
             dfs_order=dfs_order,
             dag={k: list(v) for k, v in graph.items()},
             formatted_output=formatted_output,
-            output_file=None,
-            message="Analysis and documentation complete.",
-            documentation=[doc.dict() if hasattr(doc, "dict") else str(doc) for doc in docs]
+            output_file=output_file,
+            message="Analysis and documentation complete." if docs else "Analysis complete (documentation pipeline unavailable).",
+            documentation=[doc.dict() if hasattr(doc, "dict") else str(doc) for doc in docs] if docs else None
         )
         
     except Exception as e:

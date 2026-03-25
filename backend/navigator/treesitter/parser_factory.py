@@ -6,3 +6,5 @@ def get_ts_parser(language_name: str) -> Parser:
     parser = Parser()
     parser.set_language(language)
     return parser
+
+
