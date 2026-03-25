@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +22,10 @@ from backend.navigator.core.topo import (
 from backend.navigator.core.ir_export import export_ir
 from backend.navigator.core.dag_export import export_dag
 from backend.models.code_component import CodeComponent, ComponentType
+from backend.utils.db import close_connection, ping as db_ping
+from backend.routes.repos import router as repos_router
+from backend.routes.github_routes import router as github_router
+from backend.routes.analysis_routes import router as analysis_router
 
 # Orchestrator disabled for navigator-only run
 # from backend.agents.orchestrator.orchestrator import Orchestrator
@@ -69,10 +74,21 @@ def main():
 # FASTAPI APP SETUP
 # ============================================================================
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if await db_ping():
+        print("✅ MongoDB connected")
+    else:
+        print("⚠️  MongoDB not reachable – repo endpoints will fail")
+    yield
+    await close_connection()
+    print("🛑 MongoDB connection closed")
+
 app = FastAPI(
     title="Code Dependency Analyzer API",
     description="Analyze code repositories and extract dependency graphs",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 # CORS Configuration – allows codeiq_ui (Next.js) frontend
@@ -88,6 +104,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Register API routers
+app.include_router(repos_router)
+app.include_router(github_router)
+app.include_router(analysis_router)
 
 # ============================================================================
 # OUTPUT DIRECTORY
