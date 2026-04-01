@@ -1,0 +1,597 @@
+"""
+Control Flow Graph (CFG) Builder
+
+This module builds Control Flow Graphs from the IR representation.
+A CFG shows all possible paths through a function during execution.
+"""
+
+import ast
+import os
+from typing import List, Dict, Optional, Set, Tuple
+from dataclasses import dataclass, field
+from collections import defaultdict
+
+from .models import (
+    FunctionIR, IRStatement, StatementType,
+    Graph, GraphNode, GraphEdge
+)
+
+
+@dataclass
+class CFGNode:
+    """Internal CFG node representation"""
+    id: str
+    statement: Optional[IRStatement] = None
+    node_type: str = "statement"  # entry, exit, statement, branch, merge
+    label: str = ""
+    line: Optional[int] = None
+    code: str = ""
+
+    # Successors
+    successors: List[str] = field(default_factory=list)
+    predecessors: List[str] = field(default_factory=list)
+
+    # For branch nodes
+    true_branch: Optional[str] = None
+    false_branch: Optional[str] = None
+
+
+class CFGBuilder:
+    """
+    Builds Control Flow Graph from FunctionIR.
+
+    The CFG has:
+    - Entry node: Function entry point
+    - Exit node(s): Function exit points (return statements, end of function)
+    - Basic blocks: Sequences of statements with single entry/exit
+    - Branch nodes: if, while, for, try statements
+    - Edges: Control flow between nodes (with labels for branches)
+    """
+
+    def __init__(self):
+        self.nodes: Dict[str, CFGNode] = {}
+        self.entry_id: str = ""
+        self.exit_id: str = ""
+        self._node_counter = 0
+
+    def _new_node_id(self) -> str:
+        """Generate a new node ID"""
+        self._node_counter += 1
+        return f"cfg_node_{self._node_counter}"
+
+    def _create_node(
+        self,
+        node_type: str,
+        label: str,
+        statement: Optional[IRStatement] = None,
+        line: Optional[int] = None,
+        code: str = ""
+    ) -> CFGNode:
+        """Create a new CFG node"""
+        node_id = self._new_node_id()
+        node = CFGNode(
+            id=node_id,
+            statement=statement,
+            node_type=node_type,
+            label=label,
+            line=line or (statement.line if statement else None),
+            code=code or (statement.code if statement else "")
+        )
+        self.nodes[node_id] = node
+        return node
+
+    def _add_edge(self, from_id: str, to_id: str, edge_type: str = "flow"):
+        """Add an edge between nodes"""
+        if from_id in self.nodes:
+            if to_id not in self.nodes[from_id].successors:
+                self.nodes[from_id].successors.append(to_id)
+        if to_id in self.nodes:
+            if from_id not in self.nodes[to_id].predecessors:
+                self.nodes[to_id].predecessors.append(from_id)
+
+    def build(self, func_ir: FunctionIR) -> Graph:
+        """Build CFG from FunctionIR"""
+        self.nodes = {}
+        self._node_counter = 0
+
+        # Create entry and exit nodes
+        entry = self._create_node(
+            "entry",
+            f"Entry: {func_ir.name}",
+            line=func_ir.start_line,
+            code=f"def {func_ir.name}(...):"
+        )
+        self.entry_id = entry.id
+
+        exit_node = self._create_node(
+            "exit",
+            "Exit",
+            line=func_ir.end_line,
+            code="return"
+        )
+        self.exit_id = exit_node.id
+
+        if not func_ir.statements:
+            # Empty function
+            self._add_edge(entry.id, exit_node.id)
+        else:
+            # Build CFG from statements
+            last_nodes = self._process_statements(
+                func_ir.statements,
+                [entry.id],
+                exit_node.id
+            )
+
+            # Connect remaining nodes to exit
+            for node_id in last_nodes:
+                if node_id != exit_node.id:
+                    self._add_edge(node_id, exit_node.id)
+
+        return self._to_graph(func_ir)
+
+    def _process_statements(
+        self,
+        statements: List[IRStatement],
+        entry_points: List[str],
+        exit_point: str,
+        loop_continue: Optional[str] = None,
+        loop_break: Optional[str] = None
+    ) -> List[str]:
+        """
+        Process a list of statements and return the exit points.
+
+        Args:
+            statements: List of IR statements to process
+            entry_points: Node IDs where control flows in
+            exit_point: Node ID where control should flow out
+            loop_continue: Node ID for continue statements (loop header)
+            loop_break: Node ID for break statements (after loop)
+
+        Returns:
+            List of node IDs where control exits this block
+        """
+        if not statements:
+            return entry_points
+
+        current_entry = entry_points
+        final_exits: List[str] = []
+
+        i = 0
+        while i < len(statements):
+            stmt = statements[i]
+
+            if stmt.type == StatementType.IF:
+                # Find the complete if-elif-else chain
+                if_chain = self._collect_if_chain(statements, i)
+                exits = self._process_if_chain(
+                    if_chain, current_entry, exit_point,
+                    loop_continue, loop_break
+                )
+                current_entry = exits
+                # Skip processed statements
+                i += len(if_chain)
+
+            elif stmt.type in (StatementType.FOR, StatementType.WHILE):
+                exits = self._process_loop(
+                    stmt, statements, i, current_entry, exit_point
+                )
+                current_entry = exits
+                i += 1
+
+            elif stmt.type == StatementType.TRY:
+                exits = self._process_try(
+                    stmt, statements, i, current_entry, exit_point,
+                    loop_continue, loop_break
+                )
+                current_entry = exits
+                i += 1
+
+            elif stmt.type == StatementType.RETURN:
+                node = self._create_node(
+                    "return",
+                    f"return",
+                    statement=stmt
+                )
+                for ep in current_entry:
+                    self._add_edge(ep, node.id)
+                self._add_edge(node.id, self.exit_id)
+                # After return, no more statements in this path
+                current_entry = []
+                i += 1
+
+            elif stmt.type == StatementType.BREAK:
+                if loop_break:
+                    node = self._create_node("break", "break", statement=stmt)
+                    for ep in current_entry:
+                        self._add_edge(ep, node.id)
+                    self._add_edge(node.id, loop_break)
+                current_entry = []
+                i += 1
+
+            elif stmt.type == StatementType.CONTINUE:
+                if loop_continue:
+                    node = self._create_node("continue", "continue", statement=stmt)
+                    for ep in current_entry:
+                        self._add_edge(ep, node.id)
+                    self._add_edge(node.id, loop_continue)
+                current_entry = []
+                i += 1
+
+            elif stmt.type == StatementType.RAISE:
+                node = self._create_node("raise", f"raise", statement=stmt)
+                for ep in current_entry:
+                    self._add_edge(ep, node.id)
+                # Raise exits to exit node (simplified - could go to exception handler)
+                self._add_edge(node.id, self.exit_id)
+                current_entry = []
+                i += 1
+
+            elif stmt.type in (StatementType.ELSE, StatementType.ELIF,
+                              StatementType.EXCEPT, StatementType.FINALLY):
+                # These are handled by their parent structures
+                i += 1
+
+            else:
+                # Regular statement
+                node = self._create_node(
+                    "statement",
+                    self._get_label(stmt),
+                    statement=stmt
+                )
+                for ep in current_entry:
+                    self._add_edge(ep, node.id)
+                current_entry = [node.id]
+                i += 1
+
+        return current_entry if current_entry else final_exits
+
+    def _collect_if_chain(
+        self, statements: List[IRStatement], start_idx: int
+    ) -> List[Tuple[IRStatement, List[IRStatement]]]:
+        """
+        Collect if-elif-else chain starting at index.
+        Returns list of (condition_stmt, body_statements) tuples.
+        """
+        chain = []
+        i = start_idx
+        current_stmt = statements[i]
+
+        if current_stmt.type != StatementType.IF:
+            return chain
+
+        # Collect body of if
+        if_body = self._collect_block_body(statements, i)
+        chain.append((current_stmt, if_body))
+
+        return chain
+
+    def _collect_block_body(
+        self, statements: List[IRStatement], block_start_idx: int
+    ) -> List[IRStatement]:
+        """
+        Collect statements that belong to a block (if/for/while body).
+        This is simplified - in a real implementation we'd use indentation
+        or the AST structure. Here we rely on the statement order from the parser.
+        """
+        # For now, we'll process statements inline since our parser
+        # flattens nested structures. The IR statements mark block boundaries.
+        return []
+
+    def _process_if_chain(
+        self,
+        if_chain: List[Tuple[IRStatement, List[IRStatement]]],
+        entry_points: List[str],
+        exit_point: str,
+        loop_continue: Optional[str],
+        loop_break: Optional[str]
+    ) -> List[str]:
+        """Process an if-elif-else chain"""
+        if not if_chain:
+            return entry_points
+
+        exits: List[str] = []
+
+        # Get the if statement
+        if_stmt = if_chain[0][0]
+
+        # Create branch node
+        branch = self._create_node(
+            "branch",
+            f"if {if_stmt.condition or '...'}"[:50],
+            statement=if_stmt
+        )
+
+        for ep in entry_points:
+            self._add_edge(ep, branch.id)
+
+        # Create merge point for after the if
+        merge = self._create_node("merge", "merge")
+
+        # True branch - we'll create a placeholder node since body is flattened
+        true_node = self._create_node(
+            "block",
+            "then",
+            line=if_stmt.line
+        )
+        branch.true_branch = true_node.id
+        self._add_edge(branch.id, true_node.id)
+        exits.append(true_node.id)
+
+        # False branch (else or merge directly)
+        branch.false_branch = merge.id
+        self._add_edge(branch.id, merge.id)
+
+        # Connect exits to merge
+        for exit_id in exits:
+            self._add_edge(exit_id, merge.id)
+
+        return [merge.id]
+
+    def _process_loop(
+        self,
+        loop_stmt: IRStatement,
+        statements: List[IRStatement],
+        stmt_idx: int,
+        entry_points: List[str],
+        exit_point: str
+    ) -> List[str]:
+        """Process for/while loop"""
+        is_while = loop_stmt.type == StatementType.WHILE
+
+        # Create loop header (condition check)
+        header = self._create_node(
+            "loop_header",
+            f"{'while' if is_while else 'for'} {loop_stmt.condition or '...'}"[:50],
+            statement=loop_stmt
+        )
+
+        for ep in entry_points:
+            self._add_edge(ep, header.id)
+
+        # Create loop body node
+        body = self._create_node(
+            "loop_body",
+            "loop body",
+            line=loop_stmt.line
+        )
+        header.true_branch = body.id
+        self._add_edge(header.id, body.id)
+
+        # Back edge from body to header
+        self._add_edge(body.id, header.id)
+
+        # Create exit point after loop
+        loop_exit = self._create_node("merge", "loop exit")
+        header.false_branch = loop_exit.id
+        self._add_edge(header.id, loop_exit.id)
+
+        return [loop_exit.id]
+
+    def _process_try(
+        self,
+        try_stmt: IRStatement,
+        statements: List[IRStatement],
+        stmt_idx: int,
+        entry_points: List[str],
+        exit_point: str,
+        loop_continue: Optional[str],
+        loop_break: Optional[str]
+    ) -> List[str]:
+        """Process try-except-finally block"""
+        # Create try node
+        try_node = self._create_node(
+            "try",
+            "try",
+            statement=try_stmt
+        )
+
+        for ep in entry_points:
+            self._add_edge(ep, try_node.id)
+
+        exits: List[str] = []
+
+        # Try body
+        try_body = self._create_node("block", "try body", line=try_stmt.line)
+        self._add_edge(try_node.id, try_body.id)
+        exits.append(try_body.id)
+
+        # Find except handlers
+        j = stmt_idx + 1
+        while j < len(statements):
+            next_stmt = statements[j]
+            if next_stmt.type == StatementType.EXCEPT:
+                except_node = self._create_node(
+                    "except",
+                    f"except {next_stmt.code}"[:40],
+                    statement=next_stmt
+                )
+                # Exception can flow from try body to handler
+                self._add_edge(try_body.id, except_node.id)
+                exits.append(except_node.id)
+                j += 1
+            elif next_stmt.type == StatementType.FINALLY:
+                finally_node = self._create_node(
+                    "finally",
+                    "finally",
+                    statement=next_stmt
+                )
+                # All paths go through finally
+                for exit_id in exits:
+                    self._add_edge(exit_id, finally_node.id)
+                exits = [finally_node.id]
+                j += 1
+                break
+            else:
+                break
+
+        # Create merge point
+        merge = self._create_node("merge", "try exit")
+        for exit_id in exits:
+            self._add_edge(exit_id, merge.id)
+
+        return [merge.id]
+
+    def _get_label(self, stmt: IRStatement) -> str:
+        """Get a short label for a statement"""
+        if stmt.type == StatementType.ASSIGNMENT:
+            defs = [v.name for v in stmt.definitions]
+            if defs:
+                return f"{', '.join(defs[:2])} = ..."
+            return "assignment"
+
+        elif stmt.type == StatementType.CALL:
+            if stmt.calls:
+                call = stmt.calls[0]
+                return f"{call.name}(...)"
+            return "call"
+
+        elif stmt.type == StatementType.RETURN:
+            return "return"
+
+        elif stmt.type == StatementType.EXPRESSION:
+            return stmt.code[:30] if stmt.code else "expr"
+
+        elif stmt.type == StatementType.PASS:
+            return "pass"
+
+        else:
+            return stmt.type.value
+
+    def _to_graph(self, func_ir: FunctionIR) -> Graph:
+        """Convert internal representation to Graph output"""
+        graph_nodes: List[GraphNode] = []
+        graph_edges: List[GraphEdge] = []
+        edge_counter = 0
+
+        # Layout nodes vertically based on traversal order
+        visited = set()
+        levels: Dict[str, int] = {}
+        self._assign_levels(self.entry_id, 0, visited, levels)
+
+        # Count nodes per level for horizontal positioning
+        level_counts: Dict[int, int] = defaultdict(int)
+        level_positions: Dict[int, int] = defaultdict(int)
+
+        for node_id, level in levels.items():
+            level_counts[level] += 1
+
+        # Create graph nodes with positions
+        for node_id, node in self.nodes.items():
+            level = levels.get(node_id, 0)
+            pos_in_level = level_positions[level]
+            level_positions[level] += 1
+
+            # Calculate position
+            x = 200 + pos_in_level * 150
+            y = 50 + level * 80
+
+            # Determine node type for styling
+            node_type = node.node_type
+            if node.statement:
+                node_type = node.statement.type.value
+
+            graph_nodes.append(GraphNode(
+                id=node.id,
+                label=node.label,
+                type=node_type,
+                x=x,
+                y=y,
+                line=node.line,
+                code=node.code,
+                metadata={
+                    "successors": node.successors,
+                    "predecessors": node.predecessors
+                }
+            ))
+
+        # Create edges
+        for node_id, node in self.nodes.items():
+            for succ_id in node.successors:
+                edge_counter += 1
+                edge_type = "flow"
+                label = None
+
+                # Determine edge type for branches
+                if node.true_branch == succ_id:
+                    edge_type = "true"
+                    label = "T"
+                elif node.false_branch == succ_id:
+                    edge_type = "false"
+                    label = "F"
+                elif node.node_type == "loop_body" and succ_id in levels:
+                    if levels[succ_id] < levels.get(node_id, 0):
+                        edge_type = "back"
+                        label = "loop"
+
+                graph_edges.append(GraphEdge(
+                    id=f"edge_{edge_counter}",
+                    source=node_id,
+                    target=succ_id,
+                    type=edge_type,
+                    label=label
+                ))
+
+        return Graph(
+            id=f"cfg_{func_ir.id}",
+            name=f"CFG: {func_ir.name}",
+            type="cfg",
+            nodes=graph_nodes,
+            edges=graph_edges,
+            component_id=func_ir.id,
+            component_name=func_ir.name,
+            file_path=func_ir.file_path,
+            metadata={
+                "function_name": func_ir.name,
+                "start_line": func_ir.start_line,
+                "end_line": func_ir.end_line,
+                "parameters": [p.name for p in func_ir.parameters]
+            }
+        )
+
+    def _assign_levels(
+        self,
+        node_id: str,
+        level: int,
+        visited: Set[str],
+        levels: Dict[str, int]
+    ):
+        """Assign depth levels to nodes for layout"""
+        if node_id in visited:
+            return
+        visited.add(node_id)
+        levels[node_id] = max(levels.get(node_id, 0), level)
+
+        node = self.nodes.get(node_id)
+        if node:
+            for succ_id in node.successors:
+                self._assign_levels(succ_id, level + 1, visited, levels)
+
+
+def build_cfg(func_ir: FunctionIR) -> Graph:
+    """Convenience function to build CFG"""
+    builder = CFGBuilder()
+    return builder.build(func_ir)
+
+
+def build_cfg_from_source(source: str, function_name: str) -> Optional[Graph]:
+    """Build CFG from source code string for a specific function"""
+    from .parser import RepositoryParser
+    import tempfile
+
+    # Write to temp file and parse
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        f.write(source)
+        temp_path = f.name
+
+    try:
+        parser = RepositoryParser(os.path.dirname(temp_path))
+        ir = parser.parse_single_file(temp_path)
+
+        # Find the function
+        for func_id, func_ir in ir.functions.items():
+            if func_ir.name == function_name:
+                return build_cfg(func_ir)
+
+        return None
+    finally:
+        os.unlink(temp_path)
