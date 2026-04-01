@@ -208,12 +208,136 @@ class UnifiedEvaluator:
             evaluator = TruthfulnessEvaluator(
                 writer_output_dir=str(writer_dir),
                 navigator_output_dir=str(self.nav_output_dir),
-                use_llm=False,  # Use regex for speed in UI
+                use_llm=True,
                 llm_mode="llama_cpp",
-                repo_name=self.repo_name,  # Only load components from this specific repo
+                repository_name=self.repo_name
             )
 
             results = evaluator.evaluate_all()
+
+            def _build_truthfulness_markdown_report() -> str:
+                """Build a markdown-style truthfulness report for console and file output."""
+                if not results:
+                    return "# Docstring Truthfulness Evaluation Report\n\nNo docstrings were evaluated.\n"
+
+                total_docstrings = len(results)
+                total_mentions = sum(r.total_mentions for r in results.values())
+                total_existing = sum(r.existing_mentions for r in results.values())
+                total_cross = sum(r.cross_file_mentions for r in results.values())
+                avg_existence = (
+                    sum(r.existence_ratio for r in results.values()) / total_docstrings
+                    if total_docstrings else 0
+                )
+                avg_hallucination = (
+                    sum(r.hallucination_rate for r in results.values()) / total_docstrings
+                    if total_docstrings else 0
+                )
+                avg_mentions_per_doc = total_mentions / total_docstrings if total_docstrings else 0
+
+                by_language = {}
+                for result in results.values():
+                    by_language.setdefault(result.language, []).append(result)
+
+                report = "# Docstring Truthfulness Evaluation Report\n\n"
+                report += "## Overall Summary\n\n"
+                report += f"- **Total Docstrings Analyzed:** {total_docstrings}\n"
+                report += f"- **Total Components Mentioned:** {total_mentions}\n"
+                report += f"- **Existing Components:** {total_existing}\n"
+                report += f"- **Cross-file References:** {total_cross}\n"
+                report += f"- **Average Existence Ratio:** {avg_existence:.2%}\n"
+                report += f"- **Average Hallucination Rate:** {avg_hallucination:.2%}\n"
+                report += f"- **Average Mentions Per Docstring:** {avg_mentions_per_doc:.2f}\n\n"
+
+                report += "## Component Existence Ratio (higher is better)\n\n"
+                report += "| Component ID | Language | Components Mentioned | Existing Components | Existence Ratio |\n"
+                report += "|-------------|----------|---------------------|---------------------|-----------------|\n"
+                for comp_id, result in sorted(results.items()):
+                    report += (
+                        f"| {comp_id} | {result.language} | {result.total_mentions} | "
+                        f"{result.existing_mentions} | {result.existence_ratio:.2%} |\n"
+                    )
+
+                report += "\n## Component Mention Frequency (higher is better)\n\n"
+                report += "| Component ID | Docstrings Analyzed | Total Components | Avg Mentions Per Doc |\n"
+                report += "|-------------|---------------------|------------------|-----------------------|\n"
+                for comp_id, result in sorted(results.items()):
+                    report += (
+                        f"| {comp_id} | 1 | {result.total_mentions} | {result.total_mentions:.2f} |\n"
+                    )
+
+                report += "\n## Cross-file References (higher is better)\n\n"
+                report += "| Component ID | Existing Components | Cross-file References | Cross-file Ratio |\n"
+                report += "|-------------|---------------------|----------------------|-----------------|\n"
+                for comp_id, result in sorted(results.items()):
+                    cross_file_ratio = (
+                        result.cross_file_mentions / result.existing_mentions
+                        if result.existing_mentions > 0 else 0
+                    )
+                    report += (
+                        f"| {comp_id} | {result.existing_mentions} | {result.cross_file_mentions} | "
+                        f"{cross_file_ratio:.2%} |\n"
+                    )
+
+                report += "\n## Per-Docstring Truthfulness\n\n"
+                report += "| Component ID | Language | Mentions | Existing | Existence Ratio | Hallucination Rate |\n"
+                report += "|-------------|----------|----------|----------|-----------------|-------------------|\n"
+                for comp_id, result in sorted(results.items()):
+                    report += (
+                        f"| {comp_id} | {result.language} | {result.total_mentions} | {result.existing_mentions} | "
+                        f"{result.existence_ratio:.2%} | {result.hallucination_rate:.2%} |\n"
+                    )
+
+                report += "\n## Language Breakdown\n\n"
+                report += "| Language | Docstrings | Components Mentioned | Existing | Existence Ratio | Hallucination Rate |\n"
+                report += "|----------|-----------|---------------------|----------|-----------------|--------------------|\n"
+                for language, lang_results in sorted(by_language.items()):
+                    lang_total = len(lang_results)
+                    lang_mentions = sum(r.total_mentions for r in lang_results)
+                    lang_existing = sum(r.existing_mentions for r in lang_results)
+                    lang_existence = (
+                        sum(r.existence_ratio for r in lang_results) / lang_total if lang_total > 0 else 0
+                    )
+                    lang_hallucination = (
+                        sum(r.hallucination_rate for r in lang_results) / lang_total if lang_total > 0 else 0
+                    )
+                    report += (
+                        f"| {language} | {lang_total} | {lang_mentions} | {lang_existing} | "
+                        f"{lang_existence:.2%} | {lang_hallucination:.2%} |\n"
+                    )
+
+                hallucinations = []
+                for comp_id, result in results.items():
+                    for cm in result.mentioned_components:
+                        if not cm.exists:
+                            hallucinations.append((comp_id, result.language, cm.name))
+
+                report += "\n## Hallucination Analysis\n\n"
+                if hallucinations:
+                    report += "| Component ID | Language | Hallucinated Reference |\n"
+                    report += "|-------------|----------|------------------------|\n"
+                    for comp_id, language, name in hallucinations[:20]:
+                        report += f"| {comp_id} | {language} | `{name}` |\n"
+                    if len(hallucinations) > 20:
+                        report += f"\n*... and {len(hallucinations) - 20} more hallucinations*\n"
+                else:
+                    report += "No hallucinations found.\n"
+
+                return report
+
+            def _print_truthfulness_console_report() -> None:
+                """Print the markdown-style truthfulness report to the terminal."""
+                report = _build_truthfulness_markdown_report()
+                print("\n" + report)
+                try:
+                    truthfulness_report_path = self.validation_dir / "truthfulness_report.md"
+                    truthfulness_report_path.write_text(report, encoding="utf-8")
+                    print(f"[TRUTHFULNESS] Report saved to: {truthfulness_report_path}")
+                except Exception as save_err:
+                    print(f"[TRUTHFULNESS] Could not save report: {save_err}")
+
+                print("=" * 80)
+
+            _print_truthfulness_console_report()
 
             total = len(results)
             if total == 0:

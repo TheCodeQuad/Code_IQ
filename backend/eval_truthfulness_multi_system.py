@@ -73,7 +73,7 @@ class MultiSystemTruthfulnessEvaluator:
             input_file: Path to input file with docstrings from all systems
             navigator_output_dir: Directory containing navigator output (dependency graphs)
             use_llm: Whether to use LLM for component extraction
-            llm_mode: Which LLM to use ("llama_cpp" or "gemini")
+            llm_mode: Local LLM mode (llama_cpp)
         """
         self.input_file = Path(input_file)
         self.navigator_output_dir = Path(navigator_output_dir)
