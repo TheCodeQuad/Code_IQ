@@ -70,13 +70,6 @@ from backend.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Check for LLM configuration
-try:
-    import google.generativeai as genai
-    GEMINI_AVAILABLE = True
-except ImportError:
-    GEMINI_AVAILABLE = False
-
 try:
     from llama_cpp import Llama
     LLAMA_CPP_AVAILABLE = True
@@ -163,7 +156,7 @@ class ComprehensiveTruthfulnessEvaluator:
             navigator_output_dir: Directory containing navigator output (component graphs)
             writer_output_dir: Directory containing writer agent output (optional, for loading specific repo files)
             use_llm: Whether to use LLM for component extraction (fallback to regex)
-            llm_mode: Which LLM to use ("gemini" or "llama_cpp")
+            llm_mode: Local LLM mode (llama_cpp)
             cache_graphs: Whether to cache dependency graphs per repository
             repository_name: If provided, only process files for this repository
         """
@@ -190,39 +183,28 @@ class ComprehensiveTruthfulnessEvaluator:
     
     def _initialize_llm(self):
         """Initialize the LLM for component extraction"""
-        if self.llm_mode == "gemini" and GEMINI_AVAILABLE:
-            api_key = os.environ.get("GEMINI_API_KEY")
-            if not api_key:
-                logger.warning("GEMINI_API_KEY not set. Falling back to regex extraction.")
-                self.use_llm = False
-                return
-            
-            genai.configure(api_key=api_key)
-            self.llm = genai.GenerativeModel("gemini-2.0-flash")
-            logger.info("Initialized Gemini API for component extraction")
-        
-        elif self.llm_mode == "llama_cpp" and LLAMA_CPP_AVAILABLE:
-            model_path = project_root / "models" / "qwen2.5-coder-7b-instruct-q4_k_m.gguf"
-            
-            if not model_path.exists():
-                logger.warning(f"Model not found at {model_path}. Falling back to regex extraction.")
-                self.use_llm = False
-                return
-            
-            try:
-                self.llm = Llama(
-                    model_path=str(model_path),
-                    n_ctx=8192,
-                    n_gpu_layers=-1,
-                    verbose=False
-                )
-                logger.info(f"Initialized llama.cpp with model: {model_path.name}")
-            except Exception as e:
-                logger.warning(f"Failed to initialize llama.cpp: {e}. Falling back to regex.")
-                self.use_llm = False
-        
-        else:
-            logger.warning(f"LLM mode '{self.llm_mode}' not available. Using regex extraction.")
+        if not LLAMA_CPP_AVAILABLE:
+            logger.warning("llama-cpp-python not installed. Falling back to regex extraction.")
+            self.use_llm = False
+            return
+
+        model_path = project_root / "models" / "qwen2.5-coder-7b-instruct-q4_k_m.gguf"
+
+        if not model_path.exists():
+            logger.warning(f"Model not found at {model_path}. Falling back to regex extraction.")
+            self.use_llm = False
+            return
+
+        try:
+            self.llm = Llama(
+                model_path=str(model_path),
+                n_ctx=8192,
+                n_gpu_layers=-1,
+                verbose=False
+            )
+            logger.info(f"Initialized local llama.cpp with model: {model_path.name}")
+        except Exception as e:
+            logger.warning(f"Failed to initialize llama.cpp: {e}. Falling back to regex.")
             self.use_llm = False
     
     # ==================== DEPENDENCY GRAPH LOADING ====================
@@ -320,68 +302,10 @@ class ComprehensiveTruthfulnessEvaluator:
                 # Extract repo name from filename like "ir_testrepo.json"
                 repo = nav_file.stem.replace('ir_', '')
                 available_repos.add(repo)
-            
-            if available_repos:
-                logger.info(f"Available repositories: {', '.join(sorted(available_repos))}")
-            
+                return self._extract_with_llama(docstring, language)
             return []
         
         logger.info(f"Found {len(repo_component_ids)} components in dependency graph for '{repository_name}'")
-        
-        # Load all individual writer output files
-        all_writer_files = list(self.writer_output_dir.glob("*.json"))
-        logger.info(f"Scanning {len(all_writer_files)} individual writer output files...")
-        
-        for writer_file in all_writer_files:
-            try:
-                with open(writer_file, 'r', encoding='utf-8') as f:
-                    component_data = json.load(f)
-                
-                # Extract component_id
-                comp_id = component_data.get('component_id', '')
-                
-                # Check if this component belongs to the target repository
-                if comp_id in repo_component_ids:
-                    components.append(component_data)
-                    logger.debug(f"Matched {comp_id} to repository '{repository_name}'")
-            
-            except Exception as e:
-                logger.debug(f"Error loading {writer_file}: {e}")
-        
-        logger.info(f"Loaded {len(components)} components for repository '{repository_name}'' from writer output")
-        return components
-    
-    def _load_component_database(self, repository_name: str) -> Dict[str, Dict[str, Any]]:
-        """
-        Load components from navigator output files for a specific repository.
-        
-        Args:
-            repository_name: Name of the repository to load
-            
-        Returns:
-            Dictionary mapping component_id to component data
-        """
-        component_db = {}
-        
-        # Look for navigator output files matching this repo
-        nav_files = list(self.navigator_output_dir.glob(f"*{repository_name}*.json"))
-        if not nav_files:
-            nav_files = list(self.navigator_output_dir.glob(f"*{repository_name.replace('-', '_')}*.json"))
-        if not nav_files:
-            nav_files = list(self.navigator_output_dir.glob(f"*{repository_name.replace('_', '-')}*.json"))
-        
-        # Also check for IR files (intermediate representation)
-        if not nav_files:
-            ir_files = list(self.navigator_output_dir.glob(f"ir_{repository_name}*.json"))
-            nav_files.extend(ir_files)
-        
-        logger.info(f"Found {len(nav_files)} navigator files for repository '{repository_name}'")
-        
-        for nav_file in nav_files:
-            try:
-                with open(nav_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                
                 # Handle different navigator output formats
                 if isinstance(data, dict):
                     # Direct component dictionary (IR format)
@@ -428,55 +352,9 @@ class ComprehensiveTruthfulnessEvaluator:
             List of component names mentioned in the docstring
         """
         if self.use_llm and self.llm:
-            if self.llm_mode == "gemini":
-                return self._extract_with_gemini(docstring, language)
-            elif self.llm_mode == "llama_cpp":
-                return self._extract_with_llama(docstring, language)
+            return self._extract_with_llama(docstring, language)
         
         # Fallback to regex-based extraction
-        return self._extract_with_regex(docstring, language)
-    
-    def _extract_with_gemini(self, docstring: str, language: str) -> List[str]:
-        """Extract components using Gemini API"""
-        prompt = f"""Extract all non-common code components (classes, methods, functions) mentioned in 
-the following {language} docstring.
-
-Ignore common standard library components (e.g., List, Dict, String, Array).
-Ignore example code if present.
-Focus on custom/user-defined components.
-
-Return only a Python list of strings with exact names.
-If no components are mentioned, return an empty list.
-
-Docstring:
-```
-{docstring}
-```
-
-Format your response as a Python list wrapped in XML tags:
-<python_list>["ComponentA", "method_b", "function_c"]</python_list>
-"""
-        
-        try:
-            response = self.llm.generate_content(prompt)
-            response_text = response.text.strip()
-            
-            # Extract list from XML tags
-            match = re.search(r'<python_list>(.*?)</python_list>', response_text, re.DOTALL)
-            if match:
-                list_str = match.group(1)
-                try:
-                    components = eval(list_str)
-                    if isinstance(components, list):
-                        return [str(c) for c in components]
-                except:
-                    components = re.findall(r'"([^"]*)"', list_str)
-                    return components
-        
-        except Exception as e:
-            logger.error(f"Error calling Gemini API: {e}")
-        
-        # Fallback to regex
         return self._extract_with_regex(docstring, language)
     
     def _extract_with_llama(self, docstring: str, language: str) -> List[str]:
@@ -1111,9 +989,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--llm-mode",
         type=str,
-        choices=["gemini", "llama_cpp"],
         default="llama_cpp",
-        help="LLM mode for component extraction"
+        help="Local LLM mode for component extraction (llama_cpp only)"
     )
     parser.add_argument(
         "--no-llm",

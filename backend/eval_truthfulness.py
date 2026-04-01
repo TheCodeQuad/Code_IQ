@@ -8,7 +8,7 @@ Usage:
     python eval_truthfulness.py
     python eval_truthfulness.py --repo testrepo
     python eval_truthfulness.py --repo testrepo --no-llm
-    python eval_truthfulness.py --repo testrepo --llm-mode gemini
+    python eval_truthfulness.py --repo testrepo --llm-mode llama_cpp
 """
 
 import sys
@@ -59,9 +59,8 @@ def main():
     parser.add_argument(
         '--llm-mode',
         type=str,
-        choices=['gemini', 'llama_cpp'],
         default='llama_cpp',
-        help='Which LLM to use for component extraction. Defaults to llama_cpp (local model).'
+        help='Local LLM to use for component extraction. Only llama_cpp is supported.'
     )
     parser.add_argument(
         '--no-llm',

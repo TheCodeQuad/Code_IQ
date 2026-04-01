@@ -31,14 +31,6 @@ from backend.utils.paths import DATA_ROOT
 
 logger = get_logger(__name__)
 
-# Check for LLM configuration
-try:
-    import google.generativeai as genai
-    GEMINI_AVAILABLE = True
-except ImportError:
-    GEMINI_AVAILABLE = False
-    logger.warning("google-generativeai not installed. Install with: pip install google-generativeai")
-
 try:
     from llama_cpp import Llama
     LLAMA_CPP_AVAILABLE = True
@@ -82,65 +74,75 @@ class TruthfulnessEvaluator:
         writer_output_dir: str,
         navigator_output_dir: str,
         use_llm: bool = True,
-        llm_mode: str = "llama_cpp"  # "gemini" or "llama_cpp"
+        llm_mode: str = "llama_cpp",  # local llama.cpp only
+        repository_name: Optional[str] = None
     ):
         """
         Initialize the truthfulness evaluator.
+    Do NOT return generic docstring words, verbs, or section words such as Adds, Sum,
+    Throws, Returns, Parameters, Args, Result, Error, Value, Data, Input, Output.
+
         
         Args:
             writer_output_dir: Directory containing writer agent output JSON files
             navigator_output_dir: Directory containing navigator output (DAGs, components)
             use_llm: Whether to use LLM for component extraction (fallback to regex)
-            llm_mode: Which LLM to use ("gemini" or "llama_cpp")
+            llm_mode: Local LLM mode (llama_cpp only)
         """
         self.writer_output_dir = Path(writer_output_dir)
         self.navigator_output_dir = Path(navigator_output_dir)
         self.use_llm = use_llm
         self.llm_mode = llm_mode
+        self.repository_name = repository_name
+
+        # Opt-in debug logging. Keep default quiet for UI runs.
+        # Enable with: set TRUTHFULNESS_DEBUG=1 (cmd) or $env:TRUTHFULNESS_DEBUG="1" (PowerShell)
+        self.debug = str(os.getenv("TRUTHFULNESS_DEBUG", "0")).strip().lower() in {"1", "true", "yes", "y"}
         
         # Initialize LLM if available
         self.llm = None
         if self.use_llm:
             self._initialize_llm()
         
-        # Load component database from navigator output
-        self.component_db = self._load_component_database()
-        
-        logger.info(f"Loaded {len(self.component_db)} components from navigator output")
+        # Repo-scoped dependency graph cache: repo_name -> component_db
+        self.graph_cache: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+        # Backward-compatible default component database (filled on demand)
+        self.component_db: Dict[str, Dict[str, Any]] = {}
+
+        if self.debug:
+            logger.info(
+                "[truthfulness-debug] writer_output_dir=%s navigator_output_dir=%s use_llm=%s llm_mode=%s",
+                str(self.writer_output_dir),
+                str(self.navigator_output_dir),
+                self.use_llm,
+                self.llm_mode,
+            )
+            if self.repository_name:
+                logger.info("[truthfulness-debug] repository filter=%s", self.repository_name)
     
     def _initialize_llm(self):
         """Initialize the LLM for component extraction"""
-        if self.llm_mode == "gemini" and GEMINI_AVAILABLE:
-            api_key = os.environ.get("GEMINI_API_KEY")
-            if not api_key:
-                logger.warning("GEMINI_API_KEY not set. Falling back to regex extraction.")
-                self.use_llm = False
-                return
-            
-            genai.configure(api_key=api_key)
-            self.llm = genai.GenerativeModel("gemini-2.0-flash")
-            logger.info("Initialized Gemini API for component extraction")
-        
-        elif self.llm_mode == "llama_cpp" and LLAMA_CPP_AVAILABLE:
-            # Load local GGUF model
-            model_path = project_root / "models" / "qwen2.5-coder-7b-instruct-q4_k_m.gguf"
-            
-            if not model_path.exists():
-                logger.warning(f"Model not found at {model_path}. Falling back to regex extraction.")
-                self.use_llm = False
-                return
-            
-            self.llm = Llama(
-                model_path=str(model_path),
-                n_ctx=8192,
-                n_gpu_layers=-1,  # Use GPU if available
-                verbose=False
-            )
-            logger.info(f"Initialized llama.cpp with model: {model_path.name}")
-        
-        else:
-            logger.warning(f"LLM mode '{self.llm_mode}' not available. Using regex extraction.")
+        if not LLAMA_CPP_AVAILABLE:
+            logger.warning("llama-cpp-python not installed. Falling back to regex-based extraction.")
             self.use_llm = False
+            return
+
+        # Always use the local Qwen model for truthfulness extraction.
+        model_path = project_root / "models" / "qwen2.5-coder-7b-instruct-q4_k_m.gguf"
+
+        if not model_path.exists():
+            logger.warning(f"Model not found at {model_path}. Falling back to regex extraction.")
+            self.use_llm = False
+            return
+
+        self.llm = Llama(
+            model_path=str(model_path),
+            n_ctx=8192,
+            n_gpu_layers=-1,  # Use GPU if available
+            verbose=False
+        )
+        logger.info(f"Initialized local llama.cpp with model: {model_path.name}")
     
     def _load_component_database(self) -> Dict[str, Dict[str, Any]]:
         """
@@ -191,6 +193,48 @@ class TruthfulnessEvaluator:
                 logger.warning(f"Error loading {nav_file}: {e}")
         
         return component_db
+
+    def load_dependency_graph(self, repo_name: str) -> Dict[str, Dict[str, Any]]:
+        """
+        Load a repository-specific dependency graph / component map.
+
+        This prefers the IR file produced by Navigator:
+        data/intermediate/navigator_output/ir_{repo_name}.json
+
+        If the file is missing, it falls back to the broader navigator scan.
+        """
+        if repo_name in self.graph_cache:
+            return self.graph_cache[repo_name]
+
+        ir_path = self.navigator_output_dir / f"ir_{repo_name}.json"
+        component_db: Dict[str, Dict[str, Any]] = {}
+
+        if ir_path.exists():
+            try:
+                with open(ir_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+
+                if isinstance(data, dict):
+                    component_db = data
+                elif isinstance(data, list):
+                    for item in data:
+                        if isinstance(item, dict):
+                            comp_id = item.get("id", item.get("component_id"))
+                            if comp_id:
+                                component_db[comp_id] = item
+
+                logger.info(f"Loaded {len(component_db)} components from dependency graph for repo '{repo_name}'")
+            except Exception as e:
+                logger.warning(f"Error loading dependency graph {ir_path}: {e}")
+                component_db = {}
+
+        if not component_db:
+            # Fall back to the broader scan of navigator outputs
+            component_db = self._load_component_database()
+            logger.info(f"Loaded {len(component_db)} components from navigator output")
+
+        self.graph_cache[repo_name] = component_db
+        return component_db
     
     def extract_components_from_docstring(self, docstring: str, language: str) -> List[str]:
         """
@@ -204,78 +248,144 @@ class TruthfulnessEvaluator:
             List of component names mentioned in the docstring
         """
         if self.use_llm and self.llm:
-            if self.llm_mode == "gemini":
-                return self._extract_with_gemini(docstring, language)
-            elif self.llm_mode == "llama_cpp":
-                return self._extract_with_llama(docstring, language)
-        
-        # Fallback to regex-based extraction
-        return self._extract_with_regex(docstring, language)
-    
-    def _extract_with_gemini(self, docstring: str, language: str) -> List[str]:
-        """Extract components using Gemini API"""
-        prompt = f"""
-Extract all non-common code components (classes, methods, functions) mentioned in 
-the following {language} docstring.
+            llm_components = self._extract_with_llama(docstring, language)
+            if llm_components:
+                return llm_components
 
-Ignore common standard library components (e.g., List, Dict, String, Array).
-Ignore example code if present.
-Focus on custom/user-defined components.
+        # If the model is unavailable or unusable, fall back to a strict
+        # backtick-only extractor so we only keep explicit code references.
+        return self._extract_backtick_mentions(docstring)
 
-Return only a Python list of strings with exact names.
-If no components are mentioned, return an empty list.
+    def _extract_backtick_mentions(self, docstring: str) -> List[str]:
+        """Extract explicit names written inside backticks only."""
+        backtick_pattern = r'`([a-zA-Z_][a-zA-Z0-9_]*)`'
+        return self._dedupe_and_filter_components(re.findall(backtick_pattern, docstring))
+
+    def _extract_explicit_mentions(self, docstring: str, language: str) -> List[str]:
+        """Extract explicit code references from the docstring text."""
+        components = []
+
+        # Split into lines so we can ignore docstring section headings like Args/Returns.
+        lines = docstring.splitlines()
+        section_headers = {
+            "args", "arguments", "parameters", "returns", "raises", "yields",
+            "examples", "example", "attributes", "notes", "seealso", "see also",
+            "todo", "warnings", "refs", "reference", "references", "methods",
+            "properties", "constructor parameters"
+        }
+
+        # 1. Extract code in backticks: `ComponentName` or `function_name`
+        backtick_pattern = r'`([a-zA-Z_][a-zA-Z0-9_]*)`'
+        components.extend(re.findall(backtick_pattern, docstring))
+
+        # 1b. Extract plain-text code-like identifiers such as InMemoryCache,
+        # UserManager, or Person even when they are not wrapped in backticks.
+        camel_case_pattern = r'\b([A-Z][A-Za-z0-9]*)\b'
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+
+            lower_stripped = stripped.lower().rstrip(":")
+            if lower_stripped in section_headers:
+                continue
+
+            # Skip obvious prose headings / sentences that start with common verbs.
+            if re.match(r'^(Determines|Represents|Initialize|Returns|Checks|Creates|Calculates|Extracts|Uses|Computes|Gets|Sets|Loads|Saves|Validates|Processes|Converts)\b', stripped):
+                # Still allow the line to contribute identifiers later in the line.
+                tail = re.sub(r'^(Determines|Represents|Initialize|Returns|Checks|Creates|Calculates|Extracts|Uses|Computes|Gets|Sets|Loads|Saves|Validates|Processes|Converts)\b', '', stripped, count=1).strip()
+                components.extend(re.findall(camel_case_pattern, tail))
+                continue
+
+            components.extend(re.findall(camel_case_pattern, stripped))
+
+        # 2. Extract function/method calls: ComponentName() or function_name()
+        func_call_pattern = r'\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\(\)'
+        components.extend(re.findall(func_call_pattern, docstring))
+
+        # 3. Language-specific dotted method calls
+        if language == "python":
+            components.extend(re.findall(r'\.([a-z_][a-z0-9_]*)\b', docstring))
+        elif language in ["javascript", "typescript", "java"]:
+            components.extend(re.findall(r'\.([a-zA-Z_][a-zA-Z0-9_]*)\b', docstring))
+
+        return self._dedupe_and_filter_components(components)
+
+    def _merge_component_mentions(self, explicit_components: List[str], llm_components: List[str]) -> List[str]:
+        """Merge explicit mentions with LLM-extracted mentions, keeping explicit ones."""
+        merged = list(explicit_components)
+        for component in llm_components:
+            if component not in merged:
+                merged.append(component)
+        return self._dedupe_and_filter_components(merged)
+
+    def _dedupe_and_filter_components(self, components: List[str]) -> List[str]:
+        """Remove duplicates and filter out common noise words."""
+        common_words = {
+            'error', 'string', 'number', 'boolean', 'array', 'object',
+            'true', 'false', 'null', 'undefined', 'void', 'return',
+            'value', 'result', 'data', 'input', 'output', 'type',
+            'adds', 'sum', 'throws',
+            'the', 'and', 'for', 'with', 'this', 'that', 'from', 'into',
+            'operation', 'function', 'method', 'class', 'module',
+            'list', 'dict', 'set', 'tuple', 'str', 'int', 'float',
+            'print', 'len', 'range', 'enumerate', 'zip', 'map', 'filter',
+            'console', 'log', 'warn', 'error', 'push', 'pop', 'shift',
+            'slice', 'splice', 'join', 'split', 'trim', 'tolowercase',
+            'system', 'out', 'println', 'tostring', 'equals', 'hashcode',
+            'determines', 'represents', 'initialize', 'returns', 'checks',
+            'creates', 'calculates', 'extracts', 'uses', 'computes', 'gets',
+            'sets', 'loads', 'saves', 'validates', 'processes', 'converts',
+            'args', 'arguments', 'parameters', 'raises', 'yields', 'examples',
+            'example', 'attributes', 'notes', 'seealso', 'see also', 'todo',
+            'warnings', 'refs', 'reference', 'references', 'methods',
+            'properties', 'constructor parameters'
+        }
+
+        seen = set()
+        filtered = []
+        for component in components:
+            component_str = str(component).strip()
+            if not component_str:
+                continue
+            if component_str.lower() in common_words:
+                continue
+            if len(component_str) <= 2 or component_str.isdigit():
+                continue
+            if component_str not in seen:
+                seen.add(component_str)
+                filtered.append(component_str)
+        return filtered
+
+    def _build_extraction_prompt(self, docstring: str, language: str) -> str:
+        """Build the local-model prompt for component extraction."""
+        return f"""
+Please extract all the non-common (very likely to be newly-defined in the repository)
+code components (classes, methods, functions) mentioned in the following {language} docstring.
+
+Treat plain-text code-like names as explicit mentions too if they look like identifiers,
+for example: InMemoryCache, UserManager, Person, CacheManager.
+
+Ignore the example part of the docstring if it exists (the code component you extract should not come from example code).
+
+For example, "List" is a very common class, so it should not be included.
+On the other hand, "InMemoryCache" is not a common class, so it should be included.
+
+Return only a Python list of strings with the exact names.
+If no code components are mentioned, return an empty list.
 
 Docstring:
 ```
 {docstring}
 ```
 
-Format your response as a Python list wrapped in XML tags:
-<python_list>["ComponentA", "method_b", "function_c"]</python_list>
+Format your response as a Python list wrapped in XML tags like this:
+<python_list>["ClassA", "method_b", "function_c"]</python_list>
 """
-        
-        try:
-            response = self.llm.generate_content(prompt)
-            response_text = response.text.strip()
-            
-            # Extract list from XML tags
-            match = re.search(r'<python_list>(.*?)</python_list>', response_text, re.DOTALL)
-            if match:
-                list_str = match.group(1)
-                try:
-                    components = eval(list_str)
-                    if isinstance(components, list):
-                        return components
-                except:
-                    components = re.findall(r'"([^"]*)"', list_str)
-                    return components
-            
-            # Fallback
-            match = re.search(r'\[.*?\]', response_text, re.DOTALL)
-            if match:
-                list_str = match.group(0)
-                try:
-                    components = eval(list_str)
-                    if isinstance(components, list):
-                        return components
-                except:
-                    components = re.findall(r'"([^"]*)"', list_str)
-                    return components
-        
-        except Exception as e:
-            logger.error(f"Error calling Gemini API: {e}")
-        
-        # Fallback to regex
-        return self._extract_with_regex(docstring, language)
     
     def _extract_with_llama(self, docstring: str, language: str) -> List[str]:
-        """Extract components using llama.cpp"""
-        prompt = f"""Extract all custom code components (classes, methods, functions) mentioned in this {language} docstring.
-Ignore standard library components. Return only a JSON array of strings.
-
-Docstring: {docstring}
-
-Response (JSON array only):"""
+        """Extract components using llama.cpp."""
+        prompt = self._build_extraction_prompt(docstring, language)
         
         try:
             response = self.llm(
@@ -286,22 +396,46 @@ Response (JSON array only):"""
             )
             
             response_text = response["choices"][0]["text"].strip()
-            
-            # Try to parse as JSON array
-            match = re.search(r'\[.*?\]', response_text, re.DOTALL)
-            if match:
-                try:
-                    components = json.loads(match.group(0))
-                    if isinstance(components, list):
-                        return components
-                except:
-                    pass
+            parsed_components = self._parse_llm_component_list(response_text)
+            if parsed_components:
+                return parsed_components
         
         except Exception as e:
             logger.error(f"Error calling llama.cpp: {e}")
-        
-        # Fallback to regex
-        return self._extract_with_regex(docstring, language)
+
+        # If the local model fails, return only explicit backtick mentions.
+        return self._extract_backtick_mentions(docstring)
+
+    def _parse_llm_component_list(self, response_text: str) -> List[str]:
+        """Parse a list of component names from an LLM response."""
+        candidate_texts = [response_text]
+
+        python_list_match = re.search(r"<python_list>\s*(.*?)\s*</python_list>", response_text, re.DOTALL | re.IGNORECASE)
+        if python_list_match:
+            candidate_texts.insert(0, python_list_match.group(1))
+
+        bracket_match = re.search(r"\[.*?\]", response_text, re.DOTALL)
+        if bracket_match:
+            candidate_texts.insert(0, bracket_match.group(0))
+
+        for candidate in candidate_texts:
+            try:
+                parsed = json.loads(candidate)
+                if isinstance(parsed, list):
+                    return self._dedupe_and_filter_components([str(item) for item in parsed])
+            except Exception:
+                pass
+
+            string_items = re.findall(r'"([^\"]+)"|\'([^\']+)\'', candidate)
+            flattened = [item[0] or item[1] for item in string_items if (item[0] or item[1]).strip()]
+            if flattened:
+                return self._dedupe_and_filter_components(flattened)
+
+            bare_items = re.findall(r"[A-Za-z_][A-Za-z0-9_]*", candidate)
+            if candidate.strip().startswith("[") and bare_items:
+                return self._dedupe_and_filter_components(bare_items)
+
+        return []
     
     def _extract_with_regex(self, docstring: str, language: str) -> List[str]:
         """
@@ -309,65 +443,7 @@ Response (JSON array only):"""
         Only extracts EXPLICIT code references (backticks, function calls, etc.).
         Does NOT extract regular English words to avoid false positives.
         """
-        components = []
-        
-        # 1. Extract code in backticks: `ComponentName` or `function_name`
-        backtick_pattern = r'`([a-zA-Z_][a-zA-Z0-9_]*)`'
-        backtick_matches = re.findall(backtick_pattern, docstring)
-        components.extend(backtick_matches)
-        
-        # 2. Extract function/method calls: ComponentName() or function_name()
-        func_call_pattern = r'\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\(\)'
-        func_matches = re.findall(func_call_pattern, docstring)
-        components.extend(func_matches)
-        
-        # 3. Language-specific patterns for method calls
-        if language == "python":
-            # self.method_name or obj.method_name
-            method_pattern = r'\.([a-z_][a-z0-9_]*)\b'
-            method_matches = re.findall(method_pattern, docstring)
-            components.extend(method_matches)
-        
-        elif language in ["javascript", "typescript"]:
-            # this.methodName or object.methodName
-            method_pattern = r'\.([a-zA-Z_][a-zA-Z0-9_]*)\b'
-            method_matches = re.findall(method_pattern, docstring)
-            components.extend(method_matches)
-        
-        elif language == "java":
-            # ClassName.methodName or object.methodName
-            method_pattern = r'\.([a-zA-Z_][a-zA-Z0-9_]*)\b'
-            method_matches = re.findall(method_pattern, docstring)
-            components.extend(method_matches)
-        
-        # 4. Filter out common/standard library names and regular words
-        common_words = {
-            # Common programming terms (NOT component names)
-            'error', 'string', 'number', 'boolean', 'array', 'object',
-            'true', 'false', 'null', 'undefined', 'void', 'return',
-            'value', 'result', 'data', 'input', 'output', 'type',
-            # Common English words that might be capitalized
-            'the', 'and', 'for', 'with', 'this', 'that', 'from', 'into',
-            'operation', 'function', 'method', 'class', 'module',
-            # Standard library (Python)
-            'list', 'dict', 'set', 'tuple', 'str', 'int', 'float',
-            'print', 'len', 'range', 'enumerate', 'zip', 'map', 'filter',
-            # Standard library (JavaScript)
-            'console', 'log', 'warn', 'error', 'push', 'pop', 'shift',
-            'slice', 'splice', 'join', 'split', 'trim', 'toLowerCase',
-            # Standard library (Java)
-            'System', 'out', 'println', 'toString', 'equals', 'hashCode'
-        }
-        
-        # Remove duplicates and filter
-        components = list(set([
-            c for c in components 
-            if c.lower() not in common_words 
-            and len(c) > 2  # At least 3 characters
-            and not c.isdigit()  # Not just numbers
-        ]))
-        
-        return components
+        return self._extract_explicit_mentions(docstring, language)
     
     def check_component_existence(
         self,
@@ -417,6 +493,16 @@ Response (JSON array only):"""
                         is_cross_file = True
                 
                 break
+
+        if self.debug:
+            logger.info(
+                "[truthfulness-debug] mention='%s' exists=%s cross_file=%s type=%s found_path=%s",
+                component_name,
+                exists,
+                is_cross_file,
+                component_type,
+                found_file_path,
+            )
         
         return exists, is_cross_file, component_type, found_file_path
     
@@ -425,7 +511,8 @@ Response (JSON array only):"""
         component_id: str,
         docstring: str,
         file_path: str,
-        language: str
+        language: str,
+        repo_name: Optional[str] = None
     ) -> TruthfulnessResult:
         """
         Evaluate a single docstring for truthfulness.
@@ -439,8 +526,42 @@ Response (JSON array only):"""
         Returns:
             TruthfulnessResult object
         """
+        if repo_name:
+            self.component_db = self.load_dependency_graph(repo_name)
+
         # Extract mentioned components
         mentioned_components = self.extract_components_from_docstring(docstring, language)
+
+        if self.debug:
+            preview = (docstring[:240] + "…") if len(docstring) > 240 else docstring
+            logger.info(
+                "[truthfulness-debug] component_id=%s language=%s file_path=%s extracted_mentions=%s docstring_preview=%r",
+                component_id,
+                language,
+                file_path,
+                mentioned_components,
+                preview,
+            )
+
+        # If the docstring doesn't mention any components, it can't hallucinate
+        # component references. Treat as fully truthful.
+        if not mentioned_components:
+            if self.debug:
+                logger.info(
+                    "[truthfulness-debug] component_id=%s: no explicit component references found; existence_ratio=1.0",
+                    component_id,
+                )
+            return TruthfulnessResult(
+                component_id=component_id,
+                file_path=file_path,
+                language=language,
+                mentioned_components=[],
+                total_mentions=0,
+                existing_mentions=0,
+                cross_file_mentions=0,
+                hallucination_rate=0.0,
+                existence_ratio=1.0,
+            )
         
         # Check existence of each component
         component_mentions = []
@@ -463,8 +584,20 @@ Response (JSON array only):"""
         cross_file_mentions = sum(1 for cm in component_mentions if cm.is_cross_file)
         
         # Calculate ratios
-        existence_ratio = existing_mentions / total_mentions if total_mentions > 0 else 0.0
+        existence_ratio = existing_mentions / total_mentions if total_mentions > 0 else 1.0
         hallucination_rate = (total_mentions - existing_mentions) / total_mentions if total_mentions > 0 else 0.0
+
+        if self.debug:
+            missing = [cm.name for cm in component_mentions if not cm.exists]
+            logger.info(
+                "[truthfulness-debug] component_id=%s total_mentions=%d existing=%d missing=%s existence_ratio=%.3f hallucination_rate=%.3f",
+                component_id,
+                total_mentions,
+                existing_mentions,
+                missing,
+                existence_ratio,
+                hallucination_rate,
+            )
         
         return TruthfulnessResult(
             component_id=component_id,
@@ -478,6 +611,49 @@ Response (JSON array only):"""
             existence_ratio=existence_ratio
         )
     
+    def _infer_repo_name(self, writer_file: Path, data: Any) -> str:
+        """Infer repository name from a writer output file."""
+        def _repo_from_path(path_value: Any) -> str:
+            if not path_value:
+                return ""
+
+            path_text = str(path_value)
+            path = Path(path_text)
+
+            parts_lower = [part.lower() for part in path.parts]
+            if "repositories" in parts_lower:
+                repo_index = parts_lower.index("repositories")
+                if repo_index + 1 < len(path.parts):
+                    return path.parts[repo_index + 1]
+
+            match = re.search(r"[\\/](?:repositories|repository)[\\/](?P<repo>[^\\/]+)", path_text, re.IGNORECASE)
+            if match:
+                return match.group("repo")
+
+            return ""
+
+        stem = writer_file.stem
+
+        if isinstance(data, dict):
+            for candidate in (data.get("file_path"), data.get("path")):
+                repo = _repo_from_path(candidate)
+                if repo:
+                    return repo
+
+            location = data.get("location")
+            if isinstance(location, dict):
+                repo = _repo_from_path(location.get("file_path") or location.get("path"))
+                if repo:
+                    return repo
+
+        if stem.endswith("_writer_output"):
+            return stem[: -len("_writer_output")]
+        if isinstance(data, dict):
+            repo = data.get("repository") or data.get("repo")
+            if repo:
+                return str(repo)
+        return stem.split("_")[0]
+
     def evaluate_all(self) -> Dict[str, TruthfulnessResult]:
         """
         Evaluate all docstrings in the writer output directory.
@@ -489,39 +665,118 @@ Response (JSON array only):"""
         
         # Load all writer output files
         writer_files = list(self.writer_output_dir.glob("*.json"))
+        evaluated_files = 0
         
-        logger.info(f"Found {len(writer_files)} writer output files")
+        logger.info(f"Scanning {len(writer_files)} writer output files")
+        if self.debug:
+            logger.info("[truthfulness-debug] writer_files=%s", [wf.name for wf in writer_files])
         
+        def _infer_file_path(component_id: str, fallback: str = "") -> str:
+            comp_data = self.component_db.get(component_id)
+            if isinstance(comp_data, dict):
+                loc = comp_data.get("location")
+                if isinstance(loc, dict) and loc.get("file_path"):
+                    return loc.get("file_path")
+                if comp_data.get("file_path"):
+                    return comp_data.get("file_path")
+            return fallback
+
+        def _infer_language(payload: dict, default: str = "python") -> str:
+            lang = payload.get("language")
+            if lang:
+                return lang
+            metadata = payload.get("metadata")
+            if isinstance(metadata, dict):
+                return metadata.get("component_language") or default
+            return default
+
         for writer_file in tqdm(writer_files, desc="Evaluating docstrings"):
             try:
                 with open(writer_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                
-                component_id = data.get("component_id", writer_file.stem)
-                docstring = data.get("docstring", "")
-                language = data.get("language", "python")
-                
-                # Extract file path from component location if available
-                file_path = data.get("file_path", "")
-                if not file_path and "location" in data:
-                    location = data["location"]
-                    if isinstance(location, dict):
-                        file_path = location.get("file_path", "")
-                
-                # Clean docstring (remove <DOCSTRING> tags if present)
-                docstring = re.sub(r'</?DOCSTRING>', '', docstring).strip()
-                
-                if docstring:
-                    result = self.evaluate_docstring(
-                        component_id=component_id,
-                        docstring=docstring,
-                        file_path=file_path,
-                        language=language
+
+                if self.debug:
+                    logger.info(
+                        "[truthfulness-debug] processing_writer_file=%s top_level_type=%s",
+                        writer_file.name,
+                        type(data).__name__,
                     )
-                    results[component_id] = result
+
+                repo_name = self._infer_repo_name(writer_file, data)
+                if self.repository_name and repo_name != self.repository_name:
+                    if self.debug:
+                        logger.info(
+                            "[truthfulness-debug] skipping_writer_file=%s inferred_repo=%s filter=%s",
+                            writer_file.name,
+                            repo_name,
+                            self.repository_name,
+                        )
+                    continue
+
+                self.component_db = self.load_dependency_graph(repo_name)
+
+                # Two supported writer formats:
+                # (A) Per-component JSON: {"component_id": ..., "docstring": ...}
+                # (B) Consolidated map: {"comp_id": {"docstring": ...}, ...}
+                if isinstance(data, dict) and ("component_id" in data or "docstring" in data):
+                    component_id = data.get("component_id", writer_file.stem)
+                    docstring = data.get("docstring", "")
+                    language = _infer_language(data)
+
+                    file_path = data.get("file_path", "")
+                    if not file_path and "location" in data:
+                        location = data["location"]
+                        if isinstance(location, dict):
+                            file_path = location.get("file_path", "")
+                    file_path = _infer_file_path(component_id, file_path)
+
+                    docstring = re.sub(r'</?DOCSTRING>', '', docstring).strip()
+                    if docstring:
+                        results[component_id] = self.evaluate_docstring(
+                            component_id=component_id,
+                            docstring=docstring,
+                            file_path=file_path,
+                            language=language,
+                            repo_name=repo_name,
+                        )
+                        evaluated_files += 1
+
+                elif isinstance(data, dict):
+                    # Consolidated writer output
+                    if self.debug:
+                        logger.info(
+                            "[truthfulness-debug] consolidated_writer_output entries=%d file=%s",
+                            len(data),
+                            writer_file.name,
+                        )
+                    for component_id, payload in data.items():
+                        if not isinstance(payload, dict):
+                            continue
+                        docstring = payload.get("docstring", "")
+                        if not docstring:
+                            continue
+                        language = _infer_language(payload)
+                        file_path = _infer_file_path(component_id, payload.get("file_path", ""))
+                        docstring = re.sub(r'</?DOCSTRING>', '', docstring).strip()
+
+                        results[component_id] = self.evaluate_docstring(
+                            component_id=component_id,
+                            docstring=docstring,
+                            file_path=file_path,
+                            language=language,
+                            repo_name=repo_name,
+                        )
+                        evaluated_files += 1
             
             except Exception as e:
                 logger.error(f"Error processing {writer_file}: {e}")
+
+        if self.debug:
+            logger.info(
+                "[truthfulness-debug] evaluated_writer_files=%d repository_filter=%s",
+                evaluated_files,
+                self.repository_name or "<none>",
+            )
         
         return results
     
@@ -718,9 +973,8 @@ def main():
     parser.add_argument(
         '--llm-mode',
         type=str,
-        choices=['gemini', 'llama_cpp'],
         default='llama_cpp',
-        help='Which LLM to use for component extraction. Defaults to llama_cpp (local model).'
+        help='Local LLM mode for component extraction. Only llama_cpp is supported.'
     )
     parser.add_argument(
         '--no-llm',
@@ -755,7 +1009,7 @@ def main():
     print(f"Output directory: {output_dir}")
     print(f"Use LLM: {use_llm}")
     if use_llm:
-        print(f"LLM Mode: {args.llm_mode} (local model)")
+        print("LLM Mode: llama_cpp (local model)")
     else:
         print("LLM Mode: Regex-based extraction only")
     print("=" * 60)
