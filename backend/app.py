@@ -522,6 +522,63 @@ def evaluate_documentation(req: EvaluationRequest):
         raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
 
 
+@app.get("/evaluate/{repo_name}")
+def get_evaluation_results(repo_name: str):
+    """
+    Fetch previously saved evaluation results for a repository.
+    Returns scores as percentages (0-100).
+    """
+    # Look for saved results file
+    validation_dir = DATA_ROOT / "validation" / repo_name
+    results_file = validation_dir / "unified_evaluation_results.json"
+    
+    if not results_file.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"No evaluation results found for repository '{repo_name}'. Run evaluation first."
+        )
+    
+    try:
+        with open(results_file, "r", encoding="utf-8") as f:
+            results = json.load(f)
+        
+        # Convert scores to percentages (0-100)
+        def to_percentage(score):
+            if score is None:
+                return None
+            return round(score * 100, 1)
+        
+        # Extract scores from the correct paths in the JSON
+        completeness_score = results.get("completeness", {}).get("summary", {}).get("overall_score")
+        helpfulness_raw = results.get("helpfulness", {}).get("summary", {}).get("average_score")
+        # Helpfulness is on 1-5 scale, convert to 0-1
+        helpfulness_score = helpfulness_raw / 5.0 if helpfulness_raw else None
+        truthfulness_score = results.get("truthfulness", {}).get("summary", {}).get("overall_accuracy")
+        
+        return JSONResponse(content={
+            "success": True,
+            "repo_name": repo_name,
+            "overall_quality_score": to_percentage(results.get("overall_quality_score")),
+            "completeness": {
+                "score": to_percentage(completeness_score),
+                "details": results.get("completeness", {})
+            },
+            "helpfulness": {
+                "score": to_percentage(helpfulness_score),
+                "details": results.get("helpfulness", {})
+            },
+            "truthfulness": {
+                "score": to_percentage(truthfulness_score),
+                "details": results.get("truthfulness", {})
+            },
+            "output_file": str(results_file),
+        })
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="Invalid evaluation results file")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error reading results: {str(e)}")
+
+
 @app.get("/download/{filename}")
 def download_file(filename: str):
     """Download a previously generated JSON file"""

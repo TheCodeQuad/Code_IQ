@@ -63,6 +63,10 @@ from .dag_builder import (
     get_dependencies_dict,
 )
 
+from .hpg_builder import (
+    build_hpg,
+)
+
 from .service import (
     GraphService,
     get_graph_service,
@@ -109,6 +113,9 @@ __all__ = [
     "build_file_dag",
     "build_neighborhood_dag",
     "get_dependencies_dict",
+
+    # HPG
+    "build_hpg",
 
     # Service
     "GraphService",

@@ -120,6 +120,14 @@ const ComponentTypeIcon = ({ type }: { type: ComponentType }) => {
 // This avoids CORS issues. The routes are in frontend/app/api/graphs/
 const API_BASE = ""
 
+const isValidComponentId = (id: unknown): id is string => {
+  if (typeof id !== "string") return false
+  const trimmed = id.trim()
+  if (!trimmed) return false
+  const lowered = trimmed.toLowerCase()
+  return lowered !== "undefined" && lowered !== "null"
+}
+
 export default function GraphsPage() {
   const params = useParams<{ id?: string | string[] }>()
   const routeId = Array.isArray(params?.id) ? params.id[0] : params?.id
@@ -151,25 +159,66 @@ export default function GraphsPage() {
     function_count: number
     class_count: number
   } | null>(null)
+  const [lastError, setLastError] = useState<string | null>(null)
+  const [manualRepoPath, setManualRepoPath] = useState("")
+  const [showPathInput, setShowPathInput] = useState(false)
 
-  // Resolve repo path from ID
+  // Resolve repo path from analysis ID
   useEffect(() => {
     const resolveRepoPath = async () => {
       if (!routeId) return
 
       try {
-        // Try to get repo info
-        const response = await fetch(`/api/repos/${routeId}`)
-        if (response.ok) {
-          const data = await response.json()
-          // Use local_path if available, otherwise construct from repo_name
-          const path = data.local_path || data.repo_path || `./repos/${data.repo_name}`
-          setRepoPath(path)
+        // Try to get analysis repo data
+        const analysisResponse = await fetch(`/api/analysis/${routeId}/repo`)
+        if (analysisResponse.ok) {
+          const analysisData = await analysisResponse.json()
+          console.log("[Graph] Analysis repo data:", analysisData)
+
+          // Extract path from various possible field names
+          let path =
+            analysisData.repo_path ||
+            analysisData.local_path ||
+            analysisData.repository_path ||
+            analysisData.repo_local_path ||
+            analysisData.path
+
+          // Convert Windows backslashes to forward slashes for API
+          if (path && typeof path === 'string') {
+            path = path.replace(/\\/g, '/')
+            console.log("[Graph] Resolved repo path from analysis:", path)
+            setRepoPath(path)
+            return
+          }
+        } else {
+          console.log("[Graph] Analysis endpoint not available or returned error:", analysisResponse.status)
         }
+
+        // Fallback: Try to get repo info by ID
+        try {
+          const response = await fetch(`/api/repos/${routeId}`)
+          if (response.ok) {
+            const data = await response.json()
+            console.log("[Graph] Repo data:", data)
+            let path = data.local_path || data.repo_local_path || data.repo_path || `./repos/${data.repo_name}`
+            if (typeof path === 'string') {
+              path = path.replace(/\\/g, '/')
+              console.log("[Graph] Resolved repo path from repos endpoint:", path)
+              setRepoPath(path)
+              return
+            }
+          }
+        } catch (err) {
+          console.error("Error fetching repo by ID:", err)
+        }
+
+        // Final fallback: for local development
+        console.log("[Graph] Using backend path as fallback")
+        setRepoPath("c:/CODEIQ/Code_IQ/backend")
       } catch (err) {
         console.error("Error resolving repo path:", err)
-        // Fallback: try using the ID as a path directly
-        setRepoPath(routeId)
+        // Always set a fallback path so the UI can still load
+        setRepoPath("c:/CODEIQ/Code_IQ/backend")
       }
     }
 
@@ -178,52 +227,83 @@ export default function GraphsPage() {
 
   // Parse repository and fetch components
   useEffect(() => {
-    if (!repoPath) return
+    if (!repoPath) {
+      console.log("[Graph] No repoPath set yet")
+      return
+    }
 
     const parseAndFetchComponents = async () => {
+      console.log("[Graph] Starting parse and fetch with repoPath:", repoPath)
       setComponentsLoading(true)
+
+      // Avoid stale selections/IDs after backend restart or repo change
+      setComponents([])
+      setSelectedComponent(null)
+      setCfgData(null)
+      setPdgData(null)
+      setHpgData(null)
+      setDagData(null)
+      setGraphError(null)
 
       try {
         // First, trigger parse (if not already parsed)
-        const parseResponse = await fetch(`${API_BASE}/api/graphs/parse`, {
+        console.log("[Graph] Calling parse endpoint...")
+        const parseResponse = await fetch(`${API_BASE}/api/graphs`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ repo_path: repoPath, force: false })
         })
 
+        console.log("[Graph] Parse response status:", parseResponse.status)
         if (parseResponse.ok) {
           const parseData = await parseResponse.json()
+          console.log("[Graph] Parse data:", parseData)
           setParseStatus({
             is_parsed: true,
             function_count: parseData.function_count,
             class_count: parseData.class_count
           })
+        } else {
+          const errText = await parseResponse.text()
+          console.error("[Graph] Parse error:", errText)
         }
 
         // Fetch components list
+        console.log("[Graph] Fetching components with repo_path:", repoPath)
         const componentsResponse = await fetch(
-          `${API_BASE}/api/graphs/components?repo_path=${encodeURIComponent(repoPath)}`
+          `${API_BASE}/api/graphs?repo_path=${encodeURIComponent(repoPath)}`
         )
 
+        console.log("[Graph] Components response status:", componentsResponse.status)
         if (componentsResponse.ok) {
           const data = await componentsResponse.json()
+          console.log("[Graph] Components data received:", data)
           if (data.components && data.components.length > 0) {
-            const mappedComponents: Component[] = data.components.map((c: any) => ({
-              id: c.id,
-              name: c.name,
-              type: c.type as ComponentType,
-              filePath: c.file_path,
-              parentClass: c.parent_class,
-              start_line: c.start_line,
-              end_line: c.end_line
-            }))
+            const mappedComponents: Component[] = data.components
+              .map((c: any) => ({
+                id: c?.id,
+                name: c?.name,
+                type: c?.type as ComponentType,
+                filePath: c?.file_path,
+                parentClass: c?.parent_class,
+                start_line: c?.start_line,
+                end_line: c?.end_line,
+              }))
+              .filter((c: Component) => isValidComponentId(c.id) && Boolean(c.name))
+            console.log("[Graph] Mapped", mappedComponents.length, "components")
             setComponents(mappedComponents)
 
-            // Auto-select first component
-            if (!selectedComponent && mappedComponents.length > 0) {
+            // Auto-select first component if none selected
+            if (mappedComponents.length > 0) {
               setSelectedComponent(mappedComponents[0])
+              console.log("[Graph] Auto-selected first component:", mappedComponents[0].name)
             }
+          } else {
+            console.warn("[Graph] No components in response or empty array")
           }
+        } else {
+          const errText = await componentsResponse.text()
+          console.error("[Graph] Components fetch error:", errText)
         }
       } catch (err) {
         console.error("Error fetching components:", err)
@@ -237,8 +317,14 @@ export default function GraphsPage() {
 
   // Fetch graph data when component or graph type changes
   useEffect(() => {
-    if (!selectedComponent || !repoPath) return
+    if (!selectedComponent?.id || !repoPath) return
     if (selectedGraphType === "agents-flow") return // Agent flow uses different API
+
+    if (selectedComponent.type === "class" && selectedGraphType !== "dag") {
+      setGraphLoading(false)
+      setGraphError("CFG/PDG/HPG are only available for functions/methods")
+      return
+    }
 
     const fetchGraphData = async () => {
       setGraphLoading(true)
@@ -248,20 +334,25 @@ export default function GraphsPage() {
         let endpoint = ""
         switch (selectedGraphType) {
           case "cfg":
-            endpoint = `${API_BASE}/api/graphs/cfg/${selectedComponent.id}?repo_path=${encodeURIComponent(repoPath)}`
+            endpoint = `${API_BASE}/api/graphs/cfg/${encodeURIComponent(selectedComponent.id)}?repo_path=${encodeURIComponent(repoPath)}`
             break
           case "pdg":
-            endpoint = `${API_BASE}/api/graphs/pdg/${selectedComponent.id}?repo_path=${encodeURIComponent(repoPath)}`
+            endpoint = `${API_BASE}/api/graphs/pdg/${encodeURIComponent(selectedComponent.id)}?repo_path=${encodeURIComponent(repoPath)}`
             break
           case "hpg":
-            endpoint = `${API_BASE}/api/graphs/hpg/${selectedComponent.id}?repo_path=${encodeURIComponent(repoPath)}`
+            endpoint = `${API_BASE}/api/graphs/hpg/${encodeURIComponent(selectedComponent.id)}?repo_path=${encodeURIComponent(repoPath)}`
             break
           case "dag":
-            endpoint = `${API_BASE}/api/graphs/dag?repo_path=${encodeURIComponent(repoPath)}&component_id=${selectedComponent.id}`
+            endpoint = `${API_BASE}/api/graphs/dag?repo_path=${encodeURIComponent(repoPath)}&component_id=${encodeURIComponent(selectedComponent.id)}`
             break
         }
 
-        const response = await fetch(endpoint)
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), 60_000)
+
+        const response = await fetch(endpoint, { signal: controller.signal }).finally(() => {
+          clearTimeout(timeoutId)
+        })
 
         if (!response.ok) {
           const errorText = await response.text()
@@ -293,7 +384,12 @@ export default function GraphsPage() {
         }
       } catch (err: any) {
         console.error(`Error fetching ${selectedGraphType}:`, err)
-        setGraphError(err.message || `Failed to load ${selectedGraphType.toUpperCase()}`)
+        const isAbort = err instanceof Error && err.name === "AbortError"
+        setGraphError(
+          isAbort
+            ? `${selectedGraphType.toUpperCase()} request timed out`
+            : (err.message || `Failed to load ${selectedGraphType.toUpperCase()}`)
+        )
       } finally {
         setGraphLoading(false)
       }
@@ -355,7 +451,7 @@ export default function GraphsPage() {
     setGraphLoading(true)
     try {
       // Force re-parse
-      await fetch(`${API_BASE}/api/graphs/parse`, {
+      await fetch(`${API_BASE}/api/graphs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ repo_path: repoPath, force: true })
@@ -367,7 +463,28 @@ export default function GraphsPage() {
       setHpgData(null)
       setDagData(null)
 
-      // Re-fetch will happen automatically via useEffect
+      // Re-fetch components so IDs stay in sync with the new parse
+      const componentsResponse = await fetch(
+        `${API_BASE}/api/graphs?repo_path=${encodeURIComponent(repoPath)}`
+      )
+      if (componentsResponse.ok) {
+        const data = await componentsResponse.json()
+        if (data.components && data.components.length > 0) {
+          const mapped: Component[] = data.components
+            .map((c: any) => ({
+              id: c?.id,
+              name: c?.name,
+              type: c?.type,
+              filePath: c?.file_path,
+              parentClass: c?.parent_class,
+              start_line: c?.start_line,
+              end_line: c?.end_line,
+            }))
+            .filter((c: Component) => isValidComponentId(c.id) && Boolean(c.name))
+          setComponents(mapped)
+          if (mapped.length > 0) setSelectedComponent(mapped[0])
+        }
+      }
     } catch (err) {
       console.error("Error refreshing:", err)
     } finally {
@@ -387,6 +504,51 @@ export default function GraphsPage() {
           <p className="text-xs text-stone-500 mt-1">
             {componentsLoading ? "Loading..." : `${components.length} components`}
           </p>
+          {components.length === 0 && !componentsLoading && repoPath && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-2 h-7 text-xs w-full"
+              onClick={async () => {
+                setComponentsLoading(true)
+                try {
+                  const response = await fetch(`${API_BASE}/api/graphs`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ repo_path: repoPath, force: true })
+                  })
+                  const data = await response.json()
+                  console.log("[Graph] Manual parse result:", data)
+                  if (data.success) {
+                    // Re-fetch components
+                    const compResponse = await fetch(
+                      `${API_BASE}/api/graphs?repo_path=${encodeURIComponent(repoPath)}`
+                    )
+                    const compData = await compResponse.json()
+                    if (compData.components) {
+                      const mapped = compData.components.map((c: any) => ({
+                        id: c?.id,
+                        name: c?.name,
+                        type: c?.type,
+                        filePath: c?.file_path,
+                        parentClass: c?.parent_class,
+                        start_line: c?.start_line,
+                        end_line: c?.end_line,
+                      })).filter((c: Component) => isValidComponentId(c.id) && Boolean(c.name))
+                      setComponents(mapped)
+                      if (mapped.length > 0) setSelectedComponent(mapped[0])
+                    }
+                  }
+                } catch (err) {
+                  console.error("[Graph] Manual parse error:", err)
+                } finally {
+                  setComponentsLoading(false)
+                }
+              }}
+            >
+              Parse Repository
+            </Button>
+          )}
         </CardHeader>
         <CardContent className="p-0">
           <ScrollArea className="h-[calc(100vh-320px)] min-h-[550px]">
@@ -823,6 +985,35 @@ function RealGraphVisualization({
     return `${minX} ${minY} ${width} ${height}`
   }, [nodes])
 
+  // Avoid overlapping edges by offsetting the curve for parallel edges
+  // (multiple edges with the same source/target).
+  const edgeBendById = useMemo(() => {
+    const bends: Record<string, number> = {}
+    if (!graphData?.edges) return bends
+
+    const groups = new Map<string, string[]>()
+    for (const edge of graphData.edges) {
+      const key = `${edge.source}→${edge.target}`
+      const ids = groups.get(key) ?? []
+      ids.push(edge.id)
+      groups.set(key, ids)
+    }
+
+    for (const ids of groups.values()) {
+      if (ids.length <= 1) {
+        if (ids[0]) bends[ids[0]] = 0
+        continue
+      }
+      const spacing = 18
+      const start = -((ids.length - 1) / 2) * spacing
+      ids.forEach((id, index) => {
+        bends[id] = start + index * spacing
+      })
+    }
+
+    return bends
+  }, [graphData?.edges])
+
   if (!graphData || nodes.length === 0) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -882,7 +1073,9 @@ function RealGraphVisualization({
 
         // Use curved path for cleaner look
         const midY = (y1 + y2) / 2
-        const path = `M ${x1} ${y1} Q ${(x1 + x2) / 2} ${midY} ${x2} ${y2}`
+        const bend = edgeBendById[edge.id] ?? 0
+        const midX = (x1 + x2) / 2
+        const path = `M ${x1} ${y1} Q ${midX + bend} ${midY} ${x2} ${y2}`
 
         return (
           <g key={edge.id}>
@@ -897,7 +1090,7 @@ function RealGraphVisualization({
             />
             {edge.label && (
               <text
-                x={(x1 + x2) / 2}
+                x={midX + bend * 0.6}
                 y={midY - 8}
                 textAnchor="middle"
                 fontSize="9"

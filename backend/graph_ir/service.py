@@ -15,19 +15,24 @@ from typing import Dict, List, Optional, Any
 from threading import Lock
 import logging
 
+from backend.navigator.core.repository_parser import RepositoryParser as NavigatorRepositoryParser
+from backend.models.code_component import CodeComponent
+
 from .models import (
     RepositoryIR, FunctionIR, ClassIR, ModuleIR,
-    Graph, GraphResponse, MultiGraphResponse,
+    Graph, GraphNode, GraphEdge, GraphResponse, MultiGraphResponse,
     ComponentInfo, ComponentType, GraphListResponse,
     ParseStatusResponse
 )
 from .parser import RepositoryParser, parse_repository, parse_file
 from .cfg_builder import build_cfg, CFGBuilder
 from .pdg_builder import build_pdg, build_pdg_with_reaching_defs, PDGBuilder
+from .hpg_builder import build_hpg
 from .dag_builder import (
     build_dag, build_file_dag, build_neighborhood_dag,
     get_dependencies_dict, DAGBuilder
 )
+from .multilang_ir_adapter import function_ir_from_code_component
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +49,16 @@ class GraphService:
 
     def __init__(self, cache_dir: Optional[str] = None):
         self._ir_cache: Dict[str, RepositoryIR] = {}
+        self._components_cache: Dict[str, Dict[str, CodeComponent]] = {}
         self._cache_lock = Lock()
         self._parse_timestamps: Dict[str, datetime] = {}
         self._parse_errors: Dict[str, List[str]] = {}
+
+        self._components_timestamps: Dict[str, datetime] = {}
+        self._components_errors: Dict[str, List[str]] = {}
+
+        # On-demand synthesized FunctionIR objects for non-Python languages.
+        self._synth_function_cache: Dict[str, Dict[str, FunctionIR]] = {}
 
         # Cache directory for persisted IR
         self.cache_dir = cache_dir or os.path.join(
@@ -56,8 +68,11 @@ class GraphService:
 
     def _get_cache_key(self, repo_path: str) -> str:
         """Generate cache key for a repository"""
+        # Normalize paths so that Windows drive-letter casing and separator
+        # differences (e.g., C:/... vs c:\...) do not create different caches.
         abs_path = os.path.abspath(repo_path)
-        return hashlib.md5(abs_path.encode()).hexdigest()
+        normalized = os.path.normcase(os.path.normpath(abs_path))
+        return hashlib.md5(normalized.encode()).hexdigest()
 
     def parse_repository(
         self,
@@ -100,6 +115,44 @@ class GraphService:
 
         return ir
 
+    # =========================================================================
+    # Navigator (multi-language) Component IR
+    # =========================================================================
+
+    def parse_repository_components(self, repo_path: str, force: bool = False) -> Dict[str, CodeComponent]:
+        """Parse a repository with Navigator to extract multi-language components.
+
+        Navigator builds a repository-wide component IR (functions/classes/methods/etc.)
+        across multiple languages. This IR is used for component listing and DAG graphs.
+        """
+        cache_key = self._get_cache_key(repo_path)
+        with self._cache_lock:
+            if not force and cache_key in self._components_cache:
+                return self._components_cache[cache_key]
+
+        try:
+            parser = NavigatorRepositoryParser(repo_path)
+            components = parser.parse()  # Dict[str, CodeComponent]
+
+            with self._cache_lock:
+                self._components_cache[cache_key] = components
+                self._components_timestamps[cache_key] = datetime.now()
+                self._components_errors[cache_key] = []
+
+            return components
+        except Exception as e:
+            logger.error(f"Error parsing repository components (navigator): {e}")
+            with self._cache_lock:
+                self._components_cache.pop(cache_key, None)
+                self._components_timestamps[cache_key] = datetime.now()
+                self._components_errors[cache_key] = [str(e)]
+            raise
+
+    def get_components(self, repo_path: str) -> Optional[Dict[str, CodeComponent]]:
+        cache_key = self._get_cache_key(repo_path)
+        with self._cache_lock:
+            return self._components_cache.get(cache_key)
+
     def parse_file(self, file_path: str) -> RepositoryIR:
         """Parse a single file"""
         return parse_file(file_path)
@@ -109,11 +162,33 @@ class GraphService:
         cache_key = self._get_cache_key(repo_path)
 
         with self._cache_lock:
-            if cache_key not in self._ir_cache:
+            components = self._components_cache.get(cache_key)
+            if components is not None:
+                timestamp = self._components_timestamps.get(cache_key)
+                errors = self._components_errors.get(cache_key, [])
+
+                # Navigator component types are strings.
+                class_count = sum(1 for c in components.values() if getattr(c.type, "value", c.type) == "class")
+                function_like = {"function", "arrow_function", "method", "constructor"}
+                function_count = sum(
+                    1
+                    for c in components.values()
+                    if getattr(c.type, "value", c.type) in function_like
+                )
+                file_count = len({c.location.file_path for c in components.values() if getattr(c, "location", None)})
+
                 return ParseStatusResponse(
                     success=True,
-                    is_parsed=False
+                    is_parsed=True,
+                    file_count=file_count,
+                    function_count=function_count,
+                    class_count=class_count,
+                    last_parsed=timestamp.isoformat() if timestamp else None,
+                    errors=errors,
                 )
+
+            if cache_key not in self._ir_cache:
+                return ParseStatusResponse(success=True, is_parsed=False)
 
             ir = self._ir_cache[cache_key]
             timestamp = self._parse_timestamps.get(cache_key)
@@ -126,7 +201,7 @@ class GraphService:
                 function_count=len(ir.functions),
                 class_count=len(ir.classes),
                 last_parsed=timestamp.isoformat() if timestamp else None,
-                errors=errors
+                errors=errors,
             )
 
     def get_ir(self, repo_path: str) -> Optional[RepositoryIR]:
@@ -143,10 +218,18 @@ class GraphService:
                 self._ir_cache.pop(cache_key, None)
                 self._parse_timestamps.pop(cache_key, None)
                 self._parse_errors.pop(cache_key, None)
+                self._components_cache.pop(cache_key, None)
+                self._components_timestamps.pop(cache_key, None)
+                self._components_errors.pop(cache_key, None)
+                self._synth_function_cache.pop(cache_key, None)
             else:
                 self._ir_cache.clear()
                 self._parse_timestamps.clear()
                 self._parse_errors.clear()
+                self._components_cache.clear()
+                self._components_timestamps.clear()
+                self._components_errors.clear()
+                self._synth_function_cache.clear()
 
     # =========================================================================
     # Component Listing
@@ -169,49 +252,149 @@ class GraphService:
         Returns:
             List of ComponentInfo objects
         """
-        ir = self.get_ir(repo_path)
-        if not ir:
-            ir = self.parse_repository(repo_path)
+        # Prefer Navigator multi-language components.
+        comps = self.get_components(repo_path)
+        if comps is None:
+            try:
+                comps = self.parse_repository_components(repo_path)
+            except Exception:
+                comps = None
 
         components: List[ComponentInfo] = []
 
-        # Add functions
-        for func_id, func_ir in ir.functions.items():
-            if file_path and func_ir.file_path != file_path:
-                continue
-            if component_type and func_ir.type.value != component_type:
-                continue
+        if comps is not None:
+            from .models import ComponentType as IRComponentType
 
-            components.append(ComponentInfo(
-                id=func_id,
-                name=func_ir.name,
-                type=func_ir.type,
-                file_path=func_ir.file_path,
-                start_line=func_ir.start_line,
-                end_line=func_ir.end_line,
-                parent_class=func_ir.parent_class
-            ))
+            allowed_raw_types = {"class", "function", "arrow_function", "method", "constructor"}
 
-        # Add classes
-        if not component_type or component_type == "class":
-            for class_id, class_ir in ir.classes.items():
-                if file_path and class_ir.file_path != file_path:
+            def map_type(raw: str) -> IRComponentType:
+                if raw == "class":
+                    return IRComponentType.CLASS
+                if raw in ("method", "constructor"):
+                    return IRComponentType.METHOD
+                return IRComponentType.FUNCTION
+
+            for comp in comps.values():
+                raw_type = getattr(comp.type, "value", comp.type)
+
+                # Only surface core components for graph browsing.
+                if raw_type not in allowed_raw_types:
+                    continue
+                mapped_type = map_type(raw_type)
+
+                if component_type and mapped_type.value != component_type:
+                    continue
+
+                comp_file_path = comp.location.file_path
+                if file_path and comp_file_path != file_path:
+                    continue
+
+                parent_class = None
+                if mapped_type == IRComponentType.METHOD:
+                    parts = str(comp.id).split(".")
+                    if len(parts) >= 3:
+                        parent_class = parts[-2]
+
+                components.append(ComponentInfo(
+                    id=comp.id,
+                    name=comp.name,
+                    type=mapped_type,
+                    file_path=comp_file_path,
+                    start_line=comp.location.start_line,
+                    end_line=comp.location.end_line,
+                    parent_class=parent_class,
+                ))
+        else:
+            # Fallback: Python-only IR
+            ir = self.get_ir(repo_path)
+            if not ir:
+                ir = self.parse_repository(repo_path)
+
+            # Add functions
+            for func_id, func_ir in ir.functions.items():
+                if file_path and func_ir.file_path != file_path:
+                    continue
+                if component_type and func_ir.type.value != component_type:
                     continue
 
                 components.append(ComponentInfo(
-                    id=class_id,
-                    name=class_ir.name,
-                    type=ComponentType.CLASS,
-                    file_path=class_ir.file_path,
-                    start_line=class_ir.start_line,
-                    end_line=class_ir.end_line
+                    id=func_ir.qualified_name,
+                    name=func_ir.name,
+                    type=func_ir.type,
+                    file_path=func_ir.file_path,
+                    start_line=func_ir.start_line,
+                    end_line=func_ir.end_line,
+                    parent_class=func_ir.parent_class
                 ))
+
+            # Add classes
+            if not component_type or component_type == "class":
+                for class_id, class_ir in ir.classes.items():
+                    if file_path and class_ir.file_path != file_path:
+                        continue
+
+                    components.append(ComponentInfo(
+                        id=class_ir.qualified_name,
+                        name=class_ir.name,
+                        type=ComponentType.CLASS,
+                        file_path=class_ir.file_path,
+                        start_line=class_ir.start_line,
+                        end_line=class_ir.end_line
+                    ))
 
         return GraphListResponse(
             success=True,
             components=components,
             total=len(components)
         )
+
+    def _resolve_function_ir(self, repo_path: str, component_id: str) -> Optional[FunctionIR]:
+        """Resolve a function by graph-ir id or by qualified_name (navigator-style id)."""
+        ir = self.get_ir(repo_path)
+        if not ir:
+            ir = self.parse_repository(repo_path)
+
+        func_ir = ir.functions.get(component_id)
+        if func_ir:
+            return func_ir
+
+        for candidate in ir.functions.values():
+            if candidate.qualified_name == component_id:
+                return candidate
+
+        # If the component exists in Navigator IR (multi-language), synthesize a FunctionIR.
+        cache_key = self._get_cache_key(repo_path)
+        with self._cache_lock:
+            existing = self._synth_function_cache.get(cache_key, {}).get(component_id)
+            if existing:
+                return existing
+
+        comps = self.get_components(repo_path)
+        if comps is None:
+            try:
+                comps = self.parse_repository_components(repo_path)
+            except Exception:
+                comps = None
+
+        if comps and component_id in comps:
+            comp = comps[component_id]
+            lang = (getattr(comp, "language", "python") or "python").lower()
+            raw_type = getattr(comp.type, "value", comp.type)
+            if raw_type not in ("function", "arrow_function", "method", "constructor"):
+                return None
+
+            # Synthesize on demand.
+            try:
+                func = function_ir_from_code_component(comp)
+            except Exception as e:
+                logger.error(f"Error synthesizing FunctionIR for {component_id} ({lang}): {e}")
+                return None
+
+            with self._cache_lock:
+                self._synth_function_cache.setdefault(cache_key, {})[component_id] = func
+            return func
+
+        return None
 
     def get_component(
         self,
@@ -227,6 +410,14 @@ class GraphService:
             return ir.functions[component_id]
         if component_id in ir.classes:
             return ir.classes[component_id]
+
+        # Also allow lookup by qualified_name (navigator-style ids)
+        for func in ir.functions.values():
+            if func.qualified_name == component_id:
+                return func
+        for cls in ir.classes.values():
+            if cls.qualified_name == component_id:
+                return cls
         return None
 
     def find_component_by_name(
@@ -273,16 +464,16 @@ class GraphService:
         Returns:
             GraphResponse containing the CFG
         """
-        ir = self.get_ir(repo_path)
-        if not ir:
-            ir = self.parse_repository(repo_path)
-
-        func_ir = ir.functions.get(component_id)
+        func_ir = self._resolve_function_ir(repo_path, component_id)
         if not func_ir:
-            return GraphResponse(
-                success=False,
-                message=f"Function not found: {component_id}"
-            )
+            comps = self.get_components(repo_path)
+            if comps and component_id in comps:
+                lang = getattr(comps[component_id], "language", "unknown")
+                return GraphResponse(
+                    success=False,
+                    message=f"CFG is only available for Python components (selected: {lang})",
+                )
+            return GraphResponse(success=False, message=f"Function not found: {component_id}")
 
         try:
             cfg = build_cfg(func_ir)
@@ -311,16 +502,16 @@ class GraphService:
         Returns:
             GraphResponse containing the PDG
         """
-        ir = self.get_ir(repo_path)
-        if not ir:
-            ir = self.parse_repository(repo_path)
-
-        func_ir = ir.functions.get(component_id)
+        func_ir = self._resolve_function_ir(repo_path, component_id)
         if not func_ir:
-            return GraphResponse(
-                success=False,
-                message=f"Function not found: {component_id}"
-            )
+            comps = self.get_components(repo_path)
+            if comps and component_id in comps:
+                lang = getattr(comps[component_id], "language", "unknown")
+                return GraphResponse(
+                    success=False,
+                    message=f"PDG is only available for Python components (selected: {lang})",
+                )
+            return GraphResponse(success=False, message=f"Function not found: {component_id}")
 
         try:
             if use_reaching_defs:
@@ -354,25 +545,144 @@ class GraphService:
         Returns:
             GraphResponse containing the DAG
         """
-        ir = self.get_ir(repo_path)
-        if not ir:
-            ir = self.parse_repository(repo_path)
+        # Prefer Navigator multi-language components for DAG.
+        components = self.get_components(repo_path)
+        if components is None:
+            components = self.parse_repository_components(repo_path)
 
         try:
-            if component_id:
-                dag = build_neighborhood_dag(ir, component_id, neighborhood_depth)
-            elif file_path:
-                dag = build_file_dag(ir, file_path)
-            else:
-                dag = build_dag(ir)
+            allowed_raw_types = {"class", "function", "arrow_function", "method", "constructor"}
 
-            return GraphResponse(success=True, data=dag)
-        except Exception as e:
-            logger.error(f"Error building DAG: {e}")
-            return GraphResponse(
-                success=False,
-                message=f"Error building DAG: {str(e)}"
+            # Filter nodes
+            if file_path:
+                selected_ids = {
+                    cid for cid, comp in components.items()
+                    if comp.location.file_path == file_path
+                }
+            else:
+                selected_ids = set(components.keys())
+
+            # Keep DAG focused on callable/structural components.
+            selected_ids = {
+                cid
+                for cid in selected_ids
+                if getattr(components[cid].type, "value", components[cid].type) in allowed_raw_types
+            }
+
+            # Build reverse adjacency for neighborhood expansion
+            dependents_by_dep: Dict[str, List[str]] = {}
+            for cid, comp in components.items():
+                raw_type = getattr(comp.type, "value", comp.type)
+                if raw_type not in allowed_raw_types:
+                    continue
+                for dep in comp.depends_on:
+                    dependents_by_dep.setdefault(dep, []).append(cid)
+
+            if component_id:
+                # Neighborhood expansion in both directions (dependencies + dependents)
+                frontier = {component_id}
+                neighborhood = {component_id}
+                for _ in range(max(neighborhood_depth, 1)):
+                    next_frontier: Set[str] = set()
+                    for nid in frontier:
+                        comp = components.get(nid)
+                        if comp:
+                            # Only follow edges to allowed component types.
+                            for dep in comp.depends_on:
+                                if dep in components and getattr(components[dep].type, "value", components[dep].type) in allowed_raw_types:
+                                    next_frontier.add(dep)
+                        next_frontier.update(dependents_by_dep.get(nid, []))
+                    next_frontier -= neighborhood
+                    neighborhood |= next_frontier
+                    frontier = next_frontier
+                    if not frontier:
+                        break
+                selected_ids &= neighborhood
+
+            # Ensure we include any dependencies that are referenced but not present
+            # as components (create placeholder nodes so edges don't dangle).
+            placeholder_nodes: Dict[str, GraphNode] = {}
+            for cid in list(selected_ids):
+                comp = components.get(cid)
+                if not comp:
+                    continue
+                for dep in comp.depends_on:
+                    if dep not in selected_ids and dep not in components:
+                        placeholder_nodes[dep] = GraphNode(
+                            id=dep,
+                            label=dep,
+                            type="module",
+                        )
+
+            # Nodes
+            graph_nodes: List[GraphNode] = []
+            i = 0
+            for cid in sorted(selected_ids):
+                comp = components.get(cid)
+                if not comp:
+                    continue
+                raw_type = getattr(comp.type, "value", comp.type)
+                node_type = raw_type if raw_type in ("function", "method", "class", "module") else "function"
+                graph_nodes.append(
+                    GraphNode(
+                        id=cid,
+                        label=comp.name or cid,
+                        type=node_type,
+                        x=100 + (i % 4) * 220,
+                        y=60 + (i // 4) * 80,
+                        line=comp.location.start_line,
+                        code=comp.signature,
+                        metadata={
+                            "file_path": comp.location.file_path,
+                            "language": comp.language,
+                        },
+                    )
+                )
+                i += 1
+
+            graph_nodes.extend(placeholder_nodes.values())
+            node_ids = {n.id for n in graph_nodes}
+
+            # Edges
+            graph_edges: List[GraphEdge] = []
+            edge_counter = 0
+            for cid in sorted(selected_ids):
+                comp = components.get(cid)
+                if not comp:
+                    continue
+                for dep in comp.depends_on:
+                    if dep not in selected_ids and dep not in placeholder_nodes:
+                        continue
+                    if dep not in node_ids or cid not in node_ids:
+                        continue
+                    edge_counter += 1
+                    graph_edges.append(
+                        GraphEdge(
+                            id=f"edge_{edge_counter}",
+                            source=dep,
+                            target=cid,
+                            type="call",
+                        )
+                    )
+
+            dag_graph = Graph(
+                id=f"dag_{self._get_cache_key(repo_path)}",
+                name="DAG: Repository Dependencies",
+                type="dag",
+                nodes=graph_nodes,
+                edges=graph_edges,
+                metadata={
+                    "node_count": len(graph_nodes),
+                    "edge_count": len(graph_edges),
+                    "neighborhood_depth": neighborhood_depth if component_id else None,
+                    "file_path": file_path,
+                },
             )
+
+            return GraphResponse(success=True, data=dag_graph)
+        except Exception as e:
+            logger.error(f"Error building DAG (navigator): {e}")
+            return GraphResponse(success=False, message=f"Error building DAG: {str(e)}")
 
     def get_dag_dict(self, repo_path: str) -> Dict[str, List[str]]:
         """
@@ -381,6 +691,10 @@ class GraphService:
         Returns:
             Dict mapping component names to their dependency names
         """
+        components = self.get_components(repo_path)
+        if components is not None:
+            return {cid: list(comp.depends_on) for cid, comp in components.items()}
+
         ir = self.get_ir(repo_path)
         if not ir:
             ir = self.parse_repository(repo_path)
@@ -445,55 +759,19 @@ class GraphService:
         Returns:
             GraphResponse containing the HPG
         """
-        ir = self.get_ir(repo_path)
-        if not ir:
-            ir = self.parse_repository(repo_path)
-
-        func_ir = ir.functions.get(component_id)
+        func_ir = self._resolve_function_ir(repo_path, component_id)
         if not func_ir:
-            return GraphResponse(
-                success=False,
-                message=f"Function not found: {component_id}"
-            )
+            comps = self.get_components(repo_path)
+            if comps and component_id in comps:
+                lang = getattr(comps[component_id], "language", "unknown")
+                return GraphResponse(
+                    success=False,
+                    message=f"HPG is only available for Python components (selected: {lang})",
+                )
+            return GraphResponse(success=False, message=f"Function not found: {component_id}")
 
         try:
-            # Build CFG
-            cfg = build_cfg(func_ir)
-
-            # Build PDG
-            pdg = build_pdg(func_ir)
-
-            # Combine: use CFG nodes/edges as base, add PDG data dependency edges
-            hpg_nodes = cfg.nodes.copy()
-            hpg_edges = cfg.edges.copy()
-
-            # Add data dependency edges from PDG
-            edge_id_offset = len(hpg_edges)
-            for pdg_edge in pdg.edges:
-                if pdg_edge.type == "data":
-                    # Map PDG node IDs to CFG node IDs if possible
-                    # For simplicity, we'll include PDG edges directly
-                    new_edge = pdg_edge.model_copy()
-                    new_edge.id = f"hpg_edge_{edge_id_offset}"
-                    edge_id_offset += 1
-                    hpg_edges.append(new_edge)
-
-            hpg = Graph(
-                id=f"hpg_{component_id}",
-                name=f"HPG: {func_ir.name}",
-                type="hpg",
-                nodes=hpg_nodes,
-                edges=hpg_edges,
-                component_id=component_id,
-                component_name=func_ir.name,
-                file_path=func_ir.file_path,
-                metadata={
-                    "cfg_nodes": len(cfg.nodes),
-                    "cfg_edges": len(cfg.edges),
-                    "pdg_data_edges": sum(1 for e in pdg.edges if e.type == "data")
-                }
-            )
-
+            hpg = build_hpg(func_ir)
             return GraphResponse(success=True, data=hpg)
         except Exception as e:
             logger.error(f"Error building HPG: {e}")

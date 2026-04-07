@@ -72,7 +72,7 @@ class DAGRequest(BaseModel):
 # =============================================================================
 
 @router.post("/parse", response_model=ParseResponse)
-async def parse_repository(request: ParseRequest):
+def parse_repository(request: ParseRequest):
     """
     Parse a repository to build IR.
 
@@ -89,11 +89,22 @@ async def parse_repository(request: ParseRequest):
                 detail=f"Invalid repository path: {request.repo_path}"
             )
 
-        ir = service.parse_repository(
-            request.repo_path,
-            force=request.force,
-            exclude_patterns=request.exclude_patterns
-        )
+        # 1) Multi-language component IR (Navigator) for repo-wide graphs
+        try:
+            service.parse_repository_components(request.repo_path, force=request.force)
+        except Exception as nav_exc:
+            # Do not hard-fail parse if Navigator has an issue; CFG/PDG/HPG may still work for Python.
+            logger.warning(f"Navigator component parse failed: {nav_exc}")
+
+        # 2) Python statement-level IR for CFG/PDG/HPG
+        try:
+            service.parse_repository(
+                request.repo_path,
+                force=request.force,
+                exclude_patterns=request.exclude_patterns
+            )
+        except Exception as py_exc:
+            logger.warning(f"Python IR parse failed: {py_exc}")
 
         status = service.get_parse_status(request.repo_path)
 
@@ -103,7 +114,7 @@ async def parse_repository(request: ParseRequest):
             file_count=status.file_count,
             function_count=status.function_count,
             class_count=status.class_count,
-            errors=status.errors
+            errors=status.errors,
         )
     except Exception as e:
         logger.error(f"Error parsing repository: {e}")
@@ -111,7 +122,7 @@ async def parse_repository(request: ParseRequest):
 
 
 @router.get("/parse/status", response_model=ParseStatusResponse)
-async def get_parse_status(
+def get_parse_status(
     repo_path: str = Query(..., description="Repository path")
 ):
     """Get parsing status for a repository"""
@@ -120,7 +131,7 @@ async def get_parse_status(
 
 
 @router.post("/parse/clear")
-async def clear_parse_cache(
+def clear_parse_cache(
     repo_path: Optional[str] = Query(None, description="Repository path (or all if omitted)")
 ):
     """Clear parsed IR cache"""
@@ -134,7 +145,7 @@ async def clear_parse_cache(
 # =============================================================================
 
 @router.get("/components", response_model=GraphListResponse)
-async def list_components(
+def list_components(
     repo_path: str = Query(..., description="Repository path"),
     component_type: Optional[str] = Query(None, description="Filter by type (function, method, class)"),
     file_path: Optional[str] = Query(None, description="Filter by file path")
@@ -159,7 +170,7 @@ async def list_components(
 
 
 @router.get("/component/{component_id}")
-async def get_component(
+def get_component(
     component_id: str,
     repo_path: str = Query(..., description="Repository path")
 ):
@@ -168,6 +179,20 @@ async def get_component(
 
     component = service.get_component(repo_path, component_id)
     if not component:
+        # Fallback to Navigator multi-language components
+        comps = service.get_components(repo_path)
+        if comps is None:
+            try:
+                comps = service.parse_repository_components(repo_path)
+            except Exception:
+                comps = None
+
+        if comps and component_id in comps:
+            return {
+                "success": True,
+                "data": comps[component_id].to_dict(),
+            }
+
         raise HTTPException(
             status_code=404,
             detail=f"Component not found: {component_id}"
@@ -184,7 +209,7 @@ async def get_component(
 # =============================================================================
 
 @router.get("/cfg/{component_id}", response_model=GraphResponse)
-async def get_cfg(
+def get_cfg(
     component_id: str,
     repo_path: str = Query(..., description="Repository path")
 ):
@@ -223,7 +248,7 @@ async def get_cfg(
 
 
 @router.post("/cfg", response_model=GraphResponse)
-async def get_cfg_post(request: ComponentGraphRequest):
+def get_cfg_post(request: ComponentGraphRequest):
     """Get CFG (POST version for complex paths)"""
     service = get_graph_service()
 
@@ -246,7 +271,7 @@ async def get_cfg_post(request: ComponentGraphRequest):
 # =============================================================================
 
 @router.get("/pdg/{component_id}", response_model=GraphResponse)
-async def get_pdg(
+def get_pdg(
     component_id: str,
     repo_path: str = Query(..., description="Repository path"),
     use_reaching_defs: bool = Query(False, description="Use reaching definitions analysis")
@@ -293,7 +318,7 @@ async def get_pdg(
 
 
 @router.post("/pdg", response_model=GraphResponse)
-async def get_pdg_post(
+def get_pdg_post(
     request: ComponentGraphRequest,
     use_reaching_defs: bool = Query(False)
 ):
@@ -319,7 +344,7 @@ async def get_pdg_post(
 # =============================================================================
 
 @router.get("/dag", response_model=GraphResponse)
-async def get_dag(
+def get_dag(
     repo_path: str = Query(..., description="Repository path"),
     file_path: Optional[str] = Query(None, description="Filter to specific file"),
     component_id: Optional[str] = Query(None, description="Get neighborhood for component"),
@@ -366,7 +391,7 @@ async def get_dag(
 
 
 @router.post("/dag", response_model=GraphResponse)
-async def get_dag_post(request: DAGRequest):
+def get_dag_post(request: DAGRequest):
     """Get DAG (POST version)"""
     service = get_graph_service()
 
@@ -390,7 +415,7 @@ async def get_dag_post(request: DAGRequest):
 
 
 @router.get("/dag/dict")
-async def get_dag_dict(
+def get_dag_dict(
     repo_path: str = Query(..., description="Repository path")
 ):
     """
@@ -421,7 +446,7 @@ async def get_dag_dict(
 # =============================================================================
 
 @router.get("/hpg/{component_id}", response_model=GraphResponse)
-async def get_hpg(
+def get_hpg(
     component_id: str,
     repo_path: str = Query(..., description="Repository path")
 ):
@@ -456,7 +481,7 @@ async def get_hpg(
 # =============================================================================
 
 @router.get("/all/{component_id}", response_model=MultiGraphResponse)
-async def get_all_graphs(
+def get_all_graphs(
     component_id: str,
     repo_path: str = Query(..., description="Repository path")
 ):
@@ -481,7 +506,7 @@ async def get_all_graphs(
 # =============================================================================
 
 @router.get("/find")
-async def find_component(
+def find_component(
     repo_path: str = Query(..., description="Repository path"),
     name: str = Query(..., description="Component name to find"),
     file_path: Optional[str] = Query(None, description="Filter by file")
