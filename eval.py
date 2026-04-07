@@ -17,13 +17,25 @@ class User:
 
     def __init__(self, name: str, age: int):
         """
-        Create a new User for authentication and access control.
+        Stores user identity and age to enable age-based eligibility checks for protected resources.
+
+        Creates a User instance that holds authentication data and supports
+        adult status verification via the is_adult() method using an 18+ threshold.
 
         Args:
-            name (str): Full display name. Must be a non-empty string,
-                        used in logs and UI display.
-            age (int): User's age in years. Must be >= 0.
-                       Determines access to age-restricted features.
+            name: User's full display name or identifier. Must be a non-empty string.
+                  Used for logging, UI display, and audit trails throughout the auth pipeline.
+            age: User's age in years. Must be a non-negative integer (>= 0).
+                 Used to determine adult status (18+ threshold) for gating access to
+                 age-restricted content and operations.
+
+        Attributes:
+            name (str): The stored display name used for identification.
+            age (int): The stored age value used for eligibility checks via is_adult().
+
+        Raises:
+            Implicit: No validation is performed. Callers must ensure name is non-empty
+                     and age is non-negative to meet the documented contract.
         """
         self.name = name
         self.age = age

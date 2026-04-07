@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from collections import defaultdict
 
 from .models import (
-    FunctionIR, IRStatement, StatementType, Variable,
+    FunctionIR, IRStatement, StatementType,
     Graph, GraphNode, GraphEdge, DependencyType
 )
 
@@ -76,6 +76,86 @@ class PDGBuilder:
         # Control dependency tracking
         self.control_stack: List[str] = []  # Stack of branch statement IDs
 
+        # Methods that mutate their receiver (treat as defining the receiver)
+        self._mutating_methods: Set[str] = {
+            # list
+            "append", "extend", "insert", "remove", "pop", "clear", "sort", "reverse",
+            # dict
+            "update", "setdefault",
+            # set
+            "add", "discard",
+        }
+
+    @staticmethod
+    def _is_likely_variable_reference(value: str) -> bool:
+        """Heuristic for whether a string looks like a variable reference.
+
+        The IR call extractor may include literals (e.g. "'foo'"), <expr>, etc.
+        We only want identifier-ish tokens here.
+        """
+        if not value:
+            return False
+        if value.startswith("<"):
+            return False
+        if value.startswith("'") or value.startswith('"'):
+            return False
+        # Allow dotted names from VariableVisitor (e.g., os.path)
+        if "." in value:
+            return all(part.isidentifier() for part in value.split("."))
+        return value.isidentifier()
+
+    def _collect_statement_uses(self, stmt: IRStatement) -> Set[str]:
+        """Collect variable uses for a statement at statement granularity."""
+        def normalize(name: str) -> str:
+            # Reduce noise from attribute paths like `car.values` by treating them
+            # as uses of the base variable (`car`) at statement granularity.
+            if "." in name:
+                base = name.split(".", 1)[0]
+                if base.isidentifier():
+                    return base
+            return name
+
+        uses_from_ast: Set[str] = {normalize(v.name) for v in stmt.uses}
+        arg_uses: Set[str] = set()
+        receiver_uses: Set[str] = set()
+        callee_names: Set[str] = set()
+
+        # Some uses may appear only inside call args in the simplified call extractor.
+        # Also, the AST-level variable collector includes the callee identifier (e.g., `open`,
+        # `os.path.join`, `obj.method`) as a "use"; that's usually not meaningful for
+        # value-flow edges, so we remove callees but keep receiver/args.
+        for call in stmt.calls:
+            if call.name:
+                callee_names.add(call.name)
+            if call.module and call.name:
+                callee_names.add(f"{call.module}.{call.name}")
+            if call.receiver and call.name:
+                callee_names.add(f"{call.receiver}.{call.name}")
+
+            for arg in call.args:
+                if self._is_likely_variable_reference(arg):
+                    arg_uses.add(normalize(arg))
+            if call.receiver and self._is_likely_variable_reference(call.receiver):
+                receiver_uses.add(normalize(call.receiver))
+
+        return (uses_from_ast - callee_names) | arg_uses | receiver_uses
+
+    def _collect_statement_definitions(self, stmt: IRStatement) -> Set[str]:
+        """Collect variable definitions for a statement at statement granularity.
+
+        Includes explicit IR definitions and receiver mutations for common
+        mutating methods (e.g., answers.append, result.append).
+        """
+        definitions: Set[str] = {v.name for v in stmt.definitions}
+
+        for call in stmt.calls:
+            if call.receiver and call.name in self._mutating_methods:
+                # Only consider a simple identifier receiver at this abstraction level.
+                if call.receiver.isidentifier():
+                    definitions.add(call.receiver)
+
+        return definitions
+
     def _new_node_id(self) -> str:
         """Generate a new node ID"""
         self._node_counter += 1
@@ -112,7 +192,7 @@ class PDGBuilder:
         self.nodes[node_id] = node
         return node
 
-    def _add_data_dependency(self, from_id: str, to_id: str, variable: str):
+    def _add_data_dependency(self, from_id: str, to_id: str, variable: Optional[str]):
         """Add a data dependency edge"""
         self.edges.append(PDGEdge(
             source=from_id,
@@ -154,8 +234,10 @@ class PDGBuilder:
         )
         self.entry_id = entry.id
 
-        # Create parameter nodes
-        param_nodes = []
+        # Track the most recent defining node for each variable name.
+        last_definition: Dict[str, str] = {}
+
+        # Create parameter nodes (definitions)
         for param in func_ir.parameters:
             param_node = self._create_node(
                 "parameter",
@@ -164,99 +246,86 @@ class PDGBuilder:
                 code=param.name
             )
             param_node.definitions.add(param.name)
-
-            # Entry -> Parameter (control dependency)
             self._add_control_dependency(entry.id, param_node.id)
+            last_definition[param.name] = param_node.id
 
-            # Track parameter as defined
-            self.var_info[param.name].name = param.name
-            self.var_info[param.name].definitions.append(param_node.id)
+        # Create one node per statement (calls are merged into the statement node)
+        # and build nested control dependencies using a simple line-range stack.
+        stmt_to_node: Dict[str, str] = {}
+        stmt_parent: Dict[str, str] = {}
+        control_stack: List[Tuple[str, int, StatementType]] = []  # (parent_node_id, end_line, type)
 
-            param_nodes.append(param_node)
+        def pop_finished_blocks(current_line: int):
+            while control_stack and current_line > control_stack[-1][1]:
+                control_stack.pop()
 
-        # Process all statements
-        self._process_statements(func_ir.statements, entry.id)
-
-        # Build data dependency edges based on def-use chains
-        self._build_data_dependencies()
-
-        return self._to_graph(func_ir)
-
-    def _process_statements(
-        self,
-        statements: List[IRStatement],
-        control_parent: str
-    ):
-        """Process statements and build PDG nodes"""
-        for stmt in statements:
-            # Skip synthetic statements
+        for stmt in func_ir.statements:
             if stmt.type in (StatementType.ELSE, StatementType.ELIF):
                 continue
 
-            # Create node for statement
-            node = self._create_node(
+            pop_finished_blocks(stmt.line)
+            parent_id = control_stack[-1][0] if control_stack else entry.id
+            stmt_parent[stmt.id] = parent_id
+
+            stmt_node = self._create_node(
                 stmt.type.value,
                 self._get_label(stmt),
-                statement=stmt
+                statement=stmt,
             )
+            stmt_to_node[stmt.id] = stmt_node.id
+            self._add_control_dependency(parent_id, stmt_node.id)
 
-            # Add control dependency from current control parent
-            self._add_control_dependency(control_parent, node.id)
+            # If this is a block header, push it so subsequent statements become control-dependent on it.
+            if stmt.type in (StatementType.IF, StatementType.FOR, StatementType.WHILE, StatementType.TRY, StatementType.WITH):
+                if stmt.end_line and stmt.end_line >= stmt.line:
+                    control_stack.append((stmt_node.id, stmt.end_line, stmt.type))
 
-            # Update def-use information
-            for var in stmt.definitions:
-                var_name = var.name
-                self.var_info[var_name].name = var_name
-                self.var_info[var_name].definitions.append(node.id)
-
-            for var in stmt.uses:
-                var_name = var.name
-                self.var_info[var_name].name = var_name
-                self.var_info[var_name].uses.append(node.id)
-
-            # Add call dependencies
-            for call in stmt.calls:
-                call_node = self._create_node(
-                    "call",
-                    f"call: {call.name}",
-                    line=call.line,
-                    code=f"{call.name}(...)"
-                )
-                self._add_call_dependency(node.id, call_node.id)
-
-                # Arguments create data dependencies
-                for arg in call.args:
-                    if arg and not arg.startswith("<") and not arg.startswith("'"):
-                        self.var_info[arg].uses.append(call_node.id)
-
-            # Handle branch statements - they control subsequent statements
-            if stmt.type in (StatementType.IF, StatementType.FOR,
-                            StatementType.WHILE, StatementType.TRY):
-                # Statements in the body are control-dependent on this branch
-                # This is simplified - in a full implementation we'd track
-                # the actual nested structure
-                pass
-
-    def _build_data_dependencies(self):
-        """Build data dependency edges from def-use information"""
-        for var_name, info in self.var_info.items():
-            if not info.definitions or not info.uses:
+        # Add direct data dependencies based on last definition (no transitive expansion).
+        emitted: Set[Tuple[str, str, str]] = set()
+        for stmt in func_ir.statements:
+            node_id = stmt_to_node.get(stmt.id)
+            if not node_id:
                 continue
 
-            # For each use, find reaching definitions
-            # Simplified: connect all definitions to all uses
-            # A full implementation would do reaching definitions analysis
-            for def_node_id in info.definitions:
-                for use_node_id in info.uses:
-                    if def_node_id != use_node_id:
-                        self._add_data_dependency(def_node_id, use_node_id, var_name)
+            # Route through condition/loop headers: a statement in a controlled region
+            # depends on the immediate controlling predicate/header result.
+            parent_id = stmt_parent.get(stmt.id)
+            if parent_id and parent_id != entry.id and parent_id != node_id:
+                parent_node = self.nodes.get(parent_id)
+                parent_stmt_type = parent_node.statement.type if parent_node and parent_node.statement else None
+                if parent_stmt_type in (StatementType.IF, StatementType.WHILE, StatementType.FOR):
+                    key = (parent_id, node_id, "guard")
+                    if key not in emitted:
+                        emitted.add(key)
+                        self._add_data_dependency(parent_id, node_id, "guard")
+
+            uses = self._collect_statement_uses(stmt)
+            for var_name in sorted(uses):
+                def_node_id = last_definition.get(var_name)
+                if not def_node_id:
+                    # No local definition/parameter in this function; do not attach
+                    # a data-source edge to Entry. Entry is control-only.
+                    continue
+                if def_node_id == node_id:
+                    continue
+                key = (def_node_id, node_id, var_name)
+                if key in emitted:
+                    continue
+                emitted.add(key)
+                self._add_data_dependency(def_node_id, node_id, var_name)
+
+            for var_name in sorted(self._collect_statement_definitions(stmt)):
+                last_definition[var_name] = node_id
+
+        return self._to_graph(func_ir)
 
     def _get_label(self, stmt: IRStatement) -> str:
         """Get a short label for a statement"""
         if stmt.type == StatementType.ASSIGNMENT:
             defs = [v.name for v in stmt.definitions]
-            uses = [v.name for v in stmt.uses[:2]]
             if defs:
+                if stmt.calls:
+                    return f"{defs[0]} = {stmt.calls[0].name}(...)"[:30]
                 return f"{', '.join(defs[:2])} = ..."
             return "assign"
 
@@ -277,7 +346,10 @@ class PDGBuilder:
 
         elif stmt.type == StatementType.CALL:
             if stmt.calls:
-                return f"{stmt.calls[0].name}(...)"
+                call = stmt.calls[0]
+                if call.receiver:
+                    return f"{call.receiver}.{call.name}(...)"[:30]
+                return f"{call.name}(...)"
             return "call"
 
         else:
@@ -288,29 +360,22 @@ class PDGBuilder:
         graph_nodes: List[GraphNode] = []
         graph_edges: List[GraphEdge] = []
 
-        # Group nodes by type for layout
-        entry_nodes = []
-        param_nodes = []
-        statement_nodes = []
-        call_nodes = []
-        return_nodes = []
+        # Group nodes for layout
+        entry_nodes: List[PDGNode] = []
+        param_nodes: List[PDGNode] = []
+        statement_nodes: List[PDGNode] = []
 
-        for node_id, node in self.nodes.items():
+        for node in self.nodes.values():
             if node.node_type == "entry":
                 entry_nodes.append(node)
             elif node.node_type == "parameter":
                 param_nodes.append(node)
-            elif node.node_type == "return":
-                return_nodes.append(node)
-            elif node.node_type == "call":
-                call_nodes.append(node)
             else:
                 statement_nodes.append(node)
 
-        # Layout: Entry at top, then params, then statements, calls on side, returns at bottom
         y_offset = 50
 
-        # Entry node
+        # Entry at top
         for node in entry_nodes:
             graph_nodes.append(GraphNode(
                 id=node.id,
@@ -322,85 +387,46 @@ class PDGBuilder:
                 code=node.code,
                 metadata={
                     "definitions": list(node.definitions),
-                    "uses": list(node.uses)
-                }
+                    "uses": list(node.uses),
+                },
             ))
         y_offset += 80
 
-        # Parameter nodes
+        # Parameters row
         for i, node in enumerate(param_nodes):
-            x = 100 + i * 120
             graph_nodes.append(GraphNode(
                 id=node.id,
                 label=node.label,
                 type=node.node_type,
-                x=x,
+                x=100 + i * 140,
                 y=y_offset,
                 line=node.line,
                 code=node.code,
                 metadata={
                     "definitions": list(node.definitions),
-                    "uses": list(node.uses)
-                }
+                    "uses": list(node.uses),
+                },
             ))
         if param_nodes:
             y_offset += 80
 
-        # Statement nodes
-        for i, node in enumerate(statement_nodes):
+        # Statements grid
+        for i, node in enumerate(sorted(statement_nodes, key=lambda n: (n.line or 10**9, n.id))):
             row = i // 3
             col = i % 3
-            x = 100 + col * 180
-            y = y_offset + row * 70
             graph_nodes.append(GraphNode(
                 id=node.id,
                 label=node.label,
                 type=node.node_type,
-                x=x,
-                y=y,
+                x=100 + col * 220,
+                y=y_offset + row * 70,
                 line=node.line,
                 code=node.code,
                 metadata={
                     "definitions": list(node.definitions),
-                    "uses": list(node.uses)
-                }
-            ))
-
-        if statement_nodes:
-            rows = (len(statement_nodes) + 2) // 3
-            y_offset += rows * 70 + 30
-
-        # Call nodes (on the right side)
-        for i, node in enumerate(call_nodes):
-            graph_nodes.append(GraphNode(
-                id=node.id,
-                label=node.label,
-                type=node.node_type,
-                x=500,
-                y=200 + i * 60,
-                line=node.line,
-                code=node.code,
-                metadata={
-                    "definitions": list(node.definitions),
-                    "uses": list(node.uses)
-                }
-            ))
-
-        # Return nodes at bottom
-        for i, node in enumerate(return_nodes):
-            x = 200 + i * 150
-            graph_nodes.append(GraphNode(
-                id=node.id,
-                label=node.label,
-                type=node.node_type,
-                x=x,
-                y=y_offset,
-                line=node.line,
-                code=node.code,
-                metadata={
-                    "definitions": list(node.definitions),
-                    "uses": list(node.uses)
-                }
+                    "uses": list(node.uses),
+                    **({"statement_id": node.statement.id} if node.statement else {}),
+                },
             ))
 
         # Create edges
@@ -451,9 +477,13 @@ class ReachingDefinitionsAnalysis:
     This determines which definitions can reach a given use.
     """
 
-    def __init__(self, func_ir: FunctionIR):
+    def __init__(self, func_ir: FunctionIR, param_def_ids: Optional[Dict[str, str]] = None):
         self.func_ir = func_ir
         self.statements = func_ir.statements
+
+        # Optional: seed reaching definitions with parameter definitions.
+        # Maps variable name -> pseudo-definition id.
+        self.param_def_ids: Dict[str, str] = param_def_ids or {}
 
         # gen[s] = definitions generated by statement s
         self.gen: Dict[str, Set[Tuple[str, str]]] = defaultdict(set)  # (var_name, stmt_id)
@@ -475,6 +505,10 @@ class ReachingDefinitionsAnalysis:
         Run reaching definitions analysis.
         Returns reach_in for each statement.
         """
+        # Seed all_defs with parameter pseudo-definitions so assignments will kill them.
+        for var_name, def_id in self.param_def_ids.items():
+            self.all_defs[var_name].add(def_id)
+
         # First pass: compute gen and kill sets
         for stmt in self.statements:
             for var in stmt.definitions:
@@ -493,7 +527,7 @@ class ReachingDefinitionsAnalysis:
         changed = True
         while changed:
             changed = False
-            current_in: Set[Tuple[str, str]] = set()
+            current_in: Set[Tuple[str, str]] = {(var, def_id) for var, def_id in self.param_def_ids.items()}
 
             for stmt in self.statements:
                 old_out = self.reach_out[stmt.id].copy()
@@ -521,66 +555,11 @@ def build_pdg(func_ir: FunctionIR) -> Graph:
 
 
 def build_pdg_with_reaching_defs(func_ir: FunctionIR) -> Graph:
-    """Build PDG with reaching definitions analysis for more accurate data dependencies"""
-    # Run reaching definitions analysis
-    rd_analysis = ReachingDefinitionsAnalysis(func_ir)
-    reaching_defs = rd_analysis.analyze()
+    """Build PDG with reaching definitions analysis.
 
-    # Build PDG using reaching definitions
+    Note: the current PDG implementation is statement-level and emits direct
+    def→use dependencies using a "most recent definition" heuristic.
+    For consistency, this entrypoint returns the same structure as `build_pdg`.
+    """
     builder = PDGBuilder()
-    builder.nodes = {}
-    builder.edges = []
-    builder._node_counter = 0
-    builder.var_info = defaultdict(lambda: DefUseInfo(name=""))
-
-    # Create entry node
-    entry = builder._create_node(
-        "entry",
-        f"Entry: {func_ir.name}",
-        line=func_ir.start_line
-    )
-    builder.entry_id = entry.id
-
-    # Create parameter nodes
-    for param in func_ir.parameters:
-        param_node = builder._create_node(
-            "parameter",
-            f"param: {param.name}",
-            line=func_ir.start_line
-        )
-        param_node.definitions.add(param.name)
-        builder._add_control_dependency(entry.id, param_node.id)
-        builder.var_info[param.name].definitions.append(param_node.id)
-
-    # Create statement nodes
-    stmt_to_node: Dict[str, str] = {}
-    for stmt in func_ir.statements:
-        node = builder._create_node(
-            stmt.type.value,
-            builder._get_label(stmt),
-            statement=stmt
-        )
-        stmt_to_node[stmt.id] = node.id
-
-        # Control dependency
-        builder._add_control_dependency(entry.id, node.id)
-
-        # Track definitions
-        for var in stmt.definitions:
-            builder.var_info[var.name].definitions.append(node.id)
-
-    # Build data dependencies using reaching definitions
-    for stmt in func_ir.statements:
-        node_id = stmt_to_node.get(stmt.id)
-        if not node_id:
-            continue
-
-        for var in stmt.uses:
-            # Get reaching definitions for this use
-            for def_var, def_stmt_id in reaching_defs.get(stmt.id, set()):
-                if def_var == var.name:
-                    def_node_id = stmt_to_node.get(def_stmt_id)
-                    if def_node_id and def_node_id != node_id:
-                        builder._add_data_dependency(def_node_id, node_id, var.name)
-
-    return builder._to_graph(func_ir)
+    return builder.build(func_ir)

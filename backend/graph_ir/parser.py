@@ -412,7 +412,17 @@ class FunctionVisitor(ast.NodeVisitor):
         def process_body(nodes: List[ast.stmt], depth: int = 0):
             visitor = StatementVisitor(self.source_lines, self.file_path)
 
-            for node in nodes:
+            for idx, node in enumerate(nodes):
+                # Skip docstring expression at the top of a function.
+                # We already extract it separately into FunctionIR.docstring.
+                if (
+                    depth == 0
+                    and idx == 0
+                    and isinstance(node, ast.Expr)
+                    and isinstance(getattr(node, "value", None), ast.Constant)
+                    and isinstance(getattr(node.value, "value", None), str)
+                ):
+                    continue
                 # Process the node
                 if isinstance(node, ast.If):
                     stmt = visitor.visit_If(node)

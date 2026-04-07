@@ -54,23 +54,47 @@ class MultiLangCompletenessEvaluator(BaseEvaluator):
     # PUBLIC ENTRY POINT
     # ================================================================
 
-    def evaluate_component(self, component) -> float:
+    def evaluate_component(self, component, verbose: bool = False) -> float:
         """
         Evaluate completeness for a single CodeComponent.
 
         Args:
             component: A CodeComponent object from your extractor.
+            verbose: If True, print detailed logs about the evaluation.
 
         Returns:
-            float: Completeness score between 0 and 1.
+            float: Completeness score between 0 and 1, or -1 if component should be skipped.
         """
         language = getattr(component, 'language', None)
+        comp_name = getattr(component, 'name', 'unknown')
+        comp_type = getattr(component, 'type', None)
+        comp_type_str = comp_type.value if comp_type else 'unknown'
+        
+        # Skip global variables - they don't typically have docstrings
+        skip_types = ['global_variable', 'variable', 'constant']
+        if comp_type_str in skip_types:
+            if verbose:
+                print(f"\n[COMPLETENESS] Skipping: {comp_name} ({comp_type_str}) - not a documentable component")
+            self.score = -1  # Signal to skip this component
+            return self.score
+        
+        if verbose:
+            print(f"\n{'='*70}")
+            print(f"[COMPLETENESS] Evaluating: {comp_name} ({comp_type_str}) [{language}]")
+            print(f"{'='*70}")
+        
         if language not in LANGUAGE_CONFIG:
+            if verbose:
+                print(f"  [ERROR] Unsupported language: {language}")
             self.score = 0.0
             return self.score
 
         # Determine what sections are required for this component
         self.required_sections = self._get_required_sections(component, language)
+
+        if verbose:
+            print(f"\n  [REQUIRED SECTIONS] Based on component analysis:")
+            print(f"    → {self.required_sections}")
 
         # Initialize tracking dicts
         all_sections = ["summary", "description", "args", "returns", "raises", "examples", "attributes"]
@@ -80,14 +104,27 @@ class MultiLangCompletenessEvaluator(BaseEvaluator):
         # No docstring → score 0
         docstring = getattr(component, 'existing_docstring', None)
         if not docstring:
+            if verbose:
+                print(f"\n  [DOCSTRING] None/Empty - Score: 0.0")
             self.score = 0.0
             return self.score
 
+        if verbose:
+            print(f"\n  [DOCSTRING CONTENT]:")
+            # Show first 500 chars of docstring for context
+            docstring_preview = docstring[:500] + "..." if len(docstring) > 500 else docstring
+            for line in docstring_preview.split('\n'):
+                print(f"    | {line}")
+
         # Check each required section
+        if verbose:
+            print(f"\n  [SECTION CHECKS]:")
         for section in self.required_sections:
-            self.element_scores[section] = self._check_section(
-                section, docstring, language
-            )
+            present = self._check_section(section, docstring, language)
+            self.element_scores[section] = present
+            if verbose:
+                status = "✓ FOUND" if present else "✗ MISSING"
+                print(f"    {section:15} → {status}")
 
         # Score = present / required (equal weights, same as Python version)
         required_count = len(self.required_sections)
@@ -96,6 +133,15 @@ class MultiLangCompletenessEvaluator(BaseEvaluator):
         )
 
         self.score = round(present_count / required_count, 3) if required_count > 0 else 0.0
+        
+        if verbose:
+            print(f"\n  [SCORE CALCULATION]:")
+            print(f"    Sections present: {present_count}")
+            print(f"    Sections required: {required_count}")
+            print(f"    Formula: {present_count} / {required_count} = {self.score}")
+            print(f"\n  [FINAL COMPLETENESS SCORE]: {self.score}")
+            print(f"{'='*70}\n")
+        
         return self.score
 
     def evaluate_using_string(self, docstring: str, element_required: Dict, language: str) -> Dict:
@@ -154,13 +200,30 @@ class MultiLangCompletenessEvaluator(BaseEvaluator):
 
         required = ["summary"]
 
+        is_trivial = self._is_trivial_component(component, language)
+
         # Fields: only need summary (they're simple declarations)
         if comp_type in ("field", "static_field"):
             return required
 
-        # Description required for all public non-field components
-        if is_public and not is_private:
-            required.append("description")
+        # Description requirement:
+        # - For classes: require description unless they have Attributes section
+        # - For functions/methods: DON'T require separate description - a good summary is enough
+        #   (The summary line itself is descriptive. Requiring a separate "description"
+        #   paragraph is overly strict and penalizes well-written concise docstrings)
+        # - For constructors: don't require description (they're straightforward)
+        if is_public and not is_private and not is_trivial:
+            if comp_type == "class":
+                # For classes, require description only if no attributes defined
+                if language == "python":
+                    extracted_attrs = getattr(component, "attributes", []) or []
+                    has_attrs = bool(extracted_attrs)
+                    if not has_attrs:
+                        required.append("description")
+                else:
+                    # For non-Python classes, also require description
+                    required.append("description")
+            # Functions/methods: summary is sufficient, no separate description needed
 
         # Args required if there are parameters
         # For constructors, parameters list is populated
@@ -176,13 +239,9 @@ class MultiLangCompletenessEvaluator(BaseEvaluator):
         if self._has_exceptions(metadata, source_code, language):
             required.append("raises")
 
-        # Examples: required for public non-private non-underscore components
-        # Same rule as Python version
-        if is_public and not is_private:
-            if comp_type == "class":
-                required.append("examples")
-            elif comp_type in ("method", "function") and not name.startswith("_"):
-                required.append("examples")
+        # Examples are intentionally NOT required.
+        # Rationale: forcing examples encourages invented/unverifiable usage,
+        # which conflicts with the truthfulness constraint.
 
         # Attributes: only for classes in Java (JavaDoc doesn't have standard attributes section)
         # For JS/TS classes we check attributes too
@@ -193,7 +252,69 @@ class MultiLangCompletenessEvaluator(BaseEvaluator):
                     required.append("attributes")
             # Java: attributes not standard in JavaDoc — skip
 
+        # For Python classes, require Attributes when we can see fields.
+        if comp_type == "class" and language == "python":
+            extracted_attrs = getattr(component, "attributes", []) or []
+            if extracted_attrs:
+                required.append("attributes")
+
         return required
+
+    # ================================================================
+    # TRIVIALITY HEURISTIC
+    # ================================================================
+
+    def _is_trivial_component(self, component, language: str) -> bool:
+        """Heuristic: detect trivial helpers that shouldn't require description/examples.
+
+        Trivial means: very small body and simple behavior (single return/delegation).
+        This intentionally mirrors the WriterAgent's approach, but is self-contained.
+        """
+        src = getattr(component, 'source_code', '') or ''
+        if not src.strip():
+            return False
+
+        # Remove obvious comment-only lines
+        raw_lines = [ln.strip() for ln in src.splitlines() if ln.strip()]
+        filtered: List[str] = []
+        for ln in raw_lines:
+            if ln.startswith(('#', '//', '/*', '*', '*/')):
+                continue
+            filtered.append(ln)
+
+        if not filtered:
+            return False
+
+        # Drop signature-ish lines and braces
+        body_lines: List[str] = []
+        for ln in filtered:
+            if ln in ('{', '}', ')', ');'):
+                continue
+            if language in ('javascript', 'typescript'):
+                if ln.startswith(('export ', 'function ', 'async function', 'const ', 'let ', 'var ')) and ('{' in ln or '=>' in ln):
+                    continue
+            if language == 'python' and ln.startswith(('def ', 'async def ', 'class ')):
+                continue
+            if language == 'java' and (ln.startswith(('public ', 'private ', 'protected ', 'static ')) and '(' in ln and '{' in ln):
+                continue
+            body_lines.append(ln)
+
+        # Small body only
+        if len(body_lines) > 3:
+            return False
+
+        trivial_patterns = [
+            r'^return\b',
+            r'^return\s*\w+\s*\(',          # delegation
+            r'^return\s*\w+\s*[+\-*/]',     # simple arithmetic
+            r'^\w+\s*=\s*\w+\s*[+\-*/]',   # assignment arithmetic
+            r'^(self|this)\.\w+\s*=\s*\w+\b',  # simple field assignment (constructors/data holders)
+        ]
+        for ln in body_lines:
+            if not any(re.match(p, ln) for p in trivial_patterns):
+                return False
+
+        return True
 
     def _has_return_value(self, return_type: Optional[str], source_code: str, language: str) -> bool:
         """

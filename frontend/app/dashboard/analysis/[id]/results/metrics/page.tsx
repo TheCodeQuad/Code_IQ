@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useParams } from "next/navigation"
 import Link from "next/link"
 import { useAnalysis } from "@/lib/analysis-context"
@@ -121,6 +121,7 @@ export default function MetricsPage() {
   const [activeTab, setActiveTab] = useState<"overview" | "files" | "history">("overview")
   const [selectedMetric, setSelectedMetric] = useState<string | null>(null)
   const [isEvaluating, setIsEvaluating] = useState(false)
+  const [isLoadingResults, setIsLoadingResults] = useState(true)
   const [evaluationStep, setEvaluationStep] = useState<EvaluationStep>("idle")
   const [evaluationResults, setEvaluationResults] = useState<any>(null)
   const [stageResults, setStageResults] = useState<Record<string, any>>({})
@@ -145,6 +146,52 @@ export default function MetricsPage() {
       return null
     }
   }
+
+  // Fetch saved evaluation results on page load
+  useEffect(() => {
+    const fetchSavedResults = async () => {
+      const repoName = await getRepoName()
+      if (!repoName) {
+        setIsLoadingResults(false)
+        return
+      }
+
+      try {
+        const response = await fetch(`/api/evaluate?repo_name=${encodeURIComponent(repoName)}`)
+        if (response.ok) {
+          const payload = await response.json()
+          
+          // Normalize the payload - scores come as percentages (0-100)
+          const normalized = {
+            overall_quality_score: (payload.overall_quality_score || 0) / 100,
+            completeness: (payload.completeness?.score || 0) / 100,
+            helpfulness: (payload.helpfulness?.score || 0) / 100,
+            truthfulness: (payload.truthfulness?.score || 0) / 100,
+            completeness_full: payload.completeness?.details || null,
+            helpfulness_full: payload.helpfulness?.details || null,
+            truthfulness_full: payload.truthfulness?.details || null,
+            output_file: payload.output_file,
+          }
+
+          setEvaluationResults(normalized)
+          setStageResults({
+            completeness: normalized.completeness_full,
+            helpfulness: normalized.helpfulness_full,
+            truthfulness: normalized.truthfulness_full,
+            overall: normalized,
+          })
+          setEvaluationStep("complete")
+          console.log("✅ Loaded saved evaluation results:", normalized)
+        }
+      } catch (error) {
+        console.log("No saved evaluation results found")
+      } finally {
+        setIsLoadingResults(false)
+      }
+    }
+
+    fetchSavedResults()
+  }, [analysisId])
 
   const normalizeEvaluationPayload = (payload: any) => {
     const completenessRaw = payload?.completeness

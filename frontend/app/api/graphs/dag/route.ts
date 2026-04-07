@@ -2,6 +2,14 @@ import { NextRequest, NextResponse } from "next/server"
 
 const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8000"
 
+function safeJsonParse(text: string): any | null {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const repoPath = searchParams.get("repo_path")
@@ -29,22 +37,48 @@ export async function GET(request: NextRequest) {
       params.set("file_path", filePath)
     }
 
-    const response = await fetch(
-      `${BACKEND_URL}/api/graphs/dag?${params.toString()}`,
-      {
-        headers: {
-          "Content-Type": "application/json",
-        },
-      }
-    )
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 60_000)
 
-    const data = await response.json()
-    return NextResponse.json(data, { status: response.status })
+    try {
+      const response = await fetch(
+        `${BACKEND_URL}/api/graphs/dag?${params.toString()}`,
+        {
+          headers: {
+            "Content-Type": "application/json",
+          },
+          signal: controller.signal,
+        }
+      )
+
+      const text = await response.text()
+      const json = safeJsonParse(text)
+
+      if (json !== null) {
+        return NextResponse.json(json, { status: response.status })
+      }
+
+      return new NextResponse(text, {
+        status: response.status,
+        headers: {
+          "Content-Type": response.headers.get("content-type") || "text/plain; charset=utf-8",
+        },
+      })
+    } finally {
+      clearTimeout(timeoutId)
+    }
   } catch (error) {
     console.error("Error fetching DAG:", error)
+    const isAbort = error instanceof Error && error.name === "AbortError"
     return NextResponse.json(
-      { success: false, message: "Failed to fetch DAG" },
-      { status: 500 }
+      {
+        success: false,
+        message: isAbort
+          ? "DAG request timed out (backend took too long)"
+          : "Failed to fetch DAG from backend",
+        backend_url: BACKEND_URL,
+      },
+      { status: isAbort ? 504 : 502 }
     )
   }
 }

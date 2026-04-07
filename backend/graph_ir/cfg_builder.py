@@ -53,6 +53,8 @@ class CFGBuilder:
         self.entry_id: str = ""
         self.exit_id: str = ""
         self._node_counter = 0
+        # Branch nodes whose FALSE edge should fall through to the next statement node.
+        self._pending_false_fallthrough: Set[str] = set()
 
     def _new_node_id(self) -> str:
         """Generate a new node ID"""
@@ -93,6 +95,7 @@ class CFGBuilder:
         """Build CFG from FunctionIR"""
         self.nodes = {}
         self._node_counter = 0
+        self._pending_false_fallthrough = set()
 
         # Create entry and exit nodes
         entry = self._create_node(
@@ -160,16 +163,30 @@ class CFGBuilder:
         while i < len(statements):
             stmt = statements[i]
 
+            def _apply_pending_false_fallthrough(target_node_id: str):
+                if not self._pending_false_fallthrough:
+                    return
+                for branch_id in list(self._pending_false_fallthrough):
+                    if branch_id in current_entry:
+                        self.nodes[branch_id].false_branch = target_node_id
+                        self._pending_false_fallthrough.remove(branch_id)
+
             if stmt.type == StatementType.IF:
                 # Find the complete if-elif-else chain
-                if_chain = self._collect_if_chain(statements, i)
+                if_chain, chain_end_line = self._collect_if_chain(statements, i)
                 exits = self._process_if_chain(
                     if_chain, current_entry, exit_point,
                     loop_continue, loop_break
                 )
                 current_entry = exits
-                # Skip processed statements
-                i += len(if_chain)
+                # Skip statements that belong to this if/else chain (flattened IR)
+                if chain_end_line is not None:
+                    j = i
+                    while j < len(statements) and statements[j].line <= chain_end_line:
+                        j += 1
+                    i = j
+                else:
+                    i += 1
 
             elif stmt.type in (StatementType.FOR, StatementType.WHILE):
                 exits = self._process_loop(
@@ -187,11 +204,18 @@ class CFGBuilder:
                 i += 1
 
             elif stmt.type == StatementType.RETURN:
+                label = "return"
+                code_str = (stmt.code or "").strip()
+                if code_str.startswith("return"):
+                    rest = code_str[len("return"):].strip()
+                    if rest:
+                        label = f"return {rest}"[:50]
                 node = self._create_node(
                     "return",
-                    f"return",
+                    label,
                     statement=stmt
                 )
+                _apply_pending_false_fallthrough(node.id)
                 for ep in current_entry:
                     self._add_edge(ep, node.id)
                 self._add_edge(node.id, self.exit_id)
@@ -202,6 +226,7 @@ class CFGBuilder:
             elif stmt.type == StatementType.BREAK:
                 if loop_break:
                     node = self._create_node("break", "break", statement=stmt)
+                    _apply_pending_false_fallthrough(node.id)
                     for ep in current_entry:
                         self._add_edge(ep, node.id)
                     self._add_edge(node.id, loop_break)
@@ -211,6 +236,7 @@ class CFGBuilder:
             elif stmt.type == StatementType.CONTINUE:
                 if loop_continue:
                     node = self._create_node("continue", "continue", statement=stmt)
+                    _apply_pending_false_fallthrough(node.id)
                     for ep in current_entry:
                         self._add_edge(ep, node.id)
                     self._add_edge(node.id, loop_continue)
@@ -218,7 +244,16 @@ class CFGBuilder:
                 i += 1
 
             elif stmt.type == StatementType.RAISE:
-                node = self._create_node("raise", f"raise", statement=stmt)
+                code_str = (stmt.code or "").strip()
+                if code_str.startswith("throw"):
+                    label = code_str[:50]
+                    node_type = "throw"
+                else:
+                    label = "raise"
+                    node_type = "raise"
+
+                node = self._create_node(node_type, label, statement=stmt)
+                _apply_pending_false_fallthrough(node.id)
                 for ep in current_entry:
                     self._add_edge(ep, node.id)
                 # Raise exits to exit node (simplified - could go to exception handler)
@@ -238,6 +273,9 @@ class CFGBuilder:
                     self._get_label(stmt),
                     statement=stmt
                 )
+
+                _apply_pending_false_fallthrough(node.id)
+
                 for ep in current_entry:
                     self._add_edge(ep, node.id)
                 current_entry = [node.id]
@@ -247,23 +285,40 @@ class CFGBuilder:
 
     def _collect_if_chain(
         self, statements: List[IRStatement], start_idx: int
-    ) -> List[Tuple[IRStatement, List[IRStatement]]]:
+    ) -> Tuple[List[Tuple[IRStatement, List[IRStatement]]], Optional[int]]:
         """
         Collect if-elif-else chain starting at index.
         Returns list of (condition_stmt, body_statements) tuples.
         """
-        chain = []
+        chain: List[Tuple[IRStatement, List[IRStatement]]] = []
         i = start_idx
         current_stmt = statements[i]
 
         if current_stmt.type != StatementType.IF:
-            return chain
+            return chain, None
 
         # Collect body of if
         if_body = self._collect_block_body(statements, i)
         chain.append((current_stmt, if_body))
 
-        return chain
+        chain_end_line: Optional[int] = getattr(current_stmt, "end_line", None)
+
+        # Optional else directly after the if body (multi-language IR may emit ELSE).
+        # We'll scan forward until we pass the if's end_line (if present).
+        j = i + 1
+        while j < len(statements):
+            s = statements[j]
+            if chain_end_line is not None and s.line > chain_end_line + 1:
+                break
+            if s.type == StatementType.ELSE:
+                else_body = self._collect_block_body(statements, j)
+                chain.append((s, else_body))
+                if getattr(s, "end_line", None) is not None:
+                    chain_end_line = max(chain_end_line or s.end_line, s.end_line)
+                break
+            j += 1
+
+        return chain, chain_end_line
 
     def _collect_block_body(
         self, statements: List[IRStatement], block_start_idx: int
@@ -273,9 +328,26 @@ class CFGBuilder:
         This is simplified - in a real implementation we'd use indentation
         or the AST structure. Here we rely on the statement order from the parser.
         """
-        # For now, we'll process statements inline since our parser
-        # flattens nested structures. The IR statements mark block boundaries.
-        return []
+        header = statements[block_start_idx]
+        end_line = getattr(header, "end_line", None)
+        if end_line is None:
+            return []
+
+        body: List[IRStatement] = []
+        j = block_start_idx + 1
+        while j < len(statements):
+            s = statements[j]
+            if s.line > end_line:
+                break
+
+            # Do not include structural chain markers in the body.
+            if s.type in (StatementType.ELSE, StatementType.ELIF, StatementType.EXCEPT, StatementType.FINALLY):
+                break
+
+            body.append(s)
+            j += 1
+
+        return body
 
     def _process_if_chain(
         self,
@@ -289,8 +361,6 @@ class CFGBuilder:
         if not if_chain:
             return entry_points
 
-        exits: List[str] = []
-
         # Get the if statement
         if_stmt = if_chain[0][0]
 
@@ -298,34 +368,63 @@ class CFGBuilder:
         branch = self._create_node(
             "branch",
             f"if {if_stmt.condition or '...'}"[:50],
-            statement=if_stmt
+            statement=if_stmt,
         )
 
         for ep in entry_points:
             self._add_edge(ep, branch.id)
 
-        # Create merge point for after the if
-        merge = self._create_node("merge", "merge")
+        # TRUE branch body
+        if_body = if_chain[0][1] if if_chain else []
+        succ_before = set(self.nodes[branch.id].successors)
+        if if_body:
+            true_exits = self._process_statements(
+                if_body,
+                [branch.id],
+                exit_point,
+                loop_continue=loop_continue,
+                loop_break=loop_break,
+            )
+        else:
+            true_node = self._create_node("block", "then", line=if_stmt.line)
+            self._add_edge(branch.id, true_node.id)
+            true_exits = [true_node.id]
 
-        # True branch - we'll create a placeholder node since body is flattened
-        true_node = self._create_node(
-            "block",
-            "then",
-            line=if_stmt.line
-        )
-        branch.true_branch = true_node.id
-        self._add_edge(branch.id, true_node.id)
-        exits.append(true_node.id)
+        succ_after = list(set(self.nodes[branch.id].successors) - succ_before)
+        if succ_after:
+            branch.true_branch = succ_after[0]
 
-        # False branch (else or merge directly)
-        branch.false_branch = merge.id
-        self._add_edge(branch.id, merge.id)
+        # ELSE (optional)
+        else_body: List[IRStatement] = []
+        if len(if_chain) > 1:
+            else_body = if_chain[1][1]
 
-        # Connect exits to merge
-        for exit_id in exits:
-            self._add_edge(exit_id, merge.id)
+        if else_body:
+            succ_before = set(self.nodes[branch.id].successors)
+            false_exits = self._process_statements(
+                else_body,
+                [branch.id],
+                exit_point,
+                loop_continue=loop_continue,
+                loop_break=loop_break,
+            )
+            succ_after = list(set(self.nodes[branch.id].successors) - succ_before)
+            if succ_after:
+                branch.false_branch = succ_after[0]
+        else:
+            # No else: FALSE path falls through to the next statement in the enclosing block.
+            # We delay connecting the false edge until the next statement node is created.
+            self._pending_false_fallthrough.add(branch.id)
+            false_exits = [branch.id]
 
-        return [merge.id]
+        # After the if, control can come from any non-terminated exits.
+        exits = []
+        if true_exits:
+            exits.extend(true_exits)
+        if false_exits:
+            exits.extend(false_exits)
+
+        return exits
 
     def _process_loop(
         self,
@@ -500,7 +599,8 @@ class CFGBuilder:
                 code=node.code,
                 metadata={
                     "successors": node.successors,
-                    "predecessors": node.predecessors
+                    "predecessors": node.predecessors,
+                    **({"statement_id": node.statement.id} if node.statement else {}),
                 }
             ))
 
