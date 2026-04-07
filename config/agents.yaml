@@ -58,6 +58,7 @@ verifier_agent:
   enabled: true
   priority: 4
   max_retries: 2
+  max_rejections: 3  # Max writer-verifier refinement cycles
   retry_delay: 1
   timeout: 120
   validation_rules:

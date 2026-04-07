@@ -742,6 +742,7 @@ RAISES (ONLY IF CODE HAS EXPLICIT throw/raise):
         reader_context: str,
         searcher_context: str,
         verifier_feedback: Optional[str] = None,
+        calibration_profile: Optional[Any] = None,  # Add calibration awareness
     ) -> str:
         """Assemble the user prompt with code, context, and instructions."""
 
@@ -750,6 +751,16 @@ RAISES (ONLY IF CODE HAS EXPLICIT throw/raise):
         # --- Static analysis hints ---
         hints = self._compute_static_hints(component.source_code, component.language)
         is_trivial = self._is_trivial_function(component.source_code, component.language)
+
+        # --- Check calibration profile for minimal documentation requirement ---
+        is_minimal_doc = False
+        if calibration_profile is not None:
+            try:
+                doc_category = getattr(calibration_profile, 'documentation_category', None)
+                if doc_category and hasattr(doc_category, 'value'):
+                    is_minimal_doc = (doc_category.value == "minimal")
+            except Exception:
+                pass
 
         hint_lines = ["STATIC ANALYSIS HINTS (pre-computed from source):"]
         hint_lines.append(f"  detects_throw   = {hints['detects_throw']}")
@@ -762,6 +773,7 @@ RAISES (ONLY IF CODE HAS EXPLICIT throw/raise):
         hint_lines.append(f"  detects_switch_dispatch = {hints.get('detects_switch_dispatch', False)}")
         hint_lines.append(f"  detects_logging  = {hints.get('detects_logging', False)}")
         hint_lines.append(f"  is_trivial      = {is_trivial}")
+        hint_lines.append(f"  is_minimal_doc  = {is_minimal_doc}")  # Add calibration hint
         hint_block = "\n".join(hint_lines)
 
         # Conditional guidance based on hints
@@ -814,7 +826,13 @@ RAISES (ONLY IF CODE HAS EXPLICIT throw/raise):
             hint_guidance_parts.append(
                 ">> detects_logging is TRUE — mention the logging/telemetry purpose in the description (audit/debug/traceability), grounded in the call." 
             )
-        if is_trivial:
+        if is_minimal_doc:
+            hint_guidance_parts.append(
+                ">> is_minimal_doc is TRUE — output a ONE-LINE summary ONLY. "
+                "Do NOT include Args:, @param, Returns:, @returns, or any other sections. "
+                "The component is trivial and requires minimal documentation."
+            )
+        elif is_trivial:
             hint_guidance_parts.append(
                 ">> is_trivial is TRUE — keep documentation to a single "
                 "summary line plus @param/@returns. No extra prose."
@@ -1381,10 +1399,14 @@ CRITICAL QUALITY RULES (to score 4-5/5 on helpfulness):
             reader_ctx = self._format_reader_context(context.get_result('reader'))
             searcher_ctx = self._format_searcher_context(context.get_result('searcher'))
 
+            # Get calibration profile from context metadata
+            calibration = context.metadata.get('calibration')
+
             # Build prompts
             system_prompt = self._build_system_prompt(style)
             user_prompt = self._build_user_prompt(
-                component, style, reader_ctx, searcher_ctx
+                component, style, reader_ctx, searcher_ctx,
+                calibration_profile=calibration
             )
 
             # LLM call via BaseAgent memory API
@@ -1447,10 +1469,14 @@ CRITICAL QUALITY RULES (to score 4-5/5 on helpfulness):
             reader_ctx = self._format_reader_context(context.get_result('reader'))
             searcher_ctx = self._format_searcher_context(context.get_result('searcher'))
 
+            # Get calibration profile from context metadata
+            calibration = context.metadata.get('calibration')
+
             system_prompt = self._build_system_prompt(style)
             user_prompt = self._build_user_prompt(
                 component, style, reader_ctx, searcher_ctx,
                 verifier_feedback=verifier_feedback,
+                calibration_profile=calibration
             )
 
             self.clear_memory()

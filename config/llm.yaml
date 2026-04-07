@@ -61,14 +61,14 @@ providers:
     enabled: true  # Set to true to use local model
     mode: "llama_cpp"  # "llama_cpp" for direct inference, "ollama" for Ollama API
     # Path to your GGUF model file (download from HuggingFace)
-    # Using Qwen2.5-Coder-7B-Instruct (better for code documentation)
-    model_path: "models/qwen2.5-coder-7b-instruct-q4_k_m.gguf"
+    # Using Qwen2.5-Coder-14B-Instruct (better for code documentation)
+    model_path: "models/qwen2.5-coder-14b-instruct-q4_k_m.gguf"
     n_ctx: 8192  # Context window size (Qwen supports up to 128k, but 8k for efficiency)
     n_gpu_layers: -1  # -1 = all layers on GPU, 0 = CPU only
     main_gpu: 0  # GPU device index: 0 = RTX 4070 Super, 1 = A2
     n_threads: null  # null = auto-detect, or set specific thread count
     models:
-      default: "Qwen2.5-Coder-7B-Instruct"
+      default: "Qwen2.5-Coder-14B-Instruct"
     default_params:
       temperature: 0.3  # Lower for documentation (more focused)
       max_tokens: 2000  # Sufficient for docstrings
@@ -135,7 +135,7 @@ agent_models:
 
   writer:
     provider: "local"
-    model: "Qwen2.5-Coder-7B-Instruct"
+    model: "Qwen2.5-Coder-14B-Instruct"
     params:
       temperature: 0.3
       max_tokens: 2000
