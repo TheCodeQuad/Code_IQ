@@ -1,155 +1,138 @@
-# LLM Provider Configurations
-#durva
+agent_models:
+  evaluator:
+    model: codellama-13b-instruct.Q4_K_M
+    params:
+      max_tokens: 4000
+      temperature: 0.4
+    provider: local
+  reader:
+    model: codellama-13b-instruct.Q4_K_M
+    params:
+      max_tokens: 4000
+      temperature: 0.3
+    provider: local
+  searcher:
+    model: codellama-13b-instruct.Q4_K_M
+    params:
+      max_tokens: 2000
+      temperature: 0.5
+    provider: local
+  verifier:
+    model: codellama-13b-instruct.Q4_K_M
+    params:
+      max_tokens: 4000
+      temperature: 0.2
+    provider: local
+  writer:
+    model: codellama-13b-instruct.Q4_K_M
+    params:
+      max_tokens: 2000
+      temperature: 0.3
+    provider: local
 providers:
-  openrouter:
-    enabled: false  # Disabled - using local inference instead
-    api_base_url: "https://openrouter.ai/api/v1/chat/completions"
-    api_key_env: "OPENROUTER_API_KEY"
-    timeout: 120
+  anthropic:
+    api_base_url: https://api.anthropic.com
+    api_version: '2023-06-01'
+    default_params:
+      max_tokens: 4000
+      temperature: 0.7
+    enabled: false
     models:
-      default: "tngtech/deepseek-r1t-chimera:free"
+      default: claude-sonnet-4-20250514
+  custom:
+    api_base_url: http://localhost:8000
+    api_version: v1
+    default_params:
+      max_tokens: 2000
+      temperature: 0.7
+    enabled: false
+    models:
+      default: local-model
+  gemini:
+    api_base_url: https://generativelanguage.googleapis.com/v1beta/models
+    api_key_env: GEMINI_API_KEY
+    default_params:
+      max_tokens: 4000
+      temperature: 0.7
+    enabled: false
+    models:
+      default: gemini-1.5-flash
+    timeout: 120
+  local:
+    api_base_url: http://localhost:11434/v1/chat/completions
+    api_key_env: DUMMY
+    default_params:
+      max_tokens: 2000
+      temperature: 0.3
+    enabled: true
+    main_gpu: 0
+    mode: llama_cpp
+    model_path: C:\BIA6\CodeIQ\Code_IQ\models\codellama-13b-instruct.Q4_K_M.gguf
+    models:
+      default: CodeLlama-13B-Instruct
+    n_ctx: 8192
+    n_gpu_layers: -1
+    n_threads: null
+  openai:
+    api_base_url: https://api.openai.com/v1
+    api_version: v1
+    default_params:
+      max_tokens: 4000
+      temperature: 0.7
+    enabled: false
+    models:
+      default: gpt-4-turbo-preview
+  openrouter:
+    api_base_url: https://openrouter.ai/api/v1/chat/completions
+    api_key_env: OPENROUTER_API_KEY
+    default_params:
+      max_tokens: 4000
+      temperature: 0.7
+    enabled: false
+    models:
       deepseek-r1t-chimera:
-        name: "DeepSeek R1T Chimera Free"
-        model_id: "tngtech/deepseek-r1t-chimera:free"
+        capabilities:
+        - text_generation
+        - code_analysis
+        - code_generation
+        - reasoning
         context_window: 128000
-        max_output_tokens: 8192
         cost_per_1k_input: 0.0
         cost_per_1k_output: 0.0
-        capabilities:
-          - text_generation
-          - code_analysis
-          - code_generation
-          - reasoning
+        max_output_tokens: 8192
+        model_id: tngtech/deepseek-r1t-chimera:free
+        name: DeepSeek R1T Chimera Free
+      default: tngtech/deepseek-r1t-chimera:free
       gpt-4-turbo:
-        name: "GPT-4 Turbo"
-        model_id: "openai/gpt-4-turbo"
+        capabilities:
+        - text_generation
+        - code_analysis
+        - long_context
         context_window: 128000
-        max_output_tokens: 4096
         cost_per_1k_input: 0.01
         cost_per_1k_output: 0.03
-        capabilities:
-          - text_generation
-          - code_analysis
-          - long_context
-      gpt-4o:
-        name: "GPT-4O"
-        model_id: "openai/gpt-4o"
-        context_window: 128000
         max_output_tokens: 4096
+        model_id: openai/gpt-4-turbo
+        name: GPT-4 Turbo
+      gpt-4o:
+        capabilities:
+        - text_generation
+        - code_analysis
+        - multimodal
+        context_window: 128000
         cost_per_1k_input: 0.005
         cost_per_1k_output: 0.015
-        capabilities:
-          - text_generation
-          - code_analysis
-          - multimodal
-      gpt-4o-mini:
-        name: "GPT-4O Mini"
-        model_id: "openai/gpt-4o-mini"
-        context_window: 128000
         max_output_tokens: 4096
+        model_id: openai/gpt-4o
+        name: GPT-4O
+      gpt-4o-mini:
+        capabilities:
+        - text_generation
+        - code_analysis
+        context_window: 128000
         cost_per_1k_input: 0.00015
         cost_per_1k_output: 0.0006
-        capabilities:
-          - text_generation
-          - code_analysis
-    default_params:
-      temperature: 0.7
-      max_tokens: 4000
-
-  # Local inference via llama-cpp-python (no HTTP overhead, model loaded once)
-  local:
-    enabled: true  # Set to true to use local model
-    mode: "llama_cpp"  # "llama_cpp" for direct inference, "ollama" for Ollama API
-    # Path to your GGUF model file (download from HuggingFace)
-    # Using Qwen2.5-Coder-14B-Instruct (better for code documentation)
-    model_path: "models/qwen2.5-coder-14b-instruct-q4_k_m.gguf"
-    n_ctx: 8192  # Context window size (Qwen supports up to 128k, but 8k for efficiency)
-    n_gpu_layers: -1  # -1 = all layers on GPU, 0 = CPU only
-    main_gpu: 0  # GPU device index: 0 = RTX 4070 Super, 1 = A2
-    n_threads: null  # null = auto-detect, or set specific thread count
-    models:
-      default: "Qwen2.5-Coder-14B-Instruct"
-    default_params:
-      temperature: 0.3  # Lower for documentation (more focused)
-      max_tokens: 2000  # Sufficient for docstrings
-    # Ollama fallback settings (if mode: "ollama")
-    api_base_url: "http://localhost:11434/v1/chat/completions"
-    api_key_env: "DUMMY"
-
-  gemini:
-    enabled: false
-    api_base_url: "https://generativelanguage.googleapis.com/v1beta/models"
-    api_key_env: "GEMINI_API_KEY"
+        max_output_tokens: 4096
+        model_id: openai/gpt-4o-mini
+        name: GPT-4O Mini
     timeout: 120
-    models:
-      default: "gemini-1.5-flash"
-    default_params:
-      temperature: 0.7
-      max_tokens: 4000
-
-  anthropic:
-    enabled: false
-    api_base_url: "https://api.anthropic.com"
-    api_version: "2023-06-01"
-    models:
-      default: "claude-sonnet-4-20250514"
-    default_params:
-      temperature: 0.7
-      max_tokens: 4000
-
-  openai:
-    enabled: false
-    api_base_url: "https://api.openai.com/v1"
-    api_version: "v1"
-    models:
-      default: "gpt-4-turbo-preview"
-    default_params:
-      temperature: 0.7
-      max_tokens: 4000
-
-  custom:
-    enabled: false
-    api_base_url: "http://localhost:8000"
-    api_version: "v1"
-    models:
-      default: "local-model"
-    default_params:
-      temperature: 0.7
-      max_tokens: 2000
-
-# Agent-specific LLM assignments — using local inference
-agent_models:
-  reader:
-    provider: "local"
-    model: "DeepSeek-R1-Distill-Qwen-1.5B"
-    params:
-      temperature: 0.3
-      max_tokens: 4000  # Reduced for 1.5B model context
-
-  searcher:
-    provider: "local"
-    model: "DeepSeek-R1-Distill-Qwen-1.5B"
-    params:
-      temperature: 0.5
-      max_tokens: 2000
-
-  writer:
-    provider: "local"
-    model: "Qwen2.5-Coder-14B-Instruct"
-    params:
-      temperature: 0.3
-      max_tokens: 2000
-
-  verifier:
-    provider: "local"
-    model: "DeepSeek-R1-Distill-Qwen-1.5B"
-    params:
-      temperature: 0.2
-      max_tokens: 4000
-
-  evaluator:
-    provider: "local"
-    model: "DeepSeek-R1-Distill-Qwen-1.5B"
-    params:
-      temperature: 0.4
-      max_tokens: 4000  # Reduced for 1.5B model context

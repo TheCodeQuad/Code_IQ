@@ -35,6 +35,13 @@ from .models import (
     MultiGraphResponse,
     GraphListResponse,
     ParseStatusResponse,
+    
+    # CKG models
+    CKGRequest,
+    CKGSubgraphRequest,
+    CKGPathRequest,
+    CKGStatsResponse,
+    CKGResponse,
 )
 
 from .parser import (
@@ -67,6 +74,13 @@ from .hpg_builder import (
     build_hpg,
 )
 
+from .ckg_builder import (
+    build_ckg,
+    export_to_json,
+    extract_subgraph,
+    get_graph_statistics,
+)
+
 from .service import (
     GraphService,
     get_graph_service,
@@ -95,6 +109,11 @@ __all__ = [
     "MultiGraphResponse",
     "GraphListResponse",
     "ParseStatusResponse",
+    "CKGRequest",
+    "CKGSubgraphRequest",
+    "CKGPathRequest",
+    "CKGStatsResponse",
+    "CKGResponse",
 
     # Parser
     "RepositoryParser",
@@ -116,6 +135,12 @@ __all__ = [
 
     # HPG
     "build_hpg",
+
+    # CKG
+    "build_ckg",
+    "export_to_json",
+    "extract_subgraph",
+    "get_graph_statistics",
 
     # Service
     "GraphService",

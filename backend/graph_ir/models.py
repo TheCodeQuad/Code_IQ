@@ -365,3 +365,67 @@ class ParseStatusResponse(BaseModel):
     class_count: int = 0
     last_parsed: Optional[str] = None
     errors: List[str] = Field(default_factory=list)
+
+
+# =============================================================================
+# CKG (Complete Knowledge Graph) Models
+# =============================================================================
+
+class CKGRequest(BaseModel):
+    """Request for Complete Knowledge Graph"""
+    repo_path: str = Field(..., description="Path to the repository root")
+    force: bool = Field(False, description="Force rebuild even if cached")
+    edge_types: Optional[List[str]] = Field(
+        None,
+        description="Filter by edge types (e.g., ['calls', 'hierarchy'])"
+    )
+
+
+class CKGSubgraphRequest(BaseModel):
+    """Request for CKG subgraph extraction"""
+    repo_path: str = Field(..., description="Path to the repository root")
+    component_id: str = Field(..., description="Center node ID")
+    k_hops: int = Field(1, description="Number of hops to expand", ge=1, le=5)
+    edge_types: Optional[List[str]] = Field(
+        None,
+        description="Filter by edge types (e.g., ['calls', 'hierarchy'])"
+    )
+    direction: str = Field(
+        "both",
+        description="Expansion direction: 'in', 'out', or 'both'"
+    )
+
+
+class CKGPathRequest(BaseModel):
+    """Request for finding paths in CKG"""
+    repo_path: str = Field(..., description="Path to the repository root")
+    source: str = Field(..., description="Source node ID")
+    target: str = Field(..., description="Target node ID")
+    max_depth: int = Field(10, description="Maximum path length", ge=1, le=20)
+    edge_types: Optional[List[str]] = Field(
+        None,
+        description="Filter by edge types"
+    )
+
+
+class CKGStatsResponse(BaseModel):
+    """Response with CKG statistics"""
+    success: bool = True
+    node_count: int = 0
+    edge_count: int = 0
+    node_types: Dict[str, int] = Field(default_factory=dict)
+    edge_types: Dict[str, int] = Field(default_factory=dict)
+    repo_path: str = ""
+    avg_in_degree: Optional[float] = None
+    avg_out_degree: Optional[float] = None
+    max_in_degree: Optional[int] = None
+    max_out_degree: Optional[int] = None
+    is_dag: Optional[bool] = None
+    num_weakly_connected_components: Optional[int] = None
+
+
+class CKGResponse(BaseModel):
+    """Response containing CKG data"""
+    success: bool = True
+    data: Optional[Dict[str, Any]] = None
+    message: Optional[str] = None
