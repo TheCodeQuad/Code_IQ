@@ -1,7 +1,7 @@
 orchestrator:
   enabled: true
   max_iterations: 10
-  parallel_execution: false
+  parallel_execution: true
 
 reader_agent:
   enabled: true

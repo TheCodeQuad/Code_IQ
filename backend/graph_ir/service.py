@@ -32,7 +32,13 @@ from .dag_builder import (
     build_dag, build_file_dag, build_neighborhood_dag,
     get_dependencies_dict, DAGBuilder
 )
+from .ckg_builder import (
+    build_ckg, export_to_json, extract_subgraph, find_paths,
+    dependency_resolution, get_graph_statistics
+)
 from .multilang_ir_adapter import function_ir_from_code_component
+import networkx as nx
+import pickle
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +65,10 @@ class GraphService:
 
         # On-demand synthesized FunctionIR objects for non-Python languages.
         self._synth_function_cache: Dict[str, Dict[str, FunctionIR]] = {}
+
+        # CKG cache (Complete Knowledge Graph)
+        self._ckg_cache: Dict[str, nx.MultiDiGraph] = {}
+        self._ckg_timestamps: Dict[str, datetime] = {}
 
         # Cache directory for persisted IR
         self.cache_dir = cache_dir or os.path.join(
@@ -779,6 +789,176 @@ class GraphService:
                 success=False,
                 message=f"Error building HPG: {str(e)}"
             )
+
+    # =========================================================================
+    # Complete Knowledge Graph (CKG)
+    # =========================================================================
+
+    def get_ckg(
+        self,
+        repo_path: str,
+        force: bool = False
+    ) -> nx.MultiDiGraph:
+        """
+        Get or build Complete Knowledge Graph for repository.
+        
+        The CKG combines all graph types into a unified representation:
+        - Hierarchy edges (module → class → function → statement)
+        - Call edges (function calls)
+        - Import edges (module dependencies)
+        - Inheritance edges (class extends)
+        - Control flow edges (CFG within functions)
+        - Data flow edges (PDG within functions)
+        
+        Args:
+            repo_path: Repository path
+            force: Force rebuild even if cached
+            
+        Returns:
+            NetworkX MultiDiGraph
+        """
+        cache_key = self._get_cache_key(repo_path)
+        
+        # Check cache
+        with self._cache_lock:
+            if not force and cache_key in self._ckg_cache:
+                logger.debug(f"Returning cached CKG for {repo_path}")
+                return self._ckg_cache[cache_key]
+        
+        # Get or parse IR
+        ir = self.get_ir(repo_path)
+        if not ir:
+            ir = self.parse_repository(repo_path)
+        
+        # Build CKG
+        logger.info(f"Building CKG for {repo_path}")
+        try:
+            ckg = build_ckg(ir)
+            
+            # Cache the result
+            with self._cache_lock:
+                self._ckg_cache[cache_key] = ckg
+                self._ckg_timestamps[cache_key] = datetime.now()
+            
+            # Optionally persist to disk
+            self._persist_ckg(cache_key, ckg)
+            
+            return ckg
+        except Exception as e:
+            logger.error(f"Error building CKG: {e}")
+            raise
+
+    def get_ckg_export(
+        self,
+        repo_path: str,
+        force: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Get CKG exported as JSON for frontend visualization.
+        
+        Returns:
+            Dict with nodes, edges, and statistics
+        """
+        ckg = self.get_ckg(repo_path, force)
+        return export_to_json(ckg)
+
+    def get_ckg_subgraph(
+        self,
+        repo_path: str,
+        component_id: str,
+        k_hops: int = 1,
+        edge_types: Optional[List[str]] = None,
+        direction: str = "both"
+    ) -> Dict[str, Any]:
+        """
+        Get k-hop neighborhood subgraph around a component.
+        
+        Args:
+            repo_path: Repository path
+            component_id: Center node ID
+            k_hops: Number of hops to expand
+            edge_types: Filter by edge types (e.g., ["calls", "hierarchy"])
+            direction: "in", "out", or "both"
+            
+        Returns:
+            JSON export of subgraph
+        """
+        ckg = self.get_ckg(repo_path)
+        subgraph = extract_subgraph(ckg, component_id, k_hops, edge_types, direction)
+        return export_to_json(subgraph)
+
+    def get_ckg_stats(self, repo_path: str) -> Dict[str, Any]:
+        """
+        Get statistics about the CKG.
+        
+        Returns:
+            Dict with node/edge counts, degree stats, etc.
+        """
+        ckg = self.get_ckg(repo_path)
+        return get_graph_statistics(ckg)
+
+    def get_ckg_paths(
+        self,
+        repo_path: str,
+        source: str,
+        target: str,
+        max_depth: int = 10,
+        edge_types: Optional[List[str]] = None
+    ) -> List[List[str]]:
+        """
+        Find paths between two nodes in the CKG.
+        
+        Args:
+            repo_path: Repository path
+            source: Source node ID
+            target: Target node ID
+            max_depth: Maximum path length
+            edge_types: Filter by edge types
+            
+        Returns:
+            List of paths (each path is a list of node IDs)
+        """
+        ckg = self.get_ckg(repo_path)
+        return find_paths(ckg, source, target, max_depth, edge_types)
+
+    def clear_ckg_cache(self, repo_path: Optional[str] = None):
+        """
+        Clear CKG cache for a repository or all repositories.
+        
+        Args:
+            repo_path: Repository path (if None, clear all)
+        """
+        with self._cache_lock:
+            if repo_path:
+                cache_key = self._get_cache_key(repo_path)
+                self._ckg_cache.pop(cache_key, None)
+                self._ckg_timestamps.pop(cache_key, None)
+                logger.info(f"Cleared CKG cache for {repo_path}")
+            else:
+                self._ckg_cache.clear()
+                self._ckg_timestamps.clear()
+                logger.info("Cleared all CKG caches")
+
+    def _persist_ckg(self, cache_key: str, ckg: nx.MultiDiGraph):
+        """Persist CKG to disk cache for faster loading"""
+        try:
+            cache_file = os.path.join(self.cache_dir, f"ckg_{cache_key}.gpickle")
+            nx.write_gpickle(ckg, cache_file)
+            logger.debug(f"Persisted CKG to {cache_file}")
+        except Exception as e:
+            logger.warning(f"Failed to persist CKG: {e}")
+
+    def _load_persisted_ckg(self, cache_key: str) -> Optional[nx.MultiDiGraph]:
+        """Load CKG from disk cache if available"""
+        try:
+            cache_file = os.path.join(self.cache_dir, f"ckg_{cache_key}.gpickle")
+            if os.path.exists(cache_file):
+                ckg = nx.read_gpickle(cache_file)
+                logger.debug(f"Loaded persisted CKG from {cache_file}")
+                return ckg
+        except Exception as e:
+            logger.warning(f"Failed to load persisted CKG: {e}")
+        return None
 
 
 # Global service instance

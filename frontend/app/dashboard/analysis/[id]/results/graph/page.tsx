@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect, useMemo } from "react"
 import { useParams } from "next/navigation"
+import dynamic from "next/dynamic"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -31,7 +32,10 @@ import {
   RefreshCw,
 } from "lucide-react"
 
-type GraphType = "agents-flow" | "cfg" | "pdg" | "hpg" | "dag"
+// Import Cytoscape component with dynamic import (already handles SSR)
+import CytoscapeGraph from "@/components/cytoscape-graph"
+
+type GraphType = "agents-flow" | "cfg" | "pdg" | "hpg" | "dag" | "ckg"
 type ComponentType = "function" | "class" | "method"
 
 interface Component {
@@ -103,6 +107,7 @@ const graphTypes: { id: GraphType; label: string; description: string; fullName:
   { id: "pdg", label: "PDG", fullName: "Program Dependency Graph", description: "Shows data and control dependencies between statements. Useful for program slicing and understanding data flow." },
   { id: "hpg", label: "HPG", fullName: "Hybrid Program Graph", description: "Combines CFG and PDG information into a unified representation for comprehensive code analysis." },
   { id: "dag", label: "DAG", fullName: "Repository Dependency Graph", description: "Shows the dependency relationships between all components in the repository. Each node represents a code component (function, class, method) and edges show dependencies." },
+  { id: "ckg", label: "PKG", fullName: "Program Knowledge Graph", description: "Complete unified graph combining all graph types: hierarchy (module→class→function→statement), calls, imports, inheritance, control flow, and data flow. Shows the full repository structure." },
 ]
 
 const ComponentTypeIcon = ({ type }: { type: ComponentType }) => {
@@ -142,6 +147,7 @@ export default function GraphsPage() {
   const [pdgData, setPdgData] = useState<GraphData | null>(null)
   const [hpgData, setHpgData] = useState<GraphData | null>(null)
   const [dagData, setDagData] = useState<GraphData | null>(null)
+  const [ckgData, setCkgData] = useState<GraphData | null>(null)
 
   // Loading and error states
   const [graphLoading, setGraphLoading] = useState(false)
@@ -247,7 +253,7 @@ export default function GraphsPage() {
 
       try {
         // First, trigger parse (if not already parsed)
-        console.log("[Graph] Calling parse endpoint...")
+        console.log("[Graph] Calling parse endpoint with repo_path:", repoPath)
         const parseResponse = await fetch(`${API_BASE}/api/graphs`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -255,17 +261,21 @@ export default function GraphsPage() {
         })
 
         console.log("[Graph] Parse response status:", parseResponse.status)
+        let parseError: string | null = null
+        
         if (parseResponse.ok) {
           const parseData = await parseResponse.json()
           console.log("[Graph] Parse data:", parseData)
           setParseStatus({
             is_parsed: true,
-            function_count: parseData.function_count,
-            class_count: parseData.class_count
+            function_count: parseData.function_count || 0,
+            class_count: parseData.class_count || 0
           })
         } else {
           const errText = await parseResponse.text()
-          console.error("[Graph] Parse error:", errText)
+          parseError = `Parse failed: ${parseResponse.status} - ${errText}`
+          console.error("[Graph]", parseError)
+          setLastError(`Repository parse error: ${errText.substring(0, 200)}`)
         }
 
         // Fetch components list
@@ -292,6 +302,7 @@ export default function GraphsPage() {
               .filter((c: Component) => isValidComponentId(c.id) && Boolean(c.name))
             console.log("[Graph] Mapped", mappedComponents.length, "components")
             setComponents(mappedComponents)
+            setLastError(null)  // Clear error on success
 
             // Auto-select first component if none selected
             if (mappedComponents.length > 0) {
@@ -300,13 +311,18 @@ export default function GraphsPage() {
             }
           } else {
             console.warn("[Graph] No components in response or empty array")
+            setLastError(`No components found in repository. Repository may be empty or invalid.`)
           }
         } else {
           const errText = await componentsResponse.text()
-          console.error("[Graph] Components fetch error:", errText)
+          const errorMsg = `Components fetch failed: ${componentsResponse.status} - ${errText.substring(0, 150)}`
+          console.error("[Graph]", errorMsg)
+          setLastError(errorMsg)
         }
-      } catch (err) {
+      } catch (err: any) {
+        const errorMsg = err?.message || String(err)
         console.error("Error fetching components:", err)
+        setLastError(`Network error: ${errorMsg}`)
       } finally {
         setComponentsLoading(false)
       }
@@ -315,12 +331,15 @@ export default function GraphsPage() {
     parseAndFetchComponents()
   }, [repoPath])
 
-  // Fetch graph data when component or graph type changes
+  // Fetch graph data when graph type changes (CKG is full-repo and independent of components)
   useEffect(() => {
-    if (!selectedComponent?.id || !repoPath) return
+    if (!repoPath) return
+
+    // For non-CKG graphs, still require a selected component
+    if (selectedGraphType !== "ckg" && !selectedComponent?.id) return
     if (selectedGraphType === "agents-flow") return // Agent flow uses different API
 
-    if (selectedComponent.type === "class" && selectedGraphType !== "dag") {
+    if (selectedComponent?.type === "class" && !["dag", "ckg"].includes(selectedGraphType)) {
       setGraphLoading(false)
       setGraphError("CFG/PDG/HPG are only available for functions/methods")
       return
@@ -345,10 +364,26 @@ export default function GraphsPage() {
           case "dag":
             endpoint = `${API_BASE}/api/graphs/dag?repo_path=${encodeURIComponent(repoPath)}&component_id=${encodeURIComponent(selectedComponent.id)}`
             break
+          case "ckg":
+            // Always fetch the full repository-level PKG (no subgraph / component filtering)
+            endpoint = `${API_BASE}/api/graphs/ckg?repo_path=${encodeURIComponent(repoPath)}&force=true`
+            break
         }
 
+        // Graph-type-specific timeouts (in ms)
+        // DAG and CKG are expensive operations that can take longer on large repos
+        const timeoutMap: Record<GraphType, number> = {
+          "agents-flow": 30_000,    // 30 seconds
+          "cfg": 60_000,             // 60 seconds
+          "pdg": 60_000,             // 60 seconds
+          "hpg": 90_000,             // 90 seconds
+          "dag": 300_000,            // 5 minutes - DAG can be slow on large repos
+          "ckg": 300_000,            // 5 minutes - CKG is the most expensive
+        }
+        
+        const timeoutMs = timeoutMap[selectedGraphType] || 120_000
         const controller = new AbortController()
-        const timeoutId = setTimeout(() => controller.abort(), 60_000)
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
 
         const response = await fetch(endpoint, { signal: controller.signal }).finally(() => {
           clearTimeout(timeoutId)
@@ -362,7 +397,23 @@ export default function GraphsPage() {
         const result = await response.json()
 
         if (result.success && result.data) {
-          const graphData = result.data as GraphData
+          // CKG returns data in a different format
+          let graphData: GraphData
+          if (selectedGraphType === "ckg") {
+            // CKG returns {nodes, edges, stats}
+            graphData = {
+              id: "ckg",
+              name: "Program Knowledge Graph",
+              type: "ckg",
+              nodes: result.data.nodes || [],
+              edges: result.data.edges || [],
+              node_count: result.data.stats?.node_count || 0,
+              edge_count: result.data.stats?.edge_count || 0,
+              metadata: result.data.stats || {}
+            }
+          } else {
+            graphData = result.data as GraphData
+          }
 
           // Store in appropriate state
           switch (selectedGraphType) {
@@ -378,6 +429,9 @@ export default function GraphsPage() {
             case "dag":
               setDagData(graphData)
               break
+            case "ckg":
+              setCkgData(graphData)
+              break
           }
         } else {
           throw new Error(result.message || "Invalid response")
@@ -385,18 +439,33 @@ export default function GraphsPage() {
       } catch (err: any) {
         console.error(`Error fetching ${selectedGraphType}:`, err)
         const isAbort = err instanceof Error && err.name === "AbortError"
-        setGraphError(
-          isAbort
-            ? `${selectedGraphType.toUpperCase()} request timed out`
-            : (err.message || `Failed to load ${selectedGraphType.toUpperCase()}`)
-        )
+        
+        let errorMessage = ""
+        if (isAbort) {
+          // Timeout error
+          const timeoutSeconds = selectedGraphType === "dag" || selectedGraphType === "ckg" ? 300 : 60
+          errorMessage = `${selectedGraphType.toUpperCase()} request timed out after ${timeoutSeconds}s. `
+          
+          if (selectedGraphType === "dag" || selectedGraphType === "ckg") {
+            errorMessage += "These are expensive operations on large repositories. Try:\n"
+            errorMessage += "• Check if the repository is very large\n"
+            errorMessage += "• Analyze a smaller subset of the code\n"
+            errorMessage += "• Check backend logs for performance issues"
+          } else {
+            errorMessage += "The backend may be slow or unresponsive."
+          }
+        } else {
+          errorMessage = err.message || `Failed to load ${selectedGraphType.toUpperCase()}`
+        }
+        
+        setGraphError(errorMessage)
       } finally {
         setGraphLoading(false)
       }
     }
 
     fetchGraphData()
-  }, [selectedComponent, selectedGraphType, repoPath])
+  }, [selectedGraphType, repoPath, selectedComponent?.id])
 
   // Fetch agent flow data
   useEffect(() => {
@@ -434,9 +503,10 @@ export default function GraphsPage() {
       case "pdg": return pdgData
       case "hpg": return hpgData
       case "dag": return dagData
+      case "ckg": return ckgData
       default: return null
     }
-  }, [selectedGraphType, cfgData, pdgData, hpgData, dagData])
+  }, [selectedGraphType, cfgData, pdgData, hpgData, dagData, ckgData])
 
   const currentGraph = graphTypes.find((g) => g.id === selectedGraphType)
   const selectedComponentFlow = selectedComponent ? componentFlows[selectedComponent.id] : null
@@ -562,7 +632,12 @@ export default function GraphsPage() {
                 components.map((component) => (
                   <button
                     key={component.id}
-                    onClick={() => setSelectedComponent(component)}
+                    // For full-repository PKG view, component clicks should not change the graph
+                    onClick={() => {
+                      if (selectedGraphType !== "ckg") {
+                        setSelectedComponent(component)
+                      }
+                    }}
                     className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-all ${
                       selectedComponent?.id === component.id
                         ? "bg-amber-50 border border-amber-200"
@@ -590,16 +665,122 @@ export default function GraphsPage() {
                         {component.start_line ? `:${component.start_line}` : ""}
                       </p>
                     </div>
-                    {selectedComponent?.id === component.id && (
+                    {selectedGraphType !== "ckg" && selectedComponent?.id === component.id && (
                       <ChevronRight className="w-4 h-4 flex-shrink-0 text-amber-500" />
                     )}
                   </button>
                 ))
               ) : (
-                <div className="p-4 text-center">
-                  <AlertCircle className="w-8 h-8 text-stone-300 mx-auto mb-2" />
-                  <p className="text-xs text-stone-500">No components found</p>
-                  <p className="text-xs text-stone-400 mt-1">Parse a repository first</p>
+                <div className="p-4 space-y-3">
+                  {lastError && (
+                    <div className="p-3 bg-red-50 rounded-lg border border-red-200">
+                      <p className="text-xs font-medium text-red-700 mb-1">⚠️ Error</p>
+                      <p className="text-xs text-red-600 break-words">{lastError}</p>
+                    </div>
+                  )}
+                  
+                  <div className="p-3 bg-amber-50 rounded-lg border border-amber-200">
+                    <p className="text-xs font-medium text-amber-700 mb-1">Repository Path</p>
+                    {repoPath ? (
+                      <p className="text-xs text-amber-600 break-all font-mono bg-white p-2 rounded border border-amber-100">{repoPath}</p>
+                    ) : (
+                      <p className="text-xs text-amber-600">Not resolved yet...</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <p className="text-xs font-medium text-stone-600 mb-2">Manual Repository Path</p>
+                    <div className="flex gap-1">
+                      <input
+                        type="text"
+                        placeholder="e.g., /path/to/repo or c:/repos/myproject"
+                        value={manualRepoPath}
+                        onChange={(e) => setManualRepoPath(e.target.value)}
+                        className="flex-1 px-2 py-1.5 text-xs border border-stone-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500"
+                      />
+                      <Button
+                        size="sm"
+                        className="h-7 text-xs px-2"
+                        onClick={() => {
+                          if (manualRepoPath.trim()) {
+                            const normalizedPath = manualRepoPath.trim().replace(/\\/g, '/')
+                            setRepoPath(normalizedPath)
+                            console.log("[Graph] Manual repo path set to:", normalizedPath)
+                          }
+                        }}
+                      >
+                        Use
+                      </Button>
+                    </div>
+                  </div>
+
+                  {repoPath && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="w-full h-8 text-xs"
+                      onClick={async () => {
+                        setComponentsLoading(true)
+                        try {
+                          console.log("[Graph] Force parsing repository:", repoPath)
+                          const response = await fetch(`${API_BASE}/api/graphs`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ repo_path: repoPath, force: true })
+                          })
+                          const data = await response.json()
+                          console.log("[Graph] Force parse result:", data)
+                          if (data.success) {
+                            setLastError(null)
+                            // Re-fetch components
+                            const compResponse = await fetch(
+                              `${API_BASE}/api/graphs?repo_path=${encodeURIComponent(repoPath)}`
+                            )
+                            const compData = await compResponse.json()
+                            if (compData.components) {
+                              const mapped = compData.components
+                                .map((c: any) => ({
+                                  id: c?.id,
+                                  name: c?.name,
+                                  type: c?.type,
+                                  filePath: c?.file_path,
+                                  parentClass: c?.parent_class,
+                                  start_line: c?.start_line,
+                                  end_line: c?.end_line,
+                                }))
+                                .filter((c: Component) => isValidComponentId(c.id) && Boolean(c.name))
+                              setComponents(mapped)
+                              if (mapped.length > 0) {
+                                setSelectedComponent(mapped[0])
+                                console.log("[Graph] Force parse succeeded, loaded", mapped.length, "components")
+                              } else {
+                                setLastError("Parse succeeded but no components found. Repository may be empty.")
+                              }
+                            }
+                          } else {
+                            setLastError(`Parse failed: ${data.message}`)
+                          }
+                        } catch (err: any) {
+                          setLastError(`Error during parse: ${err?.message || String(err)}`)
+                          console.error("[Graph] Force parse error:", err)
+                        } finally {
+                          setComponentsLoading(false)
+                        }
+                      }}
+                      disabled={componentsLoading}
+                    >
+                      {componentsLoading ? "Parsing..." : "Force Parse Repository"}
+                    </Button>
+                  )}
+
+                  <div className="pt-2 border-t border-stone-200">
+                    <p className="text-xs text-stone-500">
+                      <strong>Troubleshooting:</strong><br/>
+                      • Check that the repository path exists<br/>
+                      • Verify the backend is running<br/>
+                      • Check browser console (F12) for detailed errors
+                    </p>
+                  </div>
                 </div>
               )}
             </div>
@@ -626,26 +807,30 @@ export default function GraphsPage() {
               </TabsList>
             </Tabs>
 
-            {/* Controls */}
+            {/* Controls - hide zoom for CKG since Cytoscape has its own */}
             <div className="flex items-center gap-2">
               <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={handleRefresh} disabled={graphLoading}>
                 <RefreshCw className={`w-3.5 h-3.5 ${graphLoading ? "animate-spin" : ""}`} />
               </Button>
-              <div className="flex items-center gap-1 bg-stone-100 rounded-lg p-1">
-                <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={handleZoomOut}>
-                  <ZoomOut className="w-3.5 h-3.5" />
-                </Button>
-                <span className="text-xs font-medium min-w-[2.5rem] text-center text-stone-600">{zoom}%</span>
-                <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={handleZoomIn}>
-                  <ZoomIn className="w-3.5 h-3.5" />
-                </Button>
-              </div>
-              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={handleReset}>
-                <RotateCcw className="w-3.5 h-3.5" />
-              </Button>
-              <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
-                <Maximize2 className="w-3.5 h-3.5" />
-              </Button>
+              {selectedGraphType !== "ckg" && (
+                <>
+                  <div className="flex items-center gap-1 bg-stone-100 rounded-lg p-1">
+                    <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={handleZoomOut}>
+                      <ZoomOut className="w-3.5 h-3.5" />
+                    </Button>
+                    <span className="text-xs font-medium min-w-[2.5rem] text-center text-stone-600">{zoom}%</span>
+                    <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={handleZoomIn}>
+                      <ZoomIn className="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
+                  <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={handleReset}>
+                    <RotateCcw className="w-3.5 h-3.5" />
+                  </Button>
+                  <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
+                    <Maximize2 className="w-3.5 h-3.5" />
+                  </Button>
+                </>
+              )}
               <Button variant="outline" size="sm" className="gap-1.5 h-7 text-xs border-stone-200">
                 <Download className="w-3.5 h-3.5" />
                 Export
@@ -656,14 +841,22 @@ export default function GraphsPage() {
         <CardContent className="flex-1 p-0 overflow-hidden">
           <div
             className="w-full h-full flex items-center justify-center bg-stone-50/50"
-            style={{ transform: `scale(${zoom / 100})`, transformOrigin: "center center" }}
+            style={selectedGraphType !== "ckg" ? { transform: `scale(${zoom / 100})`, transformOrigin: "center center" } : undefined}
           >
             {selectedComponent && selectedGraphType === "agents-flow" ? (
               <AgentsFlowGraph
                 component={selectedComponent}
                 componentFlow={selectedComponentFlow || undefined}
               />
-            ) : selectedComponent && currentGraphData ? (
+            ) : selectedGraphType === "ckg" && currentGraphData ? (
+              <CytoscapeGraph
+                graphData={currentGraphData}
+                onNodeClick={(nodeId, nodeData) => {
+                  console.log("Node clicked:", nodeId, nodeData)
+                }}
+                className="w-full h-full"
+              />
+            ) : (selectedComponent || selectedGraphType === "ckg") && currentGraphData ? (
               <RealGraphVisualization
                 graphData={currentGraphData}
                 graphType={selectedGraphType}
@@ -680,6 +873,11 @@ export default function GraphsPage() {
                 <Button variant="outline" size="sm" onClick={handleRefresh}>
                   Try Again
                 </Button>
+              </div>
+            ) : selectedGraphType === "ckg" ? (
+              <div className="flex flex-col items-center justify-center h-full gap-3">
+                <Network className="w-10 h-10 text-amber-400" />
+                <p className="text-sm text-stone-500">Loading Program Knowledge Graph...</p>
               </div>
             ) : selectedComponent ? (
               <div className="flex flex-col items-center justify-center h-full gap-3">
@@ -963,6 +1161,12 @@ function RealGraphVisualization({
       call: "#ec4899",
       inherits: "#8b5cf6",
       imports: "#6366f1",
+      // CKG edge types
+      hierarchy: "#94a3b8",
+      calls: "#ec4899",
+      extends: "#8b5cf6",
+      control_flow: "#f59e0b",
+      data_flow: "#3b82f6",
     }
     return colors[edgeType] || "#9ca3af"
   }

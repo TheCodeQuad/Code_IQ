@@ -106,6 +106,13 @@ def parse_repository(request: ParseRequest):
         except Exception as py_exc:
             logger.warning(f"Python IR parse failed: {py_exc}")
 
+        # 3) Pre-build CKG (Complete Knowledge Graph) so it's ready immediately
+        try:
+            service.get_ckg(request.repo_path, force=request.force)
+            logger.info(f"CKG pre-built for {request.repo_path}")
+        except Exception as ckg_exc:
+            logger.warning(f"CKG pre-build failed (will build on-demand): {ckg_exc}")
+
         status = service.get_parse_status(request.repo_path)
 
         return ParseResponse(
@@ -532,3 +539,215 @@ def find_component(
         "success": True,
         "component_id": component_id
     }
+
+
+# =============================================================================
+# CKG (Complete Knowledge Graph) Endpoints
+# =============================================================================
+
+@router.get("/ckg", response_model=dict)
+def get_ckg(
+    repo_path: str = Query(..., description="Repository path"),
+    force: bool = Query(False, description="Force rebuild")
+):
+    """
+    Get Complete Knowledge Graph for the entire repository.
+    
+    The CKG is a unified graph combining:
+    - Hierarchy: module → class → function → statement
+    - Calls: function/method invocations
+    - Imports: module dependencies
+    - Inheritance: class extends relationships
+    - Control flow: CFG edges within functions
+    - Data flow: PDG data dependencies within functions
+    
+    Returns JSON format:
+    {
+        "nodes": [{"id": "...", "label": "...", "type": "...", "metadata": {...}}],
+        "edges": [{"id": "...", "source": "...", "target": "...", "type": "...", "label": "..."}],
+        "stats": {"node_count": ..., "edge_count": ..., "node_types": {...}, "edge_types": {...}}
+    }
+    """
+    service = get_graph_service()
+    
+    try:
+        if not os.path.isdir(repo_path):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid repository path: {repo_path}"
+            )
+        
+        # Auto-parse if not already done
+        if not service.get_ir(repo_path) and not force:
+            service.parse_repository(repo_path)
+        
+        ckg_data = service.get_ckg_export(repo_path, force)
+        
+        return {
+            "success": True,
+            "data": ckg_data
+        }
+    except Exception as e:
+        logger.error(f"Error building CKG: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/ckg/subgraph", response_model=dict)
+def get_ckg_subgraph(
+    repo_path: str = Query(..., description="Repository path"),
+    component_id: str = Query(..., description="Center node ID"),
+    k_hops: int = Query(1, description="Number of hops", ge=1, le=5),
+    edge_types: Optional[str] = Query(None, description="Comma-separated edge types"),
+    direction: str = Query("both", description="Direction: in, out, or both")
+):
+    """
+    Get k-hop neighborhood subgraph around a component.
+    
+    Useful for:
+    - Analyzing local dependencies of a function
+    - Visualizing call chains
+    - Tracing data flow around a component
+    
+    Args:
+        repo_path: Repository path
+        component_id: Center node ID (function/class/module)
+        k_hops: Number of hops to expand (1-5)
+        edge_types: Filter by types (e.g., "calls,hierarchy")
+        direction: "in" (predecessors), "out" (successors), or "both"
+    """
+    service = get_graph_service()
+    
+    try:
+        if not os.path.isdir(repo_path):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid repository path: {repo_path}"
+            )
+        
+        # Parse edge types if provided
+        edge_type_list = None
+        if edge_types:
+            edge_type_list = [t.strip() for t in edge_types.split(",")]
+        
+        # Get subgraph
+        subgraph_data = service.get_ckg_subgraph(
+            repo_path,
+            component_id,
+            k_hops,
+            edge_type_list,
+            direction
+        )
+        
+        return {
+            "success": True,
+            "data": subgraph_data
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error getting CKG subgraph: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/ckg/stats", response_model=dict)
+def get_ckg_stats(
+    repo_path: str = Query(..., description="Repository path")
+):
+    """
+    Get statistics about the Complete Knowledge Graph.
+    
+    Returns:
+    - Node/edge counts by type
+    - Degree statistics
+    - Graph properties (DAG, connected components, etc.)
+    """
+    service = get_graph_service()
+    
+    try:
+        if not os.path.isdir(repo_path):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid repository path: {repo_path}"
+            )
+        
+        stats = service.get_ckg_stats(repo_path)
+        
+        return {
+            "success": True,
+            "data": stats
+        }
+    except Exception as e:
+        logger.error(f"Error getting CKG stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/ckg/paths", response_model=dict)
+def get_ckg_paths(
+    repo_path: str = Query(..., description="Repository path"),
+    source: str = Query(..., description="Source node ID"),
+    target: str = Query(..., description="Target node ID"),
+    max_depth: int = Query(10, description="Maximum path length", ge=1, le=20),
+    edge_types: Optional[str] = Query(None, description="Comma-separated edge types")
+):
+    """
+    Find all paths between two nodes in the CKG.
+    
+    Useful for:
+    - Dependency analysis (what does X depend on through Y?)
+    - Call chain analysis (how is function A reached from function B?)
+    - Data flow tracing (how does data flow from A to B?)
+    
+    Args:
+        source: Source node ID
+        target: Target node ID
+        max_depth: Maximum path length (1-20)
+        edge_types: Filter by types (e.g., "calls,hierarchy")
+    """
+    service = get_graph_service()
+    
+    try:
+        if not os.path.isdir(repo_path):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid repository path: {repo_path}"
+            )
+        
+        # Parse edge types if provided
+        edge_type_list = None
+        if edge_types:
+            edge_type_list = [t.strip() for t in edge_types.split(",")]
+        
+        # Find paths
+        paths = service.get_ckg_paths(
+            repo_path,
+            source,
+            target,
+            max_depth,
+            edge_type_list
+        )
+        
+        return {
+            "success": True,
+            "data": {
+                "paths": paths,
+                "count": len(paths)
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error finding CKG paths: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/ckg/clear")
+def clear_ckg_cache(
+    repo_path: Optional[str] = Query(None, description="Repository path (or all if omitted)")
+):
+    """Clear CKG cache for a repository or all repositories"""
+    service = get_graph_service()
+    service.clear_ckg_cache(repo_path)
+    
+    return {
+        "success": True,
+        "message": "CKG cache cleared"
+    }
+

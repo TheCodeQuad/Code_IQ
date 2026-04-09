@@ -188,7 +188,7 @@ class ComprehensiveTruthfulnessEvaluator:
             self.use_llm = False
             return
 
-        model_path = project_root / "models" / "qwen2.5-coder-14b-instruct-q4_k_m.gguf"
+        model_path = project_root / "models" / "codellama-13b-instruct.Q4_K_M.gguf"
 
         if not model_path.exists():
             logger.warning(f"Model not found at {model_path}. Falling back to regex extraction.")
