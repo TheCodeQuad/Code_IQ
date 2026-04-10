@@ -164,15 +164,15 @@ export default function ResultsOverviewPage() {
           
         </div>
         <div className="flex items-center gap-2">
-          <Badge variant="outline" className="gap-1.5 py-1.5 border-stone-200 text-stone-600">
-            <Layers className="w-3.5 h-3.5" />
+          <Badge variant="outline" className="gap-1.5 py-1.5 border-purple-200 text-stone-600">
+            <Layers className="w-3.5 h-3.5 text-black" />
             {fileCount || "-"} files
           </Badge>
-          <Badge variant="outline" className="gap-1.5 py-1.5 border-stone-200 text-stone-600">
-            <Code2 className="w-3.5 h-3.5" />
+          <Badge variant="outline" className="gap-1.5 py-1.5 border-purple-200 text-stone-600">
+            <Code2 className="w-3.5 h-3.5 text-black" />
             {componentCount || "-"} components
           </Badge>
-          <Badge className="gap-1.5 py-1.5 bg-emerald-100 text-emerald-700 border-0">
+          <Badge className="gap-1.5 py-1.5 bg-purple-100 text-stone-600 border-0">
             <CheckCircle2 className="w-3.5 h-3.5" />
             {documentedPct}% documented
           </Badge>
@@ -182,12 +182,12 @@ export default function ResultsOverviewPage() {
       {/* Quick Stats */}
       <div className="grid grid-cols-4 gap-4">
         {[
-          { icon: FileCode, label: "Total Files", value: String(fileCount || "-"), bg: "bg-blue-100", color: "text-blue-600" },
-          { icon: BookOpen, label: "Components", value: String(componentCount || "-"), bg: "bg-emerald-100", color: "text-emerald-600" },
-          { icon: GitBranch, label: "Graphs Generated", value: "5 types", bg: "bg-purple-100", color: "text-purple-600" },
-          { icon: CheckCircle2, label: "Documentation", value: `${documentedPct}%`, bg: "bg-amber-100", color: "text-amber-600" },
+          { icon: FileCode, label: "Total Files", value: String(fileCount || "-"), bg: "bg-purple-100", color: "text-black" },
+          { icon: BookOpen, label: "Components", value: String(componentCount || "-"), bg: "bg-purple-100", color: "text-black" },
+          { icon: GitBranch, label: "Graphs Generated", value: "5 types", bg: "bg-purple-100", color: "text-black" },
+          { icon: CheckCircle2, label: "Documentation", value: `${documentedPct}%`, bg: "bg-purple-100", color: "text-black" },
         ].map((stat) => (
-          <Card key={stat.label} className="border-stone-200 bg-white">
+          <Card key={stat.label} className="border-purple-200 bg-white">
             <CardContent className="p-4">
               <div className="flex items-center gap-3">
                 <div className={`w-10 h-10 rounded-xl ${stat.bg} flex items-center justify-center`}>
@@ -207,39 +207,44 @@ export default function ResultsOverviewPage() {
       <div className="grid md:grid-cols-2 gap-4">
         {pageDescriptions.map((page) => {
           const Icon = page.icon
+          const newPage = {
+            ...page,
+            iconBg: "bg-purple-100",
+            iconColor: "text-black"
+          }
           const statValue =
-            page.href === "/documentation"
+            newPage.href === "/documentation"
               ? String(fileCount || "-")
-              : page.href === "/graph"
+              : newPage.href === "/graph"
                 ? String(componentCount || "-")
-                : page.stats.value
+                : newPage.stats.value
           return (
-            <Card key={page.href} className="border-stone-200 bg-white hover:border-stone-300 transition-all group">
+            <Card key={newPage.href} className="border-purple-200 bg-white hover:border-purple-300 transition-all group">
               <CardHeader className="pb-3">
                 <div className="flex items-start justify-between">
-                  <div className={`w-11 h-11 rounded-xl ${page.iconBg} flex items-center justify-center`}>
-                    <Icon className={`w-5 h-5 ${page.iconColor}`} />
+                  <div className={`w-11 h-11 rounded-xl ${newPage.iconBg} flex items-center justify-center`}>
+                    <Icon className={`w-5 h-5 ${newPage.iconColor}`} />
                   </div>
-                  <Badge variant="outline" className="text-xs border-stone-200 text-stone-500">
-                    {page.stats.label}: {statValue}
+                  <Badge variant="outline" className="text-xs border-purple-200 text-stone-500">
+                    {newPage.stats.label}: {statValue}
                   </Badge>
                 </div>
-                <CardTitle className="text-lg mt-3 text-stone-800">{page.title}</CardTitle>
+                <CardTitle className="text-lg mt-3 text-stone-800">{newPage.title}</CardTitle>
                 <CardDescription className="text-sm leading-relaxed text-stone-500">
-                  {page.description}
+                  {newPage.description}
                 </CardDescription>
               </CardHeader>
               <CardContent className="pt-0">
                 <div className="flex flex-wrap gap-1.5 mb-4">
-                  {page.features.map((feature) => (
-                    <Badge key={feature} className="text-xs font-normal bg-stone-100 text-stone-600 border-0 hover:bg-stone-100">
+                  {newPage.features.map((feature) => (
+                    <Badge key={feature} className="text-xs font-normal bg-purple-100 text-stone-600 border-0 hover:bg-purple-100">
                       {feature}
                     </Badge>
                   ))}
                 </div>
-                <Link href={`${basePath}${page.href}`}>
-                  <Button variant="outline" className="w-full border-stone-200 bg-white hover:bg-stone-50 text-stone-700 group-hover:border-stone-300">
-                    Open {page.title}
+                <Link href={`${basePath}${newPage.href}`}>
+                  <Button className="w-full bg-black text-white hover:bg-purple-900">
+                    Open {newPage.title}
                     <ArrowRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
                   </Button>
                 </Link>
