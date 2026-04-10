@@ -44,7 +44,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "1.0.4",
-    "cytoscape": "^3.30.4",
+    "cytoscape": "^3.33.2",
     "cytoscape-fcose": "^2.2.0",
     "date-fns": "4.1.0",
     "embla-carousel-react": "8.5.1",

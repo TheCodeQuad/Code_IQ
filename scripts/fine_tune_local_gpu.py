@@ -141,7 +141,7 @@ if train_dataset is not None:
 # =====================================================
 logger.info("Loading model with QLoRA...")
 
-MODEL_NAME = "Qwen/Qwen2.5-Coder-7B"
+MODEL_NAME = "Qwen/Qwen2.5-Coder-1.5B"
 
 tokenizer = AutoTokenizer.from_pretrained(
     MODEL_NAME,

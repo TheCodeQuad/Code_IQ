@@ -605,7 +605,7 @@ def get_llm_client() -> BaseLLMClient:
             
             if mode == 'llama_cpp':
                 # Use direct llama-cpp-python inference
-                model_path = local_config.get('model_path', 'd:\\Projects\\Code_IQ\\models\\DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf')
+                model_path = local_config.get('model_path', 'C:\\PROJECTS\\Code_IQ\\models\\qwen2.5-coder-1.5b-instruct-q4_k_m.gguf')
                 
                 # Convert relative paths to absolute
                 model_path = str(Path(model_path).resolve())

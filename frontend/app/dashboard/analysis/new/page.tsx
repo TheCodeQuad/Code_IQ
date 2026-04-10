@@ -165,8 +165,8 @@ export default function NewAnalysisPage() {
         user_id: session.user.id,
       })
 
-      // Step 2: Return to dashboard. User will start analysis explicitly there.
-      router.push("/dashboard")
+      // Step 2: Navigate to pipeline page; execution auto-starts there.
+      router.push(`/dashboard/analysis/${uploadResponse.repo_id}/pipeline`)
     } catch (err: any) {
       setAnalysisError(err.message || "Failed to upload repository. Please check the URL and try again.")
       setIsAnalyzing(false)
@@ -544,7 +544,7 @@ export default function NewAnalysisPage() {
                     ) : (
                       <>
                         <Play className="w-3.5 h-3.5 mr-1.5" />
-                        Clone Repository
+                        Run Analysis
                       </>
                     )}
                   </Button>
