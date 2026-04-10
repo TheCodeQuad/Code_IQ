@@ -1,0 +1,1 @@
+{"created_at": 1775854571.7390668, "content": "<DOCSTRING>\nBinds users to a user manager.\n\nAdds a list of users to a user manager instance.\n@returns {void}\n</DOCSTRING>", "model": "qwen2.5-coder-7b-instruct-q4_k_m.gguf", "usage": {"prompt_tokens": 3422, "completion_tokens": 32, "total_tokens": 3454}, "metadata": {"local": true, "memory_based": true}}

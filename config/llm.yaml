@@ -1,30 +1,30 @@
 agent_models:
   evaluator:
-    model: qwen2.5-coder-1.5b-instruct-q4_k_m
+    model: qwen2.5-coder-7b-instruct-q4_k_m
     params:
       max_tokens: 4000
       temperature: 0.4
     provider: local
   reader:
-    model: qwen2.5-coder-1.5b-instruct-q4_k_m
+    model: qwen2.5-coder-7b-instruct-q4_k_m
     params:
       max_tokens: 4000
       temperature: 0.3
     provider: local
   searcher:
-    model: qwen2.5-coder-1.5b-instruct-q4_k_m
+    model: qwen2.5-coder-7b-instruct-q4_k_m
     params:
       max_tokens: 2000
       temperature: 0.5
     provider: local
   verifier:
-    model: qwen2.5-coder-1.5b-instruct-q4_k_m
+    model: qwen2.5-coder-7b-instruct-q4_k_m
     params:
       max_tokens: 4000
       temperature: 0.2
     provider: local
   writer:
-    model: qwen2.5-coder-1.5b-instruct-q4_k_m
+    model: qwen2.5-coder-7b-instruct-q4_k_m
     params:
       max_tokens: 2000
       temperature: 0.3
@@ -67,9 +67,9 @@ providers:
     enabled: true
     main_gpu: 0
     mode: llama_cpp
-    model_path: 'C:\PROJECTS\Code_IQ\models\qwen2.5-coder-1.5b-instruct-q4_k_m.gguf'
+    model_path: models/qwen2.5-coder-7b-instruct-q4_k_m.gguf
     models:
-      default: qwen2.5-coder-1.5b-instruct-q4_k_m
+      default: qwen2.5-coder-7b-instruct-q4_k_m
     n_ctx: 8192
     n_gpu_layers: -1
     n_threads: null
