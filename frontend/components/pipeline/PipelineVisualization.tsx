@@ -34,6 +34,7 @@ import {
   type StepStatus,
   type ComponentType,
 } from './pipeline-data'
+import { RepositoryToDAG, type LogEntry } from './RepositoryToDAG'
 
 // Status icon component
 function StatusIcon({ status, size = 'sm' }: { status: StepStatus; size?: 'sm' | 'md' | 'lg' }) {
@@ -897,6 +898,7 @@ function toComponentType(raw?: string): ComponentType {
 export function PipelineVisualization({ repoId, autoStart = false }: { repoId: string; autoStart?: boolean }) {
   const [pipelineState, setPipelineState] = useState<PipelineState>(createInitialPipelineState)
   const [isStarting, setIsStarting] = useState(false)
+  const [showNavigatorOverlay, setShowNavigatorOverlay] = useState(false)
   const [streamState, setStreamState] = useState<'connecting' | 'live' | 'disconnected' | 'error'>('connecting')
   const [repoMeta, setRepoMeta] = useState<{ name?: string; fileCount?: number }>({})
   const [expandedModules, setExpandedModules] = useState<Record<string, boolean>>({
@@ -963,6 +965,7 @@ export function PipelineVisualization({ repoId, autoStart = false }: { repoId: s
         next.navigator.status = stepStatus === 'completed' && next.navigator.steps.every((s) => s.status === 'completed')
           ? 'completed'
           : 'running'
+        next.navigator.progress = Math.max(next.navigator.progress, evt.progress_percent ?? 0)
 
         const step = next.navigator.steps.find((s) => s.id === evt.step_id)
         if (step) {
@@ -996,6 +999,7 @@ export function PipelineVisualization({ repoId, autoStart = false }: { repoId: s
 
         if (next.navigator.steps.every((s) => s.status === 'completed')) {
           next.navigator.status = 'completed'
+          next.navigator.progress = 100
         }
       }
 
@@ -1138,6 +1142,7 @@ export function PipelineVisualization({ repoId, autoStart = false }: { repoId: s
 
   const startPipeline = async () => {
     setIsStarting(true)
+    setShowNavigatorOverlay(true)
     try {
       resetPipelineViewState()
       const res = await fetch(`/api/repos/${repoId}/generate`, {
@@ -1161,6 +1166,7 @@ export function PipelineVisualization({ repoId, autoStart = false }: { repoId: s
       eventSourceRef.current = null
     }
     autoStartTriggeredRef.current = false
+    setShowNavigatorOverlay(false)
     setRepoMeta({})
     setStreamState('connecting')
     resetPipelineViewState()
@@ -1184,6 +1190,9 @@ export function PipelineVisualization({ repoId, autoStart = false }: { repoId: s
 
         if (statusRes.ok) {
           const status = (await statusRes.json()) as BackendPipelineEvent
+          if (status.status && !['pending', 'failed', 'completed'].includes(String(status.status))) {
+            setShowNavigatorOverlay(true)
+          }
           applyBackendEvent({
             phase: 'navigator',
             step_id: 'extract-components',
@@ -1255,9 +1264,33 @@ export function PipelineVisualization({ repoId, autoStart = false }: { repoId: s
     pipelineState.finalization.steps.filter((s) => s.status === 'completed').length
   const overallProgress = totalSteps > 0 ? Math.round((completedSteps / totalSteps) * 100) : 0
   const isPipelineCompleted = pipelineState.finalization.status === 'completed'
+  const navigatorDone =
+    pipelineState.navigator.status === 'completed' ||
+    pipelineState.agentic.status === 'running' ||
+    pipelineState.agentic.status === 'completed' ||
+    pipelineState.finalization.status === 'running' ||
+    pipelineState.finalization.status === 'completed'
+
+  const navigatorLogs: LogEntry[] = pipelineState.navigator.steps.flatMap((step) =>
+    step.logs.map((message) => ({
+      message,
+      type: step.status === 'completed' ? 'success' : step.status === 'running' ? 'process' : 'info',
+    }))
+  )
+  const completedNavigatorSteps = pipelineState.navigator.steps.filter((s) => s.status === 'completed').length
+  const navigatorProgress = pipelineState.navigator.progress > 0
+    ? pipelineState.navigator.progress
+    : Math.round((completedNavigatorSteps / Math.max(pipelineState.navigator.steps.length, 1)) * 100)
 
   return (
     <div className="min-h-screen bg-gray-50 p-6">
+      <RepositoryToDAG
+        isActive={showNavigatorOverlay}
+        logs={navigatorLogs}
+        progress={navigatorProgress}
+        isComplete={navigatorDone}
+        onComplete={() => setShowNavigatorOverlay(false)}
+      />
       <div className="max-w-6xl mx-auto space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
@@ -1302,13 +1335,6 @@ export function PipelineVisualization({ repoId, autoStart = false }: { repoId: s
 
         {/* Pipeline modules */}
         <div className="space-y-4">
-          <NavigatorModuleCard
-            module={pipelineState.navigator}
-            detectedTotal={pipelineState.agentic.totalComponents}
-            isExpanded={expandedModules.navigator}
-            onToggle={() => toggleModule('navigator')}
-          />
-
           <AgenticModuleCard
             module={pipelineState.agentic}
             isExpanded={expandedModules.agentic}
