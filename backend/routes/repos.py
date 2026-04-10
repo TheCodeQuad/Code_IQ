@@ -26,6 +26,7 @@ from typing import Any, Optional
 from bson import ObjectId
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 from backend.models.repository import (
     AgentLog,
@@ -336,6 +337,11 @@ async def delete_repo(repo_id: str):
 _running_pipelines: set[str] = set()
 
 
+class GenerateDocsRequest(BaseModel):
+    """Optional payload for pipeline generation options."""
+    demo_mode: bool = False
+
+
 async def _publish_pipeline_event(repo_id: str, event: dict[str, Any]) -> None:
     """Publish a progress event to SSE subscribers."""
     payload = dict(event)
@@ -344,7 +350,12 @@ async def _publish_pipeline_event(repo_id: str, event: dict[str, Any]) -> None:
     await progress_broadcaster.publish(repo_id, payload)
 
 
-def _run_pipeline_thread(repo_id: str, repo_path: str, loop: asyncio.AbstractEventLoop):
+def _run_pipeline_thread(
+    repo_id: str,
+    repo_path: str,
+    loop: asyncio.AbstractEventLoop,
+    demo_mode: bool = False,
+):
     """
     Runs the synchronous pipeline in a background thread.
     Fires async DB updates through the provided event loop.
@@ -382,7 +393,7 @@ def _run_pipeline_thread(repo_id: str, repo_path: str, loop: asyncio.AbstractEve
         )
 
     try:
-        result = run_pipeline(repo_path, status_callback=status_callback)
+        result = run_pipeline(repo_path, status_callback=status_callback, demo_mode=demo_mode)
 
         # Extract statistics and evaluation summary
         stats = result.get("statistics", {})
@@ -398,6 +409,7 @@ def _run_pipeline_thread(repo_id: str, repo_path: str, loop: asyncio.AbstractEve
                     "completed_at": datetime.utcnow().isoformat(),
                     "stats": stats,
                     "documentation_count": doc_count,
+                    "demo_mode": bool(result.get("demo_mode", demo_mode)),
                 },
             ),
             loop,
@@ -410,9 +422,10 @@ def _run_pipeline_thread(repo_id: str, repo_path: str, loop: asyncio.AbstractEve
                     "agent": "pipeline",
                     "status": "completed",
                     "progress_percent": 100,
-                    "message": "Pipeline completed",
+                    "message": "Demo analysis completed" if demo_mode else "Pipeline completed",
                     "phase": "finalization",
                     "step_id": "pipeline-completed",
+                    "demo_mode": demo_mode,
                 },
             ),
             loop,
@@ -446,7 +459,7 @@ def _run_pipeline_thread(repo_id: str, repo_path: str, loop: asyncio.AbstractEve
 
 
 @router.post("/{repo_id}/generate", status_code=202)
-async def generate_docs(repo_id: str):
+async def generate_docs(repo_id: str, payload: Optional[GenerateDocsRequest] = None):
     """
     Start the documentation-generation pipeline for a repository.
     Returns immediately — poll ``GET /api/repos/{repo_id}/status`` for progress.
@@ -456,6 +469,8 @@ async def generate_docs(repo_id: str):
 
     if repo_id in _running_pipelines:
         raise HTTPException(status_code=409, detail="Pipeline already running for this repo")
+
+    demo_mode = bool(payload.demo_mode) if payload else False
 
     collection = await get_repos_collection()
     doc = await collection.find_one({"_id": ObjectId(repo_id)})
@@ -481,9 +496,10 @@ async def generate_docs(repo_id: str):
             "agent": "navigator",
             "status": "in_progress",
             "progress_percent": 0,
-            "message": "Pipeline started",
+            "message": "Demo analysis started" if demo_mode else "Pipeline started",
             "phase": "navigator",
             "step_id": "extract-components",
+            "demo_mode": demo_mode,
         },
     )
 
@@ -491,7 +507,7 @@ async def generate_docs(repo_id: str):
     loop = asyncio.get_running_loop()
     thread = threading.Thread(
         target=_run_pipeline_thread,
-        args=(repo_id, repo_path, loop),
+        args=(repo_id, repo_path, loop, demo_mode),
         daemon=True,
     )
     thread.start()
@@ -499,7 +515,9 @@ async def generate_docs(repo_id: str):
     return {
         "success": True,
         "repo_id": repo_id,
-        "message": "Pipeline started",
+        "demo_mode": demo_mode,
+        "mode": "demo" if demo_mode else "full",
+        "message": "Demo analysis started" if demo_mode else "Pipeline started",
     }
 
 

@@ -4,7 +4,10 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
-from evaluator.evaluation_common import ScoreLevel, SummaryEvaluationExample
+try:
+    from backend.evaluator.evaluation_common import ScoreLevel, SummaryEvaluationExample
+except ImportError:
+    from evaluator.evaluation_common import ScoreLevel, SummaryEvaluationExample
 
 class DocstringSummaryEvaluator:
     """

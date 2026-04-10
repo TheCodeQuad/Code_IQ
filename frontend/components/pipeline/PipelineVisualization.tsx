@@ -861,6 +861,7 @@ function FinalizationModuleCard({ module, isExpanded, onToggle }: { module: Pipe
 // Main Pipeline Visualization Component
 type BackendPipelineEvent = {
   event_type?: string
+  demo_mode?: boolean
   phase?: 'navigator' | 'agentic' | 'finalization'
   step_id?: string
   agent?: string
@@ -897,6 +898,7 @@ function toComponentType(raw?: string): ComponentType {
 export function PipelineVisualization({ repoId, autoStart = false }: { repoId: string; autoStart?: boolean }) {
   const [pipelineState, setPipelineState] = useState<PipelineState>(createInitialPipelineState)
   const [isStarting, setIsStarting] = useState(false)
+  const [startMode, setStartMode] = useState<'full' | 'demo'>('full')
   const [streamState, setStreamState] = useState<'connecting' | 'live' | 'disconnected' | 'error'>('connecting')
   const [repoMeta, setRepoMeta] = useState<{ name?: string; fileCount?: number }>({})
   const [expandedModules, setExpandedModules] = useState<Record<string, boolean>>({
@@ -919,6 +921,38 @@ export function PipelineVisualization({ repoId, autoStart = false }: { repoId: s
 
     setPipelineState((prev) => {
       const next = JSON.parse(JSON.stringify(prev)) as PipelineState
+
+      if (evt.event_type === 'pipeline-completed') {
+        next.navigator.status = 'completed'
+        next.navigator.steps.forEach((s) => {
+          s.status = 'completed'
+          s.progress = 100
+        })
+
+        next.agentic.status = 'completed'
+        next.agentic.iterations.forEach((iteration) => {
+          iteration.status = 'completed'
+          iteration.steps.reader.status = 'completed'
+          iteration.steps.searcher.status = 'completed'
+          iteration.steps.writer.status = 'completed'
+          iteration.steps.verifier.status = 'completed'
+          iteration.steps.insertion.status = 'completed'
+          iteration.steps.reader.progress = 100
+          iteration.steps.searcher.progress = 100
+          iteration.steps.writer.progress = 100
+          iteration.steps.verifier.progress = 100
+          iteration.steps.insertion.progress = 100
+        })
+        next.agentic.completedComponents = next.agentic.iterations.length
+
+        next.finalization.status = 'completed'
+        next.finalization.steps.forEach((s) => {
+          s.status = 'completed'
+          s.progress = 100
+        })
+        return next
+      }
+
       const stepStatus = toStepStatus(evt.status)
       const progress = stepStatus === 'completed' ? 100 : Math.max(10, evt.progress_percent ?? 0)
 
@@ -1099,10 +1133,15 @@ export function PipelineVisualization({ repoId, autoStart = false }: { repoId: s
     source.onerror = () => setStreamState('disconnected')
   }, [applyBackendEvent, repoId])
 
-  const startPipeline = async () => {
+  const startPipeline = async (demoMode = false) => {
     setIsStarting(true)
+    setStartMode(demoMode ? 'demo' : 'full')
     try {
-      const res = await fetch(`/api/repos/${repoId}/generate`, { method: 'POST' })
+      const res = await fetch(`/api/repos/${repoId}/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ demo_mode: demoMode }),
+      })
       if (!res.ok) {
         throw new Error(`Failed to start pipeline (HTTP ${res.status})`)
       }
@@ -1222,13 +1261,21 @@ export function PipelineVisualization({ repoId, autoStart = false }: { repoId: s
             <Button onClick={connectEventStream} variant="outline" className="border-gray-300">
               Reconnect Stream
             </Button>
-            <Button onClick={startPipeline} className="bg-emerald-600 hover:bg-emerald-700 text-white" disabled={isStarting || streamState === 'live'}>
+            <Button onClick={() => void startPipeline(false)} className="bg-emerald-600 hover:bg-emerald-700 text-white" disabled={isStarting}>
               {isStarting ? (
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
               ) : (
                 <Play className="w-4 h-4 mr-2" />
               )}
               Start Pipeline
+            </Button>
+            <Button onClick={() => void startPipeline(true)} variant="outline" className="border-emerald-300 text-emerald-700" disabled={isStarting}>
+              {isStarting && startMode === 'demo' ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <Play className="w-4 h-4 mr-2" />
+              )}
+              Run Demo Analysis
             </Button>
           </div>
         </div>
@@ -1273,7 +1320,12 @@ export function PipelineVisualization({ repoId, autoStart = false }: { repoId: s
         </div>
 
         {isPipelineCompleted && (
-          <div className="flex justify-end pt-2">
+          <div className="flex justify-end gap-2 pt-2">
+            <Link href={`/dashboard/analysis/${repoId}/results/graph`}>
+              <Button variant="outline" className="border-gray-300">
+                View Graph
+              </Button>
+            </Link>
             <Link href={`/dashboard/analysis/${repoId}/results`}>
               <Button className="bg-emerald-600 hover:bg-emerald-700 text-white">
                 View Results

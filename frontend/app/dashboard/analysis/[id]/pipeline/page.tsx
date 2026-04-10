@@ -5,14 +5,10 @@ import { Button } from "@/components/ui/button"
 
 export default async function PipelinePage({
   params,
-  searchParams,
 }: {
   params: Promise<{ id: string }>
-  searchParams: Promise<{ autostart?: string }>
 }) {
   const { id } = await params
-  const { autostart } = await searchParams
-  const autoStart = autostart === "1"
 
   return (
     <div className="min-h-screen bg-background">
@@ -41,7 +37,7 @@ export default async function PipelinePage({
 
       {/* Main content */}
       <main className="max-w-7xl mx-auto px-6 py-8">
-        <PipelineVisualization repoId={id} autoStart={autoStart} />
+        <PipelineVisualization repoId={id} autoStart={false} />
       </main>
     </div>
   )
