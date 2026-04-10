@@ -19,7 +19,7 @@ import {
 
 const statusConfig = {
   pending: { label: "Pending", color: "bg-amber-500 text-white" },
-  completed: { label: "Completed", color: "bg-emerald-500 text-white" },
+  completed: { label: "Completed", color: "bg-blue-600 text-white" },
   incomplete: { label: "Incomplete", color: "bg-red-500 text-white" },
 }
 
@@ -83,34 +83,34 @@ export default function ResultsLayout({ children }: { children: React.ReactNode 
   const currentPath = pathname.replace(basePath, "") || ""
   
   return (
-    <div className="min-h-screen bg-transparent">
+    <div className="min-h-screen bg-[#fef5fb]">
       {/* Header/Navbar */}
-      <header className="border-b border-stone-200/50 bg-background/80 backdrop-blur-md sticky top-0 z-50">
+      <header className="border-b border-purple-200 bg-white backdrop-blur-md sticky top-0 z-50">
         <div className="max-w-[1600px] mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             {/* Left section */}
             <div className="flex items-center gap-4">
               <Link href="/dashboard">
-                <Button variant="ghost" size="sm" className="gap-2 text-stone-600 hover:text-stone-900">
+                <Button variant="ghost" size="sm" className="gap-2 text-black hover:text-black">
                   <ArrowLeft className="w-4 h-4" />
                   Back
                 </Button>
               </Link>
               
-              <div className="h-6 w-px bg-stone-200" />
+              <div className="h-6 w-px bg-purple-200" />
               
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-lg bg-amber-400 flex items-center justify-center">
+                <div className="w-9 h-9 rounded-lg bg-purple-600 flex items-center justify-center">
                   <Code2 className="w-5 h-5 text-white" />
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-lg font-semibold text-stone-900">
+                  <span className="text-lg font-semibold text-black">
                     {repoName}
                   </span>
                   <Badge className={`${status.color} text-xs font-medium px-2.5 py-0.5 rounded-full`}>
                     {status.label}
                   </Badge>
-                  <Badge variant="outline" className="text-xs text-stone-500 border-stone-300">
+                  <Badge variant="outline" className="text-xs text-purple-600 border-purple-300">
                     {repoLanguage}
                   </Badge>
                 </div>
@@ -118,7 +118,7 @@ export default function ResultsLayout({ children }: { children: React.ReactNode 
             </div>
             
             {/* Right section */}
-            <Button className="bg-stone-900 text-white hover:bg-stone-800">
+            <Button className="bg-black text-white hover:bg-purple-900">
               <Download className="w-4 h-4 mr-2" />
               Export File
             </Button>
@@ -127,9 +127,9 @@ export default function ResultsLayout({ children }: { children: React.ReactNode 
       </header>
 
       {/* Sub Navigation - Pill Style */}
-      <div className="border-b border-stone-200/50 bg-background/50">
+      <div className="border-b border-purple-200 bg-[#fef5fb]">
         <div className="max-w-[1600px] mx-auto px-6 py-3">
-          <nav className="inline-flex items-center gap-1 p-1 bg-stone-200/50 rounded-lg">
+          <nav className="inline-flex items-center gap-1 p-1.5 bg-purple-100 rounded-lg">
             {navItems.map((item) => {
               const isActive = currentPath === item.href
               const Icon = item.icon
@@ -137,13 +137,13 @@ export default function ResultsLayout({ children }: { children: React.ReactNode 
                 <Link
                   key={item.href}
                   href={`${basePath}${item.href}`}
-                  className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-all ${
+                  className={`flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-md transition-all ${
                     isActive
-                      ? "bg-white text-stone-900 shadow-sm"
-                      : "text-stone-600 hover:text-stone-900"
+                      ? "bg-[#fef5fb] text-black shadow-sm"
+                      : "text-black hover:bg-white/50"
                   }`}
                 >
-                  <Icon className="w-4 h-4" />
+                  <Icon className="w-4 h-4 text-black" />
                   {item.label}
                 </Link>
               )
