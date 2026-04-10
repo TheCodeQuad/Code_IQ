@@ -6,7 +6,7 @@ agent_models:
       temperature: 0.4
     provider: local
   reader:
-    model: codellama-13b-instruct.Q4_K_M
+    model: codellama-13b-instruct.Q4_K_M        
     params:
       max_tokens: 4000
       temperature: 0.3
@@ -67,7 +67,7 @@ providers:
     enabled: true
     main_gpu: 0
     mode: llama_cpp
-    model_path: C:\BIA6\CodeIQ\Code_IQ\models\codellama-13b-instruct.Q4_K_M.gguf
+    model_path: C:\BIA6\CodeIQ\Code_IQ\models\D:\CODEIQ\Code_IQ\models\qwen2.5-coder-1.5b-instruct-q4_k_m.gguf
     models:
       default: CodeLlama-13B-Instruct
     n_ctx: 8192

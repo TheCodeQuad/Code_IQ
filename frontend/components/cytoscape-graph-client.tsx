@@ -39,22 +39,76 @@ interface CytoscapeGraphClientProps {
   className?: string
 }
 
-// Node colors based on type
+function getReadableNodeLabel(node: GraphNode): string {
+  const rawName = (node as any)?.name
+  const metaName = node.metadata?.name
+  const explicitLabel = node.label
+  const rawId = (node.id || "").split(":").pop() || node.id || ""
+  const isStatementLike =
+    node.type === "statement" ||
+    /^(stmt|statement)_/i.test(rawId) ||
+    (typeof explicitLabel === "string" && /^(stmt|statement)_/i.test(explicitLabel.trim()))
+
+  const preferred = [rawName, metaName, explicitLabel]
+    .map((v) => (typeof v === "string" ? v.trim() : ""))
+    .find((v) => v.length > 0)
+
+  if (isStatementLike) {
+    if (preferred) {
+      return preferred.length > 14 ? `${preferred.slice(0, 14)}...` : preferred
+    }
+    const stmtId = rawId.replace(/^(stmt|statement)_/i, "")
+    return stmtId ? `stmt ${stmtId.slice(0, 8)}` : "stmt"
+  }
+
+  const cleanGeneratedPrefix = (value: string) =>
+    value.replace(/^(func|function|class|method|module|node)_\d+_?/i, "").trim()
+
+  const compactSymbol = (value: string) => {
+    const tail = value.split(/[.:/\\]/).pop() || value
+    const noPrefix = cleanGeneratedPrefix(tail)
+    const noNumericLead = noPrefix.replace(/^\d+[_-]*/, "").trim()
+    return (noNumericLead || noPrefix || tail).trim()
+  }
+
+  const isMeaningful = (value: string) => {
+    const v = value.trim()
+    return v.length > 0 && !/^\d+$/.test(v) && !/^(func|function|method)_?\d*$/i.test(v)
+  }
+
+  if (preferred) {
+    const cleanedPreferred = compactSymbol(preferred)
+    if (node.type === "function" || node.type === "method") {
+      if (isMeaningful(cleanedPreferred)) return cleanedPreferred
+      const byId = compactSymbol(rawId)
+      return isMeaningful(byId) ? byId : (node.type === "method" ? "method" : "function")
+    }
+    return cleanedPreferred || preferred
+  }
+
+  const cleanedId = compactSymbol(rawId)
+  if (node.type === "function" || node.type === "method") {
+    return isMeaningful(cleanedId) ? cleanedId : (node.type === "method" ? "method" : "function")
+  }
+  return cleanedId || rawId
+}
+
+// Solid node colors based on type
 const nodeColors: Record<string, { bg: string; border: string; text: string }> = {
   // Hierarchy types
-  module: { bg: "#fef3c7", border: "#f59e0b", text: "#92400e" },
-  class: { bg: "#f3e8ff", border: "#a855f7", text: "#6b21a8" },
-  function: { bg: "#dbeafe", border: "#3b82f6", text: "#1e40af" },
-  method: { bg: "#ccfbf1", border: "#14b8a6", text: "#0f766e" },
-  statement: { bg: "#e0e7ff", border: "#6366f1", text: "#3730a3" },
+  module: { bg: "#2563eb", border: "#1d4ed8", text: "#ffffff" },
+  class: { bg: "#7c3aed", border: "#6d28d9", text: "#ffffff" },
+  function: { bg: "#0ea5e9", border: "#0284c7", text: "#ffffff" },
+  method: { bg: "#14b8a6", border: "#0f766e", text: "#ffffff" },
+  statement: { bg: "#f97316", border: "#ea580c", text: "#ffffff" },
   
   // CFG types
-  entry: { bg: "#dcfce7", border: "#22c55e", text: "#166534" },
-  exit: { bg: "#fee2e2", border: "#ef4444", text: "#991b1b" },
-  branch: { bg: "#fef9c3", border: "#eab308", text: "#854d0e" },
+  entry: { bg: "#16a34a", border: "#15803d", text: "#ffffff" },
+  exit: { bg: "#dc2626", border: "#b91c1c", text: "#ffffff" },
+  branch: { bg: "#d97706", border: "#b45309", text: "#ffffff" },
   
   // Default
-  default: { bg: "#f3f4f6", border: "#9ca3af", text: "#374151" },
+  default: { bg: "#334155", border: "#1e293b", text: "#ffffff" },
 }
 
 // Edge colors based on type
@@ -73,33 +127,41 @@ export default function CytoscapeGraphClient({
   onNodeClick, 
   className = "" 
 }: CytoscapeGraphClientProps) {
+  const wrapperRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const cyRef = useRef<any>(null)
   const [isReady, setIsReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [isFullscreen, setIsFullscreen] = useState(false)
+
+  const isCyAlive = useCallback(() => {
+    return Boolean(cyRef.current) && !cyRef.current.destroyed()
+  }, [])
 
   // Convert our graph data to Cytoscape elements
   const convertToElements = useCallback((data: GraphData): any[] => {
     const elements: any[] = []
 
-    // Add nodes - DO NOT use backend positions, let force-directed layout compute positions
+    // Add all nodes for full detail.
     data.nodes.forEach((node) => {
       const colors = nodeColors[node.type] || nodeColors.default
+      const displayLabel = getReadableNodeLabel(node)
       elements.push({
         data: {
+          ...node.metadata,
           id: node.id,
-          label: node.label || node.id.split(":").pop() || node.id,
+          label: node.label || "",
+          name: (node as any)?.name || node.metadata?.name || "",
+          displayLabel,
           type: node.type,
           line: node.line,
           code: node.code,
-          ...node.metadata,
           // Store colors for styling
           bgColor: colors.bg,
           borderColor: colors.border,
           textColor: colors.text,
         },
-        // IMPORTANT: Don't use backbone positions - let Cytoscape's force-directed layout compute them
-        // position is intentionally undefined to enable physics-based layout
+        // position intentionally undefined so Cytoscape layout computes it
       })
     })
 
@@ -126,31 +188,46 @@ export default function CytoscapeGraphClient({
   useEffect(() => {
     if (!containerRef.current || !graphData?.nodes?.length) return
 
+    let disposed = false
+
     const initCytoscape = async () => {
       try {
         // Dynamically import cytoscape only on client side
         const { default: cytoscape } = await import("cytoscape")
 
-        // Import and register fcose layout (force-directed)
-        try {
-          const fcoseModule: any = await import("cytoscape-fcose")
-          const fcose = fcoseModule.default ?? fcoseModule
-          cytoscape.use(fcose)
-        } catch (e) {
-          console.error("fcose layout extension not available. Install 'cytoscape-fcose'.", e)
-          setError("fcose layout not available. Please install 'cytoscape-fcose'.")
+        if (disposed || !containerRef.current) {
           return
         }
 
         const elements = convertToElements(graphData)
+        const layoutConfig = graphData.type === "dag"
+          ? {
+              name: "breadthfirst",
+              directed: true,
+              fit: true,
+              padding: 26,
+              spacingFactor: 0.9,
+              animate: true,
+              animationDuration: 600,
+            }
+          : {
+              name: "cose",
+              fit: true,
+              padding: 22,
+              nodeDimensionsIncludeLabels: true,
+              randomize: true,
+              animate: true,
+              animationDuration: 700,
+            }
 
         // Destroy existing instance
-        if (cyRef.current) {
+        if (cyRef.current && !cyRef.current.destroyed()) {
           cyRef.current.destroy()
+          cyRef.current = null
         }
 
         // Create new Cytoscape instance
-        cyRef.current = cytoscape({
+        const cy = cytoscape({
           container: containerRef.current,
           elements: elements,
           style: [
@@ -160,19 +237,19 @@ export default function CytoscapeGraphClient({
               style: {
                 "background-color": "data(bgColor)",
                 "border-color": "data(borderColor)",
-                "border-width": 2,
-                "label": "data(label)",
+                "border-width": 2.5,
+                "label": "data(displayLabel)",
                 "text-valign": "center",
                 "text-halign": "center",
                 "font-size": "10px",
                 "color": "data(textColor)",
-                "text-wrap": "ellipsis",
-                "text-max-width": "80px",
-                "width": "mapData(type, module, statement, 60, 30)",
-                "height": "mapData(type, module, statement, 60, 30)",
+                "text-wrap": "wrap",
+                "text-max-width": "110px",
+                "width": 56,
+                "height": 56,
                 "shape": "roundrectangle",
-                "text-outline-color": "#fff",
-                "text-outline-width": 1,
+                "text-outline-color": "#0f172a",
+                "text-outline-width": 0.6,
               },
             },
             // Module nodes - larger hexagons
@@ -180,9 +257,9 @@ export default function CytoscapeGraphClient({
               selector: "node[type='module']",
               style: {
                 "shape": "hexagon",
-                "width": 70,
-                "height": 70,
-                "font-size": "11px",
+                "width": 86,
+                "height": 86,
+                "font-size": "12px",
                 "font-weight": "bold",
               },
             },
@@ -191,9 +268,9 @@ export default function CytoscapeGraphClient({
               selector: "node[type='class']",
               style: {
                 "shape": "rectangle",
-                "width": 60,
-                "height": 40,
-                "font-size": "10px",
+                "width": 74,
+                "height": 54,
+                "font-size": "11px",
                 "font-weight": "bold",
               },
             },
@@ -202,9 +279,9 @@ export default function CytoscapeGraphClient({
               selector: "node[type='function'], node[type='method']",
               style: {
                 "shape": "ellipse",
-                "width": 50,
-                "height": 35,
-                "font-size": "9px",
+                "width": 66,
+                "height": 46,
+                "font-size": "10px",
               },
             },
             // Statement nodes - small circles
@@ -212,23 +289,36 @@ export default function CytoscapeGraphClient({
               selector: "node[type='statement']",
               style: {
                 "shape": "ellipse",
-                "width": 25,
-                "height": 25,
+                "width": 30,
+                "height": 30,
                 "font-size": "7px",
-                "text-max-width": "40px",
+                "text-max-width": "56px",
+                "opacity": 0.95,
+                "border-width": 1.5,
+                "text-opacity": 1,
+              },
+            },
+            {
+              selector: "node[id ^= 'stmt_'], node[id ^= 'statement_']",
+              style: {
+                "opacity": 0.95,
+                "text-opacity": 1,
+                "width": 26,
+                "height": 26,
+                "border-width": 1.5,
               },
             },
             // Edge styling
             {
               selector: "edge",
               style: {
-                "width": 1.5,
+                "width": 2,
                 "line-color": "data(edgeColor)",
                 "target-arrow-color": "data(edgeColor)",
                 "target-arrow-shape": "triangle",
-                "curve-style": "straight",
-                "arrow-scale": 0.8,
-                "opacity": 0.6,
+                "curve-style": "bezier",
+                "arrow-scale": 1,
+                "opacity": 0.75,
                 "text-background-color": "#fff",
                 "text-background-opacity": 0.9,
                 "text-background-padding": "2px",
@@ -239,7 +329,7 @@ export default function CytoscapeGraphClient({
               selector: "edge[type='hierarchy']",
               style: {
                 "line-style": "dashed",
-                "opacity": 0.3,
+                "opacity": 0.45,
                 "width": 1,
               },
             },
@@ -248,7 +338,7 @@ export default function CytoscapeGraphClient({
               selector: "edge[type='calls']",
               style: {
                 "width": 2.5,
-                "opacity": 0.8,
+                "opacity": 0.9,
                 "line-style": "solid",
               },
             },
@@ -269,9 +359,17 @@ export default function CytoscapeGraphClient({
             {
               selector: "edge[type='control_flow']",
               style: {
-                "width": 1.5,
+                "width": 1.8,
                 "line-style": "solid",
+                "opacity": 0.75,
+              },
+            },
+            {
+              selector: "edge[source ^= 'stmt_'], edge[target ^= 'stmt_'], edge[source ^= 'statement_'], edge[target ^= 'statement_']",
+              style: {
                 "opacity": 0.6,
+                "width": 1.4,
+                "target-arrow-shape": "triangle",
               },
             },
             // Hover states
@@ -292,34 +390,7 @@ export default function CytoscapeGraphClient({
               },
             },
           ],
-          layout: {
-            // Use only fcose (force-directed) for layout
-            name: "fcose",
-            // Physics simulation
-            animate: true,
-            animationDuration: 2000,
-            animationEasing: "ease-out",
-            animationDelay: 0,
-            // Layout parameters for organic network appearance
-            fit: true,
-            padding: 80,
-            nodeDimensionsIncludeLabels: true,
-            
-            // Force parameters - aggressive physics for NetworkX-style spreading
-            idealEdgeLength: 150,
-            nodeRepulsion: 15000,        // Very high = maximum spreading
-            edgeElasticity: 0.4,         // Lower = looser springs
-            nestingFactor: 0.05,         // Low = minimal hierarchy bias
-            gravity: 0.2,                // Low gravity = nodes spread freely
-            numIter: 5000,               // Many iterations for convergence
-            
-            // Layout quality and performance
-            tile: true,                  // Enable tiling for large graphs
-            tilingPaddingVertical: 50,
-            tilingPaddingHorizontal: 50,
-            quality: "proof",            // Higher quality
-            randomize: true,
-          } as any,
+          layout: layoutConfig as any,
           minZoom: 0.1,
           maxZoom: 3,
           wheelSensitivity: 0.3,
@@ -327,8 +398,16 @@ export default function CytoscapeGraphClient({
           selectionType: "single",
         })
 
+        if (disposed) {
+          cy.destroy()
+          return
+        }
+
+        cyRef.current = cy
+
         // Event handlers
-        cyRef.current.on("tap", "node", (evt: any) => {
+        cy.on("tap", "node", (evt: any) => {
+          if (!isCyAlive()) return
           const node = evt.target
           if (onNodeClick) {
             onNodeClick(node.id(), node.data())
@@ -336,9 +415,10 @@ export default function CytoscapeGraphClient({
         })
 
         // Double-click to zoom to node
-        cyRef.current.on("dbltap", "node", (evt: any) => {
+        cy.on("dbltap", "node", (evt: any) => {
+          if (!isCyAlive()) return
           const node = evt.target
-          cyRef.current?.animate({
+          cy.animate({
             center: { eles: node },
             zoom: 1.5,
           }, {
@@ -347,30 +427,22 @@ export default function CytoscapeGraphClient({
         })
 
         // Hover effect
-        cyRef.current.on("mouseover", "node", (evt: any) => {
-          const node = evt.target
-          node.style({
-            "border-width": 3,
-            "z-index": 999,
-          })
+        cy.on("mouseover", "node", () => {
+          if (!isCyAlive()) return
           if (containerRef.current) {
             containerRef.current.style.cursor = "pointer"
           }
         })
 
-        cyRef.current.on("mouseout", "node", (evt: any) => {
-          const node = evt.target
-          node.style({
-            "border-width": 2,
-            "z-index": 1,
-          })
+        cy.on("mouseout", "node", () => {
+          if (!isCyAlive()) return
           if (containerRef.current) {
             containerRef.current.style.cursor = "default"
           }
         })
 
         // Ensure nodes are draggable/interactive
-        cyRef.current.nodes().grabify()
+        cy.nodes().grabify()
 
         setIsReady(true)
       } catch (error) {
@@ -382,34 +454,65 @@ export default function CytoscapeGraphClient({
     initCytoscape()
 
     return () => {
-      if (cyRef.current) {
-        cyRef.current.destroy()
-        cyRef.current = null
+      disposed = true
+      if (containerRef.current) {
+        containerRef.current.style.cursor = "default"
       }
+      if (cyRef.current && !cyRef.current.destroyed()) {
+        cyRef.current.destroy()
+      }
+      cyRef.current = null
     }
-  }, [graphData, convertToElements, onNodeClick])
+  }, [graphData, convertToElements, onNodeClick, isCyAlive])
 
   // Control functions
   const zoomIn = useCallback(() => {
-    if (cyRef.current) {
+    if (isCyAlive()) {
       cyRef.current.zoom(cyRef.current.zoom() * 1.2)
     }
-  }, [])
+  }, [isCyAlive])
 
   const zoomOut = useCallback(() => {
-    if (cyRef.current) {
+    if (isCyAlive()) {
       cyRef.current.zoom(cyRef.current.zoom() / 1.2)
     }
-  }, [])
+  }, [isCyAlive])
 
-  const fitGraph = useCallback(() => {
-    if (cyRef.current) {
-      cyRef.current.fit(undefined, 50)
+  const toggleFullscreen = useCallback(async () => {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen()
+        return
+      }
+
+      if (wrapperRef.current) {
+        await wrapperRef.current.requestFullscreen()
+      }
+    } catch (fsError) {
+      console.error("Failed to toggle fullscreen:", fsError)
     }
   }, [])
 
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement))
+      if (isCyAlive()) {
+        // Refit graph after fullscreen transition.
+        setTimeout(() => {
+          if (isCyAlive()) {
+            cyRef.current.resize()
+            cyRef.current.fit(undefined, 50)
+          }
+        }, 120)
+      }
+    }
+
+    document.addEventListener("fullscreenchange", onFullscreenChange)
+    return () => document.removeEventListener("fullscreenchange", onFullscreenChange)
+  }, [isCyAlive])
+
   const exportPng = useCallback(() => {
-    if (cyRef.current) {
+    if (isCyAlive()) {
       const png = cyRef.current.png({
         output: "blob",
         bg: "#ffffff",
@@ -421,22 +524,22 @@ export default function CytoscapeGraphClient({
       link.download = `${graphData.name || "graph"}.png`
       link.click()
     }
-  }, [graphData?.name])
+  }, [graphData?.name, isCyAlive])
 
   return (
-    <div className={`relative w-full h-full ${className}`}>
+    <div ref={wrapperRef} className={`relative w-full h-full ${className} ${isFullscreen ? "bg-white" : ""}`}>
       {/* Graph container */}
       <div 
         ref={containerRef} 
         className="w-full h-full bg-stone-50 rounded-lg"
-        style={{ minHeight: "400px" }}
+        style={{ minHeight: isFullscreen ? "100vh" : "400px" }}
       />
       
       {error && (
         <div className="absolute inset-0 flex items-center justify-center bg-red-50/80 rounded-lg">
           <div className="text-center">
             <p className="text-sm text-red-600">{error}</p>
-            <p className="text-xs text-red-500 mt-2">Ensure cytoscape packages are installed: npm install cytoscape cytoscape-fcose</p>
+            <p className="text-xs text-red-500 mt-2">Ensure Cytoscape is installed: npm install cytoscape</p>
           </div>
         </div>
       )}
@@ -463,12 +566,16 @@ export default function CytoscapeGraphClient({
             </svg>
           </button>
           <button
-            onClick={fitGraph}
+            onClick={() => void toggleFullscreen()}
             className="p-1.5 hover:bg-stone-100 rounded text-stone-600"
-            title="Fit to View"
+            title={isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+              {isFullscreen ? (
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 9V5m0 0H5m4 0L4 10m11-5h4m0 0v4m0-4l-5 5M9 15v4m0 0H5m4 0l-5-5m11 5h4m0 0v-4m0 4l-5-5" />
+              ) : (
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+              )}
             </svg>
           </button>
           <div className="border-t border-stone-200 my-1" />
@@ -487,24 +594,28 @@ export default function CytoscapeGraphClient({
 
       {/* Legend */}
       {isReady && !error && (
-        <div className="absolute bottom-3 left-3 bg-white/90 rounded-lg shadow-md p-2 text-xs">
-          <div className="font-semibold mb-1 text-stone-700">Node Types</div>
-          <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
-            <div className="flex items-center gap-1">
-              <div className="w-3 h-3 rounded" style={{ background: nodeColors.module.bg, border: `1px solid ${nodeColors.module.border}` }} />
+        <div className="absolute top-3 left-3 z-20 bg-white/95 rounded-2xl shadow-xl border-2 border-stone-300 px-5 py-4 text-base min-w-56">
+          <div className="font-extrabold mb-4 text-stone-900 tracking-wide">Node Types</div>
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center gap-2">
+              <div className="w-5 h-5 rounded-sm" style={{ background: nodeColors.module.bg, border: `2px solid ${nodeColors.module.border}` }} />
               <span>Module</span>
             </div>
-            <div className="flex items-center gap-1">
-              <div className="w-3 h-3 rounded" style={{ background: nodeColors.class.bg, border: `1px solid ${nodeColors.class.border}` }} />
+            <div className="flex items-center gap-2">
+              <div className="w-5 h-5 rounded-sm" style={{ background: nodeColors.class.bg, border: `2px solid ${nodeColors.class.border}` }} />
               <span>Class</span>
             </div>
-            <div className="flex items-center gap-1">
-              <div className="w-3 h-3 rounded" style={{ background: nodeColors.function.bg, border: `1px solid ${nodeColors.function.border}` }} />
+            <div className="flex items-center gap-2">
+              <div className="w-5 h-5 rounded-sm" style={{ background: nodeColors.function.bg, border: `2px solid ${nodeColors.function.border}` }} />
               <span>Function</span>
             </div>
-            <div className="flex items-center gap-1">
-              <div className="w-3 h-3 rounded" style={{ background: nodeColors.method.bg, border: `1px solid ${nodeColors.method.border}` }} />
+            <div className="flex items-center gap-2">
+              <div className="w-5 h-5 rounded-sm" style={{ background: nodeColors.method.bg, border: `2px solid ${nodeColors.method.border}` }} />
               <span>Method</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-5 h-5 rounded-sm" style={{ background: nodeColors.statement.bg, border: `2px solid ${nodeColors.statement.border}` }} />
+              <span>Statement</span>
             </div>
           </div>
         </div>

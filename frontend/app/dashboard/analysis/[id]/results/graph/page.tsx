@@ -13,6 +13,7 @@ import {
   ZoomOut,
   Download,
   Maximize2,
+  Minimize2,
   RotateCcw,
   Braces,
   Box,
@@ -141,6 +142,7 @@ export default function GraphsPage() {
   const [selectedComponent, setSelectedComponent] = useState<Component | null>(null)
   const [selectedGraphType, setSelectedGraphType] = useState<GraphType>("cfg")
   const [zoom, setZoom] = useState(100)
+  const [isGraphFullscreen, setIsGraphFullscreen] = useState(false)
 
   // Graph data state
   const [cfgData, setCfgData] = useState<GraphData | null>(null)
@@ -510,6 +512,7 @@ export default function GraphsPage() {
 
   const currentGraph = graphTypes.find((g) => g.id === selectedGraphType)
   const selectedComponentFlow = selectedComponent ? componentFlows[selectedComponent.id] : null
+  const isPkgView = selectedGraphType === "ckg"
 
   const handleZoomIn = () => setZoom((prev) => Math.min(prev + 25, 200))
   const handleZoomOut = () => setZoom((prev) => Math.max(prev - 25, 50))
@@ -565,7 +568,7 @@ export default function GraphsPage() {
   return (
     <div className="flex gap-4 h-[calc(100vh-200px)] min-h-[700px]">
       {/* Left Panel - Component List */}
-      <Card className="w-72 flex-shrink-0 border-stone-200 bg-white">
+      <Card className={`w-72 flex-shrink-0 border-stone-200 bg-white ${isPkgView ? "hidden" : ""}`}>
         <CardHeader className="pb-3 border-b border-stone-100">
           <CardTitle className="text-sm flex items-center gap-2 text-stone-700">
             <Network className="w-4 h-4" />
@@ -807,7 +810,7 @@ export default function GraphsPage() {
               </TabsList>
             </Tabs>
 
-            {/* Controls - hide zoom for CKG since Cytoscape has its own */}
+            {/* Controls */}
             <div className="flex items-center gap-2">
               <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={handleRefresh} disabled={graphLoading}>
                 <RefreshCw className={`w-3.5 h-3.5 ${graphLoading ? "animate-spin" : ""}`} />
@@ -826,11 +829,17 @@ export default function GraphsPage() {
                   <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={handleReset}>
                     <RotateCcw className="w-3.5 h-3.5" />
                   </Button>
-                  <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
-                    <Maximize2 className="w-3.5 h-3.5" />
-                  </Button>
                 </>
               )}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0"
+                onClick={() => setIsGraphFullscreen((prev) => !prev)}
+                title={isGraphFullscreen ? "Exit fullscreen" : "Fullscreen graph"}
+              >
+                {isGraphFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+              </Button>
               <Button variant="outline" size="sm" className="gap-1.5 h-7 text-xs border-stone-200">
                 <Download className="w-3.5 h-3.5" />
                 Export
@@ -894,7 +903,7 @@ export default function GraphsPage() {
       </Card>
 
       {/* Right Panel - Details */}
-      <Card className="w-80 flex-shrink-0 border-stone-200 bg-white flex flex-col overflow-hidden">
+      <Card className={`w-80 flex-shrink-0 border-stone-200 bg-white flex flex-col overflow-hidden ${isPkgView ? "hidden" : ""}`}>
         <CardHeader className="pb-3 border-b border-stone-100 flex-shrink-0">
           <CardTitle className="text-sm text-stone-700">Graph Details</CardTitle>
         </CardHeader>
@@ -1039,6 +1048,74 @@ export default function GraphsPage() {
           </CardContent>
         </ScrollArea>
       </Card>
+
+      {isGraphFullscreen && (
+        <div className="fixed inset-0 z-50 bg-white">
+          <div className="h-full w-full flex flex-col">
+            <div className="h-14 border-b border-stone-200 px-4 flex items-center justify-between bg-white">
+              <div className="flex items-center gap-2">
+                <Badge className="bg-amber-400 text-white text-xs">{currentGraph?.label}</Badge>
+                <span className="text-sm font-medium text-stone-700">{currentGraph?.fullName}</span>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => setIsGraphFullscreen(false)}>
+                <Minimize2 className="w-4 h-4 mr-1" />
+                Exit Fullscreen
+              </Button>
+            </div>
+
+            <div className="flex-1 bg-stone-50/50">
+              <div
+                className="w-full h-full flex items-center justify-center"
+                style={selectedGraphType !== "ckg" ? { transform: `scale(${zoom / 100})`, transformOrigin: "center center" } : undefined}
+              >
+                {selectedComponent && selectedGraphType === "agents-flow" ? (
+                  <AgentsFlowGraph
+                    component={selectedComponent}
+                    componentFlow={selectedComponentFlow || undefined}
+                  />
+                ) : selectedGraphType === "ckg" && currentGraphData ? (
+                  <CytoscapeGraph
+                    graphData={currentGraphData}
+                    onNodeClick={(nodeId, nodeData) => {
+                      console.log("Node clicked:", nodeId, nodeData)
+                    }}
+                    className="w-full h-full"
+                  />
+                ) : (selectedComponent || selectedGraphType === "ckg") && currentGraphData ? (
+                  <RealGraphVisualization
+                    graphData={currentGraphData}
+                    graphType={selectedGraphType}
+                  />
+                ) : graphLoading ? (
+                  <div className="flex flex-col items-center justify-center h-full gap-3">
+                    <Loader className="w-8 h-8 animate-spin text-amber-500" />
+                    <p className="text-sm text-stone-500">Loading {selectedGraphType.toUpperCase()}...</p>
+                  </div>
+                ) : graphError ? (
+                  <div className="flex flex-col items-center justify-center h-full gap-3">
+                    <AlertCircle className="w-10 h-10 text-red-400" />
+                    <p className="text-sm text-red-600">{graphError}</p>
+                  </div>
+                ) : selectedGraphType === "ckg" ? (
+                  <div className="flex flex-col items-center justify-center h-full gap-3">
+                    <Network className="w-10 h-10 text-amber-400" />
+                    <p className="text-sm text-stone-500">Loading Program Knowledge Graph...</p>
+                  </div>
+                ) : selectedComponent ? (
+                  <div className="flex flex-col items-center justify-center h-full gap-3">
+                    <Network className="w-10 h-10 text-stone-300" />
+                    <p className="text-sm text-stone-500">Select a graph type to view</p>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center h-full">
+                    <p className="text-stone-400 text-sm">Select a component to view its graph</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

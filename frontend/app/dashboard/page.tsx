@@ -207,7 +207,7 @@ export default function DashboardPage() {
   }
 
   async function handleGenerate(repoId: string) {
-    router.push(`/dashboard/analysis/${repoId}/pipeline?autostart=1`)
+    router.push(`/dashboard/analysis/${repoId}/pipeline`)
   }
 
   return (
