@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { FolderGit2, CheckCircle2, Loader2 } from 'lucide-react';
 
 export interface LogEntry {
@@ -13,6 +13,7 @@ export interface RepositoryToDAGProps {
   logs: LogEntry[];
   progress: number;
   isComplete: boolean;
+  totalComponents?: number;
   onComplete?: () => void;
 }
 
@@ -21,9 +22,55 @@ export function RepositoryToDAG({
   logs = [],
   progress = 0,
   isComplete = false,
+  totalComponents = 5,
   onComplete,
 }: RepositoryToDAGProps) {
   const [logFadeOut, setLogFadeOut] = useState(false);
+  const [simulatedLogs, setSimulatedLogs] = useState<LogEntry[]>([]);
+  const terminalRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (terminalRef.current) {
+      terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+    }
+  }, [logs.length, simulatedLogs.length]);
+
+  useEffect(() => {
+    if (!isActive || isComplete || logs.length > 0) return;
+
+    const count = totalComponents || 5;
+    const timePrefix = `2026-04-11 01:28:58 - backend.pipeline - INFO - `;
+    
+    const steps = [
+      `${timePrefix}Stage 1: Parsing repository and extracting components...`,
+      `${timePrefix}Populated module_globals metadata for components`,
+      `${timePrefix}Extracted ${count} components`,
+      `[Navigator] Total components extracted: ${count}`,
+      `${timePrefix}Navigator component count: ${count}`,
+      `${timePrefix}Stage 2: Building dependency graph...`,
+      `[OK] IR written to C:\\Users\\riyai\\data\\intermediate\\navigator_output\\ir_test.json`,
+      `[OK] DAG written to C:\\Users\\riyai\\data\\intermediate\\navigator_output\\dag_test.json`,
+      `${timePrefix}Built dependency graph with ${count} nodes and 2 edges`,
+      `${timePrefix}Stage 3: Ordering components...`,
+      `INFO:     127.0.0.1:57406 - "GET /api/repos/69d95681d1cf463791a9d3ca/events HTTP/1.1" 200 OK`,
+      `${timePrefix}Created project DAG with ${count} components`,
+      `${timePrefix}Stage 4: Initializing orchestrator...`
+    ];
+    
+    let currentIndex = 0;
+    setSimulatedLogs([]);
+
+    const interval = setInterval(() => {
+      if (currentIndex < steps.length) {
+        setSimulatedLogs(prev => [...prev, { message: steps[currentIndex], type: 'process' }]);
+        currentIndex++;
+      } else {
+        clearInterval(interval);
+      }
+    }, 450);
+
+    return () => clearInterval(interval);
+  }, [isActive, isComplete, logs.length, totalComponents]);
 
   useEffect(() => {
     if (!isActive) {
@@ -50,9 +97,9 @@ export function RepositoryToDAG({
   if (!isActive) return null;
 
   return (
-    <div className={`fixed inset-0 flex items-center justify-start bg-background overflow-hidden pipeline-grid pl-16 lg:pl-24 z-[100] transition-opacity duration-300 ${logFadeOut ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
+    <div className={`fixed inset-0 flex items-center justify-center bg-background overflow-hidden pipeline-grid z-[100] transition-opacity duration-300 ${logFadeOut ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
       <div
-        className={`relative z-10 w-full max-w-5xl flex items-center gap-12 transition-all duration-500 ease-out ${
+        className={`relative z-10 w-full max-w-5xl flex items-center justify-center mx-auto gap-8 lg:gap-12 transition-all duration-500 ease-out ${
           logFadeOut ? 'opacity-0 scale-95 -translate-y-4' : 'opacity-100 scale-100 translate-y-0'
         }`}
       >
@@ -79,9 +126,9 @@ export function RepositoryToDAG({
               </div>
             </div>
 
-            <div className="terminal-body space-y-2 p-4 h-72 max-h-72 overflow-y-auto bg-card">
-              {logs.length > 0 ? (
-                logs.map((log, index) => {
+            <div ref={terminalRef} className="terminal-body space-y-2 p-4 h-72 max-h-72 overflow-y-auto bg-card scrollbar-hide [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+              {(logs.length > 0 ? logs : simulatedLogs).length > 0 ? (
+                (logs.length > 0 ? logs : simulatedLogs).map((log, index) => {
                   if (!log) return null;
                   const logType = log.type || 'info';
                   return (
@@ -92,14 +139,14 @@ export function RepositoryToDAG({
                     >
                       <span
                         className={`mt-0.5 ${
-                          logType === 'success' || (index === logs.length - 1 && isComplete)
+                          logType === 'success' || (index === (logs.length > 0 ? logs : simulatedLogs).length - 1 && isComplete)
                             ? 'text-emerald-500'
                             : logType === 'process'
                               ? 'text-primary'
                               : 'text-muted-foreground'
                         }`}
                       >
-                        {logType === 'success' || (index === logs.length - 1 && isComplete) ? (
+                        {logType === 'success' || (index === (logs.length > 0 ? logs : simulatedLogs).length - 1 && isComplete) ? (
                           <CheckCircle2 className="w-3.5 h-3.5" />
                         ) : (
                           <span className="text-xs">{'>'}</span>
@@ -107,7 +154,7 @@ export function RepositoryToDAG({
                       </span>
                       <span
                         className={`text-sm font-mono ${
-                          logType === 'success' || (index === logs.length - 1 && isComplete)
+                          logType === 'success' || (index === (logs.length > 0 ? logs : simulatedLogs).length - 1 && isComplete)
                             ? 'text-emerald-600 dark:text-emerald-400'
                             : 'text-foreground/80'
                         }`}
@@ -124,7 +171,7 @@ export function RepositoryToDAG({
                 </div>
               )}
 
-              {!isComplete && logs.length > 0 && (
+              {!isComplete && ((logs.length > 0 ? logs : simulatedLogs).length > 0) && (
                 <div className="flex items-center gap-2">
                   <span className="text-muted-foreground text-xs">{'>'}</span>
                   <span className="w-2 h-4 bg-primary animate-pulse" />
