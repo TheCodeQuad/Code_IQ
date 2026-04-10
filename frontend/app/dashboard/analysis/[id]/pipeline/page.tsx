@@ -37,7 +37,7 @@ export default async function PipelinePage({
 
       {/* Main content */}
       <main className="max-w-7xl mx-auto px-6 py-8">
-        <PipelineVisualization repoId={id} autoStart={false} />
+        <PipelineVisualization repoId={id} autoStart={true} />
       </main>
     </div>
   )

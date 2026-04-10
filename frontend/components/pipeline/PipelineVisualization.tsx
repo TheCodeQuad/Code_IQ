@@ -861,7 +861,6 @@ function FinalizationModuleCard({ module, isExpanded, onToggle }: { module: Pipe
 // Main Pipeline Visualization Component
 type BackendPipelineEvent = {
   event_type?: string
-  demo_mode?: boolean
   phase?: 'navigator' | 'agentic' | 'finalization'
   step_id?: string
   agent?: string
@@ -898,7 +897,6 @@ function toComponentType(raw?: string): ComponentType {
 export function PipelineVisualization({ repoId, autoStart = false }: { repoId: string; autoStart?: boolean }) {
   const [pipelineState, setPipelineState] = useState<PipelineState>(createInitialPipelineState)
   const [isStarting, setIsStarting] = useState(false)
-  const [startMode, setStartMode] = useState<'full' | 'demo'>('full')
   const [streamState, setStreamState] = useState<'connecting' | 'live' | 'disconnected' | 'error'>('connecting')
   const [repoMeta, setRepoMeta] = useState<{ name?: string; fileCount?: number }>({})
   const [expandedModules, setExpandedModules] = useState<Record<string, boolean>>({
@@ -909,6 +907,11 @@ export function PipelineVisualization({ repoId, autoStart = false }: { repoId: s
   const [selectedComponent, setSelectedComponent] = useState<string | null>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
   const autoStartTriggeredRef = useRef(false)
+
+  const resetPipelineViewState = useCallback(() => {
+    setPipelineState(createInitialPipelineState())
+    setSelectedComponent(null)
+  }, [])
 
   const toggleModule = (module: string) => {
     setExpandedModules((prev) => ({ ...prev, [module]: !prev[module] }))
@@ -1133,14 +1136,12 @@ export function PipelineVisualization({ repoId, autoStart = false }: { repoId: s
     source.onerror = () => setStreamState('disconnected')
   }, [applyBackendEvent, repoId])
 
-  const startPipeline = async (demoMode = false) => {
+  const startPipeline = async () => {
     setIsStarting(true)
-    setStartMode(demoMode ? 'demo' : 'full')
     try {
+      resetPipelineViewState()
       const res = await fetch(`/api/repos/${repoId}/generate`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ demo_mode: demoMode }),
       })
       if (!res.ok) {
         throw new Error(`Failed to start pipeline (HTTP ${res.status})`)
@@ -1152,6 +1153,18 @@ export function PipelineVisualization({ repoId, autoStart = false }: { repoId: s
       setIsStarting(false)
     }
   }
+
+  useEffect(() => {
+    // Repo change must always start from a clean UI state.
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close()
+      eventSourceRef.current = null
+    }
+    autoStartTriggeredRef.current = false
+    setRepoMeta({})
+    setStreamState('connecting')
+    resetPipelineViewState()
+  }, [repoId, resetPipelineViewState])
 
   useEffect(() => {
     async function bootstrap() {
@@ -1261,21 +1274,13 @@ export function PipelineVisualization({ repoId, autoStart = false }: { repoId: s
             <Button onClick={connectEventStream} variant="outline" className="border-gray-300">
               Reconnect Stream
             </Button>
-            <Button onClick={() => void startPipeline(false)} className="bg-emerald-600 hover:bg-emerald-700 text-white" disabled={isStarting}>
+            <Button onClick={() => void startPipeline()} className="bg-emerald-600 hover:bg-emerald-700 text-white" disabled={isStarting}>
               {isStarting ? (
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
               ) : (
                 <Play className="w-4 h-4 mr-2" />
               )}
-              Start Pipeline
-            </Button>
-            <Button onClick={() => void startPipeline(true)} variant="outline" className="border-emerald-300 text-emerald-700" disabled={isStarting}>
-              {isStarting && startMode === 'demo' ? (
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              ) : (
-                <Play className="w-4 h-4 mr-2" />
-              )}
-              Run Demo Analysis
+              Run Analysis
             </Button>
           </div>
         </div>

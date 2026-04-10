@@ -193,7 +193,8 @@ export default function CytoscapeGraphClient({
     const initCytoscape = async () => {
       try {
         // Dynamically import cytoscape only on client side
-        const { default: cytoscape } = await import("cytoscape")
+        const cytoscapeModule = await import("cytoscape")
+        const cytoscape = (cytoscapeModule as any).default ?? (cytoscapeModule as any)
 
         if (disposed || !containerRef.current) {
           return

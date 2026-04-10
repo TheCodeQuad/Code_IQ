@@ -12,7 +12,7 @@ sources = [
     r"C:\BIA6\CodeIQ\data\benchmark_results\resumeredirect-7b\benchmark_summary.json",
     r"C:\BIA6\CodeIQ\data\benchmark_results\javabig\benchmark_summary.json",
     r"C:\BIA6\CodeIQ\data\benchmark_results\javabig-7b\benchmark_summary.json",
-    r"C:\BIA6\CodeIQ\data\benchmark_results\20260408_152558\models\qwen2.5-coder-7b-instruct-q4_k_m\benchmark_result.json",
+    r"C:\BIA6\CodeIQ\data\benchmark_results\20260408_152558\models\qwen2.5-coder-1.5b-instruct-q4_k_m\benchmark_result.json",
 ]
 
 rows = []

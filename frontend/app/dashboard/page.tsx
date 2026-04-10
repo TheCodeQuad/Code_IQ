@@ -167,9 +167,26 @@ export default function DashboardPage() {
     }
   }, [session?.user?.id, authorizeGitHub, processedCode])
 
-  // Check backend health on mount
+  // Keep backend health indicator live while dashboard is open.
   useEffect(() => {
-    isBackendOnline().then(setBackendOnline)
+    let mounted = true
+
+    const refreshHealth = async () => {
+      const online = await isBackendOnline()
+      if (mounted) {
+        setBackendOnline(online)
+      }
+    }
+
+    void refreshHealth()
+    const timer = setInterval(() => {
+      void refreshHealth()
+    }, 5000)
+
+    return () => {
+      mounted = false
+      clearInterval(timer)
+    }
   }, [])
 
   // Auto-refresh repos that are in-progress every 5 s

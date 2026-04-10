@@ -2,7 +2,7 @@
 
 ## 🎉 Everything is Ready!
 
-I've created a **complete, production-ready package** for fine-tuning Qwen2.5-Coder-7B on your local GPU. This adapts the methodology from your Google Colab notebook while optimizing for your laptop's hardware constraints.
+I've created a **complete, production-ready package** for fine-tuning Qwen2.5-Coder-1.5B on your local GPU. This adapts the methodology from your Google Colab notebook while optimizing for your laptop's hardware constraints.
 
 ---
 
@@ -142,7 +142,7 @@ nvidia-smi -l 1  # In another terminal
 ## 🎯 Methodology
 
 Same as your Colab notebook, just optimized for local GPU:
-- ✅ Qwen2.5-Coder-7B model
+- ✅ Qwen2.5-Coder-1.5B model
 - ✅ CodeSearchNet dataset (Python, Java, JavaScript, PHP)
 - ✅ QLoRA (4-bit quantization) + LoRA fine-tuning
 - ✅ Docstring generation task
@@ -210,7 +210,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 
 base = AutoModelForCausalLM.from_pretrained(
-    "Qwen/Qwen2.5-Coder-7B",
+   "Qwen/Qwen2.5-Coder-1.5B",
     torch_dtype=torch.float16,
     device_map="auto"
 )

@@ -16,7 +16,7 @@ python -m backend.eval_truthfulness_multi_system
    - Repository dependency graph
    - Run navigator first if missing: `python -m backend.navigator.scanner`
 
-3. **Local Model**: `models/qwen2.5-coder-7b-instruct-q4_k_m.gguf`
+3. **Local Model**: `models/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf`
    - Already configured to use your local model
    - No API keys needed!
 
@@ -56,7 +56,7 @@ python -m backend.eval_truthfulness_multi_system --no-llm
 
 | Problem | Solution |
 |---------|----------|
-| Model not found | Check `models/qwen2.5-coder-7b-instruct-q4_k_m.gguf` exists |
+| Model not found | Check `models/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf` exists |
 | Input file not found | Create/specify `completeness_evaluation_cleaned.json` |
 | No navigator data | Run: `python -m backend.navigator.scanner` |
 | Too slow | Use `--no-llm` flag |

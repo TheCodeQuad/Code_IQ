@@ -128,8 +128,8 @@ class TruthfulnessEvaluator:
             self.use_llm = False
             return
 
-        # Always use the local CodeLlama 13B model for truthfulness extraction.
-        model_path = project_root / "models" / "codellama-13b-instruct.Q4_K_M.gguf"
+        # Always use the local Qwen2.5-Coder 1.5B model for truthfulness extraction.
+        model_path = project_root / "models" / "qwen2.5-coder-1.5b-instruct-q4_k_m.gguf"
 
         if not model_path.exists():
             logger.warning(f"Model not found at {model_path}. Falling back to regex extraction.")
