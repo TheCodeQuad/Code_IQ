@@ -4,39 +4,45 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  --background: oklch(0.98 0.005 85);
-  --foreground: oklch(0.2 0.02 260);
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.2 0.02 260);
+  --card-foreground: oklch(0.145 0 0);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.2 0.02 260);
-  --primary: oklch(0.75 0.18 85);
-  --primary-foreground: oklch(0.15 0.02 260);
-  --secondary: oklch(0.95 0.01 260);
-  --secondary-foreground: oklch(0.2 0.02 260);
-  --muted: oklch(0.94 0.01 260);
-  --muted-foreground: oklch(0.45 0.02 260);
-  --accent: oklch(0.96 0.005 85);
-  --accent-foreground: oklch(0.2 0.02 260);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(1 0 0);
-  --border: oklch(0.9 0.01 260);
-  --input: oklch(0.92 0.01 260);
-  --ring: oklch(0.75 0.18 85);
-  --chart-1: oklch(0.75 0.18 85);
-  --chart-2: oklch(0.55 0.2 260);
-  --chart-3: oklch(0.65 0.15 180);
-  --chart-4: oklch(0.7 0.15 330);
-  --chart-5: oklch(0.6 0.18 30);
-  --radius: 0.75rem;
-  --sidebar: oklch(0.98 0.005 85);
-  --sidebar-foreground: oklch(0.2 0.02 260);
-  --sidebar-primary: oklch(0.75 0.18 85);
-  --sidebar-primary-foreground: oklch(0.15 0.02 260);
-  --sidebar-accent: oklch(0.94 0.01 260);
-  --sidebar-accent-foreground: oklch(0.2 0.02 260);
-  --sidebar-border: oklch(0.9 0.01 260);
-  --sidebar-ring: oklch(0.75 0.18 85);
+  --destructive-foreground: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+  
+  --landing-gradient: radial-gradient(ellipse 80% 60% at 20% 80%, rgba(245, 208, 200, 0.6) 0%, transparent 50%),
+                      radial-gradient(ellipse 70% 50% at 80% 30%, rgba(240, 200, 150, 0.5) 0%, transparent 50%),
+                      radial-gradient(ellipse 60% 40% at 10% 20%, rgba(235, 220, 230, 0.4) 0%, transparent 40%),
+                      radial-gradient(ellipse 90% 70% at 50% 50%, rgba(255, 250, 245, 0.8) 0%, transparent 60%),
+                      linear-gradient(to bottom right, #fdf8f5, #fef9f3, #fdf6f0);
 }
 
 .dark {
@@ -75,7 +81,7 @@
 }
 
 @theme inline {
-  --font-sans: 'Geist', 'Geist Fallback', system-ui, sans-serif;
+  --font-sans: 'Geist', 'Geist Fallback';
   --font-mono: 'Geist Mono', 'Geist Mono Fallback';
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -96,6 +102,7 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --background-image-landing: var(--landing-gradient);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
@@ -116,7 +123,7 @@
 }
 
 .font-sans {
-  font-family: var(--font-sans);
+  font-family: var(--font-sans), 'Geist', 'Geist Fallback', system-ui, sans-serif;
 }
 
 @layer base {
@@ -125,6 +132,11 @@
   }
   body {
     @apply bg-background text-foreground;
+    background-image: var(--landing-gradient);
+    /* Make gradient move on scroll by removing explicit background-attachment: fixed */
+  }
+  .font-sans {
+    font-family: var(--font-sans), system-ui, sans-serif;
   }
 }
 

@@ -223,8 +223,6 @@ const mockGraphReferences = {
   hpg: ["hpg_auth_handler_authenticate"],
 }
 
-const CODE_FONT_FAMILY = "Consolas, 'Courier New', monospace"
-
 export default function DocumentationPage() {
   const [selectedFile, setSelectedFile] = useState("")
   const [showOriginal, setShowOriginal] = useState(false)
@@ -408,7 +406,7 @@ export default function DocumentationPage() {
             <div className="p-4 border-b border-border flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <FileCode className="w-5 h-5 text-muted-foreground" />
-                <span className="text-sm text-foreground" style={{ fontFamily: CODE_FONT_FAMILY }}>{selectedFile}</span>
+                <span className="font-mono text-sm text-foreground">{selectedFile}</span>
                 <Badge className="bg-chart-3/10 text-chart-3 border border-chart-3/20">
                   <CheckCircle className="w-3 h-3 mr-1" />
                   {showOriginal ? "Original" : "Documented"}
@@ -458,10 +456,10 @@ export default function DocumentationPage() {
                     language={getLanguageFromPath(selectedFile)}
                     style={customTheme}
                     className="!bg-foreground !m-0 !p-6 !text-sm"
-                    customStyle={{ fontFamily: CODE_FONT_FAMILY }}
-                    codeTagProps={{ style: { fontFamily: CODE_FONT_FAMILY } }}
                     showLineNumbers={true}
                     wrapLines={true}
+                    customStyle={{ fontFamily: "Consolas, 'Courier New', monospace" }}
+                    codeTagProps={{ style: { fontFamily: "Consolas, 'Courier New', monospace" } }}
                   >
                     {displayCode || "// Select a file to view code"}
                   </SyntaxHighlighter>
@@ -539,7 +537,7 @@ export default function DocumentationPage() {
                       </div>
                       <div className="flex flex-wrap gap-1">
                         {graphReferences.cfg.map((node) => (
-                          <Badge key={node} variant="outline" className="text-xs border-border" style={{ fontFamily: CODE_FONT_FAMILY }}>{node}</Badge>
+                          <Badge key={node} variant="outline" className="text-xs font-mono border-border">{node}</Badge>
                         ))}
                       </div>
                     </div>
@@ -555,7 +553,7 @@ export default function DocumentationPage() {
                       </div>
                       <div className="flex flex-wrap gap-1">
                         {graphReferences.pdg.map((node) => (
-                          <Badge key={node} variant="outline" className="text-xs border-border" style={{ fontFamily: CODE_FONT_FAMILY }}>{node}</Badge>
+                          <Badge key={node} variant="outline" className="text-xs font-mono border-border">{node}</Badge>
                         ))}
                       </div>
                     </div>

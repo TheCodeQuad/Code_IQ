@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { useParams, usePathname } from "next/navigation"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -33,6 +34,7 @@ const navItems = [
 export default function ResultsLayout({ children }: { children: React.ReactNode }) {
   const params = useParams()
   const pathname = usePathname()
+  const router = useRouter()
   const id = params.id as string
 
   const [repoName, setRepoName] = useState<string>("Loading...")
@@ -81,9 +83,9 @@ export default function ResultsLayout({ children }: { children: React.ReactNode 
   const currentPath = pathname.replace(basePath, "") || ""
   
   return (
-    <div className="min-h-screen bg-[#faf9f7]">
+    <div className="min-h-screen bg-transparent">
       {/* Header/Navbar */}
-      <header className="border-b border-stone-200 bg-white sticky top-0 z-50">
+      <header className="border-b border-stone-200/50 bg-background/80 backdrop-blur-md sticky top-0 z-50">
         <div className="max-w-[1600px] mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             {/* Left section */}
@@ -125,9 +127,9 @@ export default function ResultsLayout({ children }: { children: React.ReactNode 
       </header>
 
       {/* Sub Navigation - Pill Style */}
-      <div className="border-b border-stone-200">
+      <div className="border-b border-stone-200/50 bg-background/50">
         <div className="max-w-[1600px] mx-auto px-6 py-3">
-          <nav className="inline-flex items-center gap-1 p-1 bg-stone-200 rounded-lg">
+          <nav className="inline-flex items-center gap-1 p-1 bg-stone-200/50 rounded-lg">
             {navItems.map((item) => {
               const isActive = currentPath === item.href
               const Icon = item.icon
@@ -138,7 +140,7 @@ export default function ResultsLayout({ children }: { children: React.ReactNode 
                   className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-all ${
                     isActive
                       ? "bg-white text-stone-900 shadow-sm"
-                      : "text-stone-500 hover:text-stone-700"
+                      : "text-stone-600 hover:text-stone-900"
                   }`}
                 >
                   <Icon className="w-4 h-4" />
