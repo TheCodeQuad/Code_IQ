@@ -186,7 +186,7 @@ export function GitHubRepositorySelector({
       onRepositorySelected?.(repo)
 
       // Navigate to analysis page
-      router.push(`/dashboard/analysis/${data.repo_id}/pipeline?autostart=1`)
+      router.push(`/dashboard/analysis/${data.repo_id}/pipeline`)
       if (!embedded) {
         setOpen(false)
       }

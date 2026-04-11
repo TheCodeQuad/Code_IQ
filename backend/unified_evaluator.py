@@ -32,8 +32,9 @@ class UnifiedEvaluator:
     - Truthfulness: verifies mentioned components exist in codebase
     """
 
-    def __init__(self, repo_name: str):
+    def __init__(self, repo_name: str, verbose_completeness: bool = False):
         self.repo_name = repo_name
+        self.verbose_completeness = verbose_completeness
         self.nav_output_dir = DATA_ROOT / "intermediate" / "navigator_output"
         self.writer_output_dir = DATA_ROOT / "intermediate" / "agent_output" / "writer"
         self.validation_dir = DATA_ROOT / "validation" / repo_name
@@ -105,7 +106,8 @@ class UnifiedEvaluator:
     def _run_completeness(self, components: Dict[str, CodeComponent]) -> Dict[str, Any]:
         """Run completeness evaluation."""
         print("[EVAL] Running completeness evaluation...")
-        results = run_multilang_evaluation(components)
+        # Always enable verbose to show detailed scoring logs
+        results = run_multilang_evaluation(components, verbose=True)
 
         total = results["overall"]["total"]
         avg = results["overall"]["average"]

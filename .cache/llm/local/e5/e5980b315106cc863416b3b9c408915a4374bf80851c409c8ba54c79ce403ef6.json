@@ -1,0 +1,1 @@
+{"created_at": 1775853309.1459637, "content": "<DOCSTRING>\nAdds an activity to the history and logs it.\n\nArgs:\n    activity (str): The activity to add.\n\nReturns:\n    None\n</DOCSTRING>", "model": "qwen2.5-coder-7b-instruct-q4_k_m.gguf", "usage": {"prompt_tokens": 2560, "completion_tokens": 35, "total_tokens": 2595}, "metadata": {"local": true, "memory_based": true}}

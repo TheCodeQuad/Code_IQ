@@ -5,6 +5,7 @@ LLM Client with support for:
 """
 import os
 import hashlib
+import json
 import requests
 from requests.exceptions import RequestException
 from typing import Dict, Any, Optional, List, Union
@@ -160,22 +161,150 @@ class LocalLlamaClient(BaseLLMClient):
         
         self.model_path = model_path
         self.model_name = os.path.basename(model_path)
+        self.config = get_config()
+
+        # Cache settings (shared with rest of system via config/system.yaml)
+        self._cache_enabled = self.config.get('system.cache.enabled', True)
+        self._cache_ttl_s = int(self.config.get('system.cache.ttl', 86400) or 86400)
+        self._cache_hits = 0
+        self._mem_cache: Dict[str, Dict[str, Any]] = {}
+
+        cache_dir_cfg = self.config.get('system.cache.directory', '.cache/') or '.cache/'
+        project_root = Path(__file__).resolve().parents[2]
+        cache_dir_path = Path(cache_dir_cfg)
+        if not cache_dir_path.is_absolute():
+            cache_dir_path = (project_root / cache_dir_path)
+        self._cache_dir = (cache_dir_path / 'llm' / 'local').resolve()
+        try:
+            self._cache_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            logger.warning(f"Could not create cache directory {self._cache_dir}: {e}")
+            self._cache_enabled = False
+
         self.request_count = 0
         self.total_tokens = 0
         self.total_prompt_tokens = 0
         self.total_completion_tokens = 0
+
+    def _cache_key_for_prompt(self, request: LLMRequest) -> str:
+        payload = {
+            'kind': 'prompt',
+            'model_name': self.model_name,
+            'model_path': self.model_path,
+            'system_prompt': request.system_prompt or '',
+            'prompt': request.prompt,
+            'temperature': float(request.temperature),
+            'max_tokens': int(request.max_tokens),
+        }
+        blob = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode('utf-8')
+        return hashlib.sha256(blob).hexdigest()
+
+    def _cache_key_for_messages(self, messages: List[Dict[str, str]], temperature: float, max_tokens: int) -> str:
+        payload = {
+            'kind': 'messages',
+            'model_name': self.model_name,
+            'model_path': self.model_path,
+            'messages': messages,
+            'temperature': float(temperature),
+            'max_tokens': int(max_tokens),
+        }
+        blob = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode('utf-8')
+        return hashlib.sha256(blob).hexdigest()
+
+    def _cache_path(self, key: str) -> Path:
+        # Avoid huge single directories
+        return self._cache_dir / key[:2] / f"{key}.json"
+
+    def _cache_get(self, key: str) -> Optional[LLMResponse]:
+        if not self._cache_enabled:
+            return None
+
+        now = time.time()
+
+        mem = self._mem_cache.get(key)
+        if mem is not None:
+            if now - float(mem.get('created_at', 0)) <= self._cache_ttl_s:
+                self._cache_hits += 1
+                return LLMResponse(
+                    content=mem.get('content', ''),
+                    model=mem.get('model', self.model_name),
+                    usage=mem.get('usage', {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}),
+                    latency=0.0,
+                    metadata={**mem.get('metadata', {}), 'cached': True, 'cache': 'memory'}
+                )
+            self._mem_cache.pop(key, None)
+
+        path = self._cache_path(key)
+        if not path.exists():
+            return None
+
+        try:
+            data = json.loads(path.read_text(encoding='utf-8'))
+            created_at = float(data.get('created_at', 0))
+            if now - created_at > self._cache_ttl_s:
+                try:
+                    path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                return None
+
+            self._cache_hits += 1
+            # Populate memory cache for this run
+            self._mem_cache[key] = data
+            return LLMResponse(
+                content=data.get('content', ''),
+                model=data.get('model', self.model_name),
+                usage=data.get('usage', {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}),
+                latency=0.0,
+                metadata={**data.get('metadata', {}), 'cached': True, 'cache': 'disk'}
+            )
+        except Exception as e:
+            logger.debug(f"Failed to read cache entry {path}: {e}")
+            return None
+
+    def _cache_put(self, key: str, response: LLMResponse) -> None:
+        if not self._cache_enabled:
+            return
+
+        data = {
+            'created_at': time.time(),
+            'content': response.content,
+            'model': response.model,
+            'usage': response.usage,
+            'metadata': response.metadata,
+        }
+
+        # Memory cache
+        self._mem_cache[key] = data
+
+        # Disk cache
+        path = self._cache_path(key)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix('.json.tmp')
+            tmp.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+            os.replace(tmp, path)
+        except Exception as e:
+            logger.debug(f"Failed to write cache entry {path}: {e}")
     
     def generate(self, request: LLMRequest) -> LLMResponse:
         """Generate response via direct inference - no HTTP overhead"""
+        cache_key = self._cache_key_for_prompt(request)
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+
+        return self._generate_and_cache(request)
+
+    def _generate_and_cache(self, request: LLMRequest) -> LLMResponse:
+        """Internal helper to generate and persist cache."""
         start_time = time.time()
-        
-        # Build prompt with chat template
+
         if request.system_prompt:
             full_prompt = f"<|im_start|>system\n{request.system_prompt}<|im_end|>\n<|im_start|>user\n{request.prompt}<|im_end|>\n<|im_start|>assistant\n"
         else:
             full_prompt = f"<|im_start|>user\n{request.prompt}<|im_end|>\n<|im_start|>assistant\n"
-        
-        # Direct inference - no HTTP, no rate limiting!
+
         output = self.llm(
             full_prompt,
             max_tokens=request.max_tokens,
@@ -183,41 +312,35 @@ class LocalLlamaClient(BaseLLMClient):
             stop=["<|im_end|>", "<|im_start|>"],
             echo=False
         )
-        
+
         content = output['choices'][0]['text'].strip()
         usage = output.get('usage', {})
-        
-        # Normalize usage keys
         prompt_tokens = usage.get('prompt_tokens', 0)
         completion_tokens = usage.get('completion_tokens', 0)
         total_tokens = prompt_tokens + completion_tokens
-        
+
         normalized_usage = {
             'prompt_tokens': prompt_tokens,
             'completion_tokens': completion_tokens,
             'total_tokens': total_tokens
         }
-        
+
         latency = time.time() - start_time
-        
+
         self.request_count += 1
         self.total_tokens += total_tokens
         self.total_prompt_tokens += prompt_tokens
         self.total_completion_tokens += completion_tokens
-        
-        logger.info(
-            f"Local LLM Request #{self.request_count}: "
-            f"Tokens={total_tokens} (in={prompt_tokens}, out={completion_tokens}), "
-            f"Latency={latency:.2f}s"
-        )
-        
-        return LLMResponse(
+
+        response = LLMResponse(
             content=content,
             model=self.model_name,
             usage=normalized_usage,
             latency=latency,
             metadata={'local': True}
         )
+        self._cache_put(self._cache_key_for_prompt(request), response)
+        return response
     
     def generate_for_agent(
         self,
@@ -253,6 +376,14 @@ class LocalLlamaClient(BaseLLMClient):
         Returns:
             LLMResponse with generated content
         """
+        temp = temperature or 0.7
+        max_tok = max_tokens or 4000
+
+        cache_key = self._cache_key_for_messages(messages, temp, max_tok)
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+
         start_time = time.time()
         
         # Build prompt with chat template from messages
@@ -266,8 +397,8 @@ class LocalLlamaClient(BaseLLMClient):
         # Direct inference
         output = self.llm(
             full_prompt,
-            max_tokens=max_tokens or 4000,
-            temperature=temperature or 0.7,
+            max_tokens=max_tok,
+            temperature=temp,
             stop=["<|im_end|>", "<|im_start|>"],
             echo=False
         )
@@ -297,13 +428,16 @@ class LocalLlamaClient(BaseLLMClient):
             f"Messages={len(messages)}, Tokens={total_tokens}, Latency={latency:.2f}s"
         )
         
-        return LLMResponse(
+        response = LLMResponse(
             content=content,
             model=self.model_name,
             usage=normalized_usage,
             latency=latency,
             metadata={'local': True, 'memory_based': True}
         )
+
+        self._cache_put(cache_key, response)
+        return response
     
     def get_stats(self) -> Dict[str, Any]:
         """Get usage statistics"""
@@ -605,7 +739,7 @@ def get_llm_client() -> BaseLLMClient:
             
             if mode == 'llama_cpp':
                 # Use direct llama-cpp-python inference
-                model_path = local_config.get('model_path', 'd:\\Projects\\Code_IQ\\models\\DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf')
+                model_path = local_config.get('model_path', 'C:\\PROJECTS\\Code_IQ\\models\\qwen2.5-coder-1.5b-instruct-q4_k_m.gguf')
                 
                 # Convert relative paths to absolute
                 model_path = str(Path(model_path).resolve())

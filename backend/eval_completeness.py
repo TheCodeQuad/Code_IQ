@@ -14,13 +14,14 @@ from tabulate import tabulate
 from backend.evaluator.multilang_completeness import MultiLangCompletenessEvaluator
 
 
-def run_multilang_evaluation(all_components: Dict) -> Dict[str, Any]:
+def run_multilang_evaluation(all_components: Dict, verbose: bool = False) -> Dict[str, Any]:
     """
     Run completeness evaluation over all CodeComponents across all languages.
     Works for Python, Java, JavaScript, TypeScript — same logic for all.
 
     Args:
         all_components: Dict mapping component_id -> CodeComponent
+        verbose: If True, print detailed logs for each component evaluation
 
     Returns:
         Dict with results by language, by component type, and overall stats.
@@ -34,6 +35,13 @@ def run_multilang_evaluation(all_components: Dict) -> Dict[str, Any]:
         "components": []
     }
 
+    if verbose:
+        print("\n" + "="*70)
+        print("  COMPLETENESS EVALUATION - VERBOSE MODE")
+        print(f"  Total components to evaluate: {len(all_components)}")
+        print("="*70)
+
+    skipped_count = 0
     for comp_id, component in all_components.items():
         language = getattr(component, 'language', None)
         if not language:
@@ -41,7 +49,12 @@ def run_multilang_evaluation(all_components: Dict) -> Dict[str, Any]:
 
         comp_type = component.type.value
         name      = getattr(component, 'name', comp_id)
-        score     = evaluator.evaluate_component(component)
+        score     = evaluator.evaluate_component(component, verbose=verbose)
+
+        # Skip components that return -1 (e.g., global variables)
+        if score == -1:
+            skipped_count += 1
+            continue
 
         # Get component details for truthfulness evaluation
         docstring = getattr(component, 'existing_docstring', '') or ''
@@ -99,6 +112,10 @@ def run_multilang_evaluation(all_components: Dict) -> Dict[str, Any]:
 
         results["overall"]["scores"].append(score)
         results["overall"]["total"] += 1
+
+    # Log skipped components
+    if verbose and skipped_count > 0:
+        print(f"\n[COMPLETENESS] Skipped {skipped_count} non-documentable components (global variables, constants)")
 
     # Calculate averages
     for data in results["by_language"].values():

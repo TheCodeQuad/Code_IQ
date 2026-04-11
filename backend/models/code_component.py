@@ -72,7 +72,7 @@ class CodeComponent:
     calls: List[str] = field(default_factory=list)  # Component IDs called
     imports: List[str] = field(default_factory=list)
     depends_on: List[str] = field(default_factory=list)  # Dependency IDs
-    parameters: List[Any] = field(default_factory=list)
+
     
     # Metadata
     complexity: Optional[int] = None  # Cyclomatic complexity

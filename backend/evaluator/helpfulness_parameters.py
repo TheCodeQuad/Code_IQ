@@ -29,17 +29,16 @@ class DocstringParametersEvaluator:
     def _initialize_criteria(self) -> Dict[str, Any]:
         return {
             "description": (
-                "Evaluate how effectively the parameter descriptions convey the purpose, "
-                "constraints, and usage context of parameters. High-quality descriptions "
-                "should go beyond type information to provide meaningful guidance about "
-                "parameter usage, valid values, and impact on behavior."
+                "Evaluate how effectively the parameter descriptions convey the purpose "
+                "and usage of parameters. Good descriptions should explain what the "
+                "parameter is used for."
             ),
             "score_criteria": {
-                ScoreLevel.POOR:      "Descriptions merely restate the parameter types without adding information.",
-                ScoreLevel.FAIR:      "Basic purpose stated but lacks constraints, valid values, or usage context.",
-                ScoreLevel.GOOD:      "Explains purpose and some constraints but misses edge cases.",
-                ScoreLevel.VERY_GOOD: "Clearly explains purpose, constraints, and common usage patterns.",
-                ScoreLevel.EXCELLENT: "Comprehensive: purpose, constraints, examples, edge cases, and behavior impact.",
+                ScoreLevel.POOR:      "Descriptions are missing, wrong, or completely uninformative (e.g., just 'The param').",
+                ScoreLevel.FAIR:      "Descriptions exist but are very terse (e.g., just the type restated).",
+                ScoreLevel.GOOD:      "Descriptions explain what each parameter is used for in a clear sentence.",
+                ScoreLevel.VERY_GOOD: "Descriptions explain purpose AND include constraints, valid values, or usage patterns.",
+                ScoreLevel.EXCELLENT: "Comprehensive: purpose, constraints, valid values, edge cases, and behavior impact.",
             },
         }
 
@@ -53,37 +52,37 @@ class DocstringParametersEvaluator:
                 },
                 quality_examples={
                     ScoreLevel.POOR: {
-                        "model_id":     "The model ID",
+                        "model_id":     "The model_id",
                         "config":       "The config",
-                        "train_module": "The training module",
+                        "train_module": "The module",
                     },
                     ScoreLevel.FAIR: {
-                        "model_id":     "A number that identifies the model",
-                        "config":       "Settings for the run",
-                        "train_module": "Module that manages training",
+                        "model_id":     "An integer ID",
+                        "config":       "A dictionary",
+                        "train_module": "A module object",
                     },
                     ScoreLevel.GOOD: {
-                        "model_id":     "Identifier for the model entity in the registry",
-                        "config":       "Configuration controlling run behavior and resource limits",
-                        "train_module": "Module that implements training logic and checkpointing",
+                        "model_id":     "Identifier for the model to use",
+                        "config":       "Configuration settings for the run",
+                        "train_module": "Module that handles training logic",
                     },
                     ScoreLevel.VERY_GOOD: {
-                        "model_id":     "Unique numeric ID for the model in the registry. Must be a registered model",
-                        "config":       "Controls run frequency, storage, and resource constraints. Important for disk usage",
-                        "train_module": "Orchestrates training workflow and defines what model components get saved",
+                        "model_id":     "Unique numeric ID for the model. Must be a registered model in the registry",
+                        "config":       "Configuration controlling run behavior and resource limits",
+                        "train_module": "Module that orchestrates the training workflow and checkpointing",
                     },
                     ScoreLevel.EXCELLENT: {
-                        "model_id":     "Unique integer ID (e.g. 1014925). Must exist in registry before use, otherwise raises ModelNotFoundError",
-                        "config":       "Specifies saving intervals, naming formats, and retention. See docs for advanced async options",
-                        "train_module": "Manages end-to-end training flow and triggers saves at correct intervals",
+                        "model_id":     "Unique integer ID (e.g. 1014925). Must exist in registry, raises ModelNotFoundError otherwise",
+                        "config":       "Specifies saving intervals, naming formats, and retention. See docs for async options",
+                        "train_module": "Manages end-to-end training flow, triggers saves at correct intervals",
                     },
                 },
                 explanations={
-                    ScoreLevel.POOR:      "Recites type info, no usage or constraints",
-                    ScoreLevel.FAIR:      "Basic purpose but lacks detail",
-                    ScoreLevel.GOOD:      "Core constraints present but some usage details missing",
-                    ScoreLevel.VERY_GOOD: "Usage patterns, constraints, and environment needs explained",
-                    ScoreLevel.EXCELLENT: "Comprehensive: resource impact, constraints, error cases",
+                    ScoreLevel.POOR:      "Just restates parameter name, completely useless",
+                    ScoreLevel.FAIR:      "Only mentions type, no purpose",
+                    ScoreLevel.GOOD:      "Explains what the parameter is used for - this is acceptable",
+                    ScoreLevel.VERY_GOOD: "Adds constraints and context beyond basic purpose",
+                    ScoreLevel.EXCELLENT: "Comprehensive: constraints, error cases, and practical details",
                 },
             )
         ]

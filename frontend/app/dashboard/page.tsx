@@ -56,7 +56,7 @@ const statusConfig: Record<
 > = {
   completed: {
     label: "Completed",
-    color: "bg-emerald-500/10 text-emerald-600 border border-emerald-500/20",
+    color: "bg-green-100 text-green-700 border border-green-700",
     icon: CheckCircle2,
   },
   pending: {
@@ -211,17 +211,17 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen" style={{ background: "#fff8fc" }}>
       {/* Sidebar */}
-      <aside className="fixed left-0 top-0 bottom-0 w-72 bg-card border-r border-border p-6 flex flex-col">
+      <aside className="fixed left-0 top-0 bottom-0 w-72 border-r border-border p-6 flex flex-col bg-white">
         <Link href="/" className="flex items-center gap-3 mb-10">
-          <div className="w-10 h-10 rounded-xl bg-foreground flex items-center justify-center">
-            <Code2 className="w-6 h-6 text-background" />
+          <div className="w-10 h-10 rounded-xl bg-black flex items-center justify-center">
+            <Code2 className="w-6 h-6 text-white" />
           </div>
           <span className="text-2xl font-bold text-foreground tracking-tight">CodeIQ</span>
         </Link>
 
-        <nav className="flex-1 space-y-1">
+        <nav className="flex-1 space-y-1 relative">
           <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 px-3">
             Main
           </div>
@@ -239,23 +239,23 @@ export default function DashboardPage() {
           </div>
           <Link
             href="/dashboard/docs"
-            className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-muted-foreground hover:bg-secondary hover:text-foreground transition-all"
+            className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-muted-foreground hover:bg-purple-100 hover:text-black transition-all"
           >
-            <FileText className="w-5 h-5" />
+            <FileText className="w-5 h-5 text-black" />
             <span>Documentation</span>
           </Link>
           <Link
             href="/dashboard/metrics"
-            className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-muted-foreground hover:bg-secondary hover:text-foreground transition-all"
+            className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-muted-foreground hover:bg-purple-100 hover:text-black transition-all"
           >
-            <BarChart3 className="w-5 h-5" />
+            <BarChart3 className="w-5 h-5 text-black" />
             <span>Metrics</span>
           </Link>
           <Link
             href="/dashboard/activity"
-            className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-muted-foreground hover:bg-secondary hover:text-foreground transition-all"
+            className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-muted-foreground hover:bg-purple-100 hover:text-black transition-all"
           >
-            <Activity className="w-5 h-5" />
+            <Activity className="w-5 h-5 text-black" />
             <span>Activity</span>
           </Link>
         </nav>
@@ -287,10 +287,10 @@ export default function DashboardPage() {
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
-                className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-secondary transition-all w-full text-left"
+                className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-purple-100 transition-all w-full text-left"
               >
-                <div className="w-9 h-9 rounded-lg bg-foreground/10 flex items-center justify-center shrink-0">
-                  <User className="w-5 h-5 text-foreground" />
+                <div className="w-9 h-9 rounded-lg bg-purple-100 flex items-center justify-center shrink-0">
+                  <User className="w-5 h-5 text-black" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-foreground truncate">{userName}</p>
@@ -326,38 +326,38 @@ export default function DashboardPage() {
       </aside>
 
       {/* Main Content */}
-      <main className="ml-72 p-8">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-6">
+      <main className="ml-72 p-8 bg-[#fef5fb] min-h-screen">
+        {/* Header Container */}
+        <div className="flex items-center justify-between mb-8">
           <div>
-            <h1 className="text-2xl font-semibold text-foreground">Projects</h1>
-            <p className="text-sm text-muted-foreground mt-0.5">Manage and analyze your repositories</p>
+            <h1 className="text-3xl font-bold text-black">Projects</h1>
+            <p className="text-sm text-muted-foreground mt-1">Manage and analyze your repositories</p>
           </div>
           <Link href="/dashboard/analysis/new">
-            <Button className="bg-foreground text-background hover:bg-foreground/90 h-10 px-5 text-sm">
+            <Button className="bg-black text-white hover:bg-purple-900 h-10 px-6 rounded-full text-sm font-medium shadow-sm transition-all hover:scale-105 active:scale-95">
               <Plus className="w-4 h-4 mr-2" />
               New Analysis
             </Button>
           </Link>
         </div>
 
-        {/* Stats */}
+        {/* Stats Container */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
           {[
-            { icon: FolderGit2, label: "Total Projects", value: repos.length, bgColor: "bg-slate-100", iconColor: "text-slate-600" },
-            { icon: CheckCircle2, label: "Completed", value: completedCount, bgColor: "bg-emerald-50", iconColor: "text-emerald-600" },
-            { icon: Sparkles, label: "Avg. Score", value: avgScore ? `${avgScore}%` : "–", bgColor: "bg-amber-50", iconColor: "text-amber-600" },
-            { icon: Layers, label: "Total Files", value: totalFiles.toLocaleString(), bgColor: "bg-violet-50", iconColor: "text-violet-600" },
+            { icon: FolderGit2, label: "Total Projects", value: repos.length, bgColor: "bg-purple-100/80 dark:bg-purple-900/50", iconColor: "text-black" },
+            { icon: CheckCircle2, label: "Completed", value: completedCount, bgColor: "bg-purple-100/80 dark:bg-purple-900/50", iconColor: "text-black" },
+            { icon: Sparkles, label: "Avg. Score", value: avgScore ? `${avgScore}%` : "–", bgColor: "bg-purple-100/80 dark:bg-purple-900/50", iconColor: "text-black" },
+            { icon: Layers, label: "Total Files", value: totalFiles.toLocaleString(), bgColor: "bg-purple-100/80 dark:bg-purple-900/50", iconColor: "text-black" },
           ].map((stat) => (
-            <Card key={stat.label} className="border-border bg-card hover:border-foreground/20 transition-all">
-              <CardContent className="p-5">
+            <Card key={stat.label} className="border-border/50 bg-white shadow-sm transition-colors">
+              <CardContent className="p-4">
                 <div className="flex items-center gap-4">
-                  <div className={`w-11 h-11 rounded-xl ${stat.bgColor} flex items-center justify-center`}>
+                  <div className="w-12 h-12 rounded-2xl bg-purple-200 flex items-center justify-center shadow-inner">
                     <stat.icon className={`w-5 h-5 ${stat.iconColor}`} />
                   </div>
                   <div>
-                    <p className="text-2xl font-semibold text-foreground">{stat.value}</p>
-                    <p className="text-sm text-muted-foreground">{stat.label}</p>
+                    <p className="text-2xl font-bold text-foreground tracking-tight">{stat.value}</p>
+                    <p className="text-sm font-medium text-muted-foreground">{stat.label}</p>
                   </div>
                 </div>
               </CardContent>
@@ -365,39 +365,39 @@ export default function DashboardPage() {
           ))}
         </div>
 
-        {/* Search and filters */}
-        <div className="flex items-center gap-4 mb-6">
-          <div className="relative flex-1 max-w-md">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+        {/* Search and filters Container */}
+        <div className="flex items-center gap-4 mb-8">
+          <div className="relative flex-1 max-w-2xl">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-black" />
             <Input
-              placeholder="Search projects..."
+              placeholder="Search projects by name, language, or status..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-12 h-12 bg-card border-border rounded-xl"
+              className="pl-12 h-12 bg-white border-border/50 rounded-xl w-full text-base focus-visible:ring-1 focus-visible:ring-purple-600/20"
             />
           </div>
-          <div className="flex items-center gap-2 p-1 bg-secondary rounded-lg">
+          <div className="flex items-center gap-1 p-1 bg-white border border-border/50 rounded-xl">
             <button
               type="button"
               onClick={() => setView("grid")}
-              className={`p-2 rounded-md transition-colors ${view === "grid" ? "bg-card shadow-sm" : "hover:bg-card/50"}`}
+              className={`p-2.5 rounded-lg transition-all ${view === "grid" ? "bg-black shadow-sm text-white" : "text-black hover:bg-purple-100"}`}
             >
-              <svg className="w-5 h-5 text-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="3" y="3" width="7" height="7" />
-                <rect x="14" y="3" width="7" height="7" />
-                <rect x="3" y="14" width="7" height="7" />
-                <rect x="14" y="14" width="7" height="7" />
+              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="3" width="7" height="7" rx="1" />
+                <rect x="14" y="3" width="7" height="7" rx="1" />
+                <rect x="3" y="14" width="7" height="7" rx="1" />
+                <rect x="14" y="14" width="7" height="7" rx="1" />
               </svg>
             </button>
             <button
               type="button"
               onClick={() => setView("list")}
-              className={`p-2 rounded-md transition-colors ${view === "list" ? "bg-card shadow-sm" : "hover:bg-card/50"}`}
+              className={`p-2.5 rounded-lg transition-all ${view === "list" ? "bg-black shadow-sm text-white" : "text-black hover:bg-purple-100"}`}
             >
-              <svg className="w-5 h-5 text-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <line x1="3" y1="6" x2="21" y2="6" />
-                <line x1="3" y1="12" x2="21" y2="12" />
-                <line x1="3" y1="18" x2="21" y2="18" />
+              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="4" y1="6" x2="20" y2="6" />
+                <line x1="4" y1="12" x2="20" y2="12" />
+                <line x1="4" y1="18" x2="20" y2="18" />
               </svg>
             </button>
           </div>
@@ -406,7 +406,7 @@ export default function DashboardPage() {
         {/* Loading state */}
         {loading && repos.length === 0 && (
           <div className="flex items-center justify-center py-20">
-            <Loader2 className="w-6 h-6 animate-spin text-muted-foreground mr-3" />
+            <Loader2 className="w-6 h-6 animate-spin text-black mr-3" />
             <span className="text-muted-foreground">Loading repositories…</span>
           </div>
         )}
@@ -441,10 +441,10 @@ export default function DashboardPage() {
 
         {/* Empty state */}
         {!loading && repos.length === 0 && !error && (
-          <Card className="border-border bg-card">
+          <Card className="border-border/50 bg-white shadow-sm">
             <CardContent className="p-12 text-center">
-              <div className="w-16 h-16 rounded-2xl bg-secondary flex items-center justify-center mx-auto mb-4">
-                <FolderGit2 className="w-8 h-8 text-muted-foreground" />
+              <div className="w-16 h-16 rounded-2xl bg-purple-100 flex items-center justify-center mx-auto mb-4">
+                <FolderGit2 className="w-8 h-8 text-black" />
               </div>
               <h3 className="text-xl font-semibold text-foreground mb-2">No projects yet</h3>
               <p className="text-muted-foreground mb-6">Add your first GitHub repository to get started</p>
@@ -460,10 +460,10 @@ export default function DashboardPage() {
 
         {/* Search empty state */}
         {!loading && repos.length > 0 && filteredProjects.length === 0 && (
-          <Card className="border-border bg-card">
+          <Card className="border-border/50 bg-white shadow-sm">
             <CardContent className="p-12 text-center">
-              <div className="w-16 h-16 rounded-2xl bg-secondary flex items-center justify-center mx-auto mb-4">
-                <Search className="w-8 h-8 text-muted-foreground" />
+              <div className="w-16 h-16 rounded-2xl bg-purple-100 flex items-center justify-center mx-auto mb-4">
+                <Search className="w-8 h-8 text-black" />
               </div>
               <h3 className="text-xl font-semibold text-foreground mb-2">No projects found</h3>
               <p className="text-muted-foreground mb-6">Try adjusting your search query</p>
@@ -500,11 +500,11 @@ function RepoCard({
 
   if (view === "list") {
     return (
-      <Card className="border-border bg-card hover:border-foreground/20 transition-all">
+      <Card className="border border-border/50 bg-white hover:bg-gray-50 shadow-sm transition-all">
         <CardContent className="p-4">
           <div className="flex items-center gap-4">
-            <div className="w-10 h-10 rounded-lg bg-secondary flex items-center justify-center">
-              <FolderGit2 className="w-5 h-5 text-muted-foreground" />
+            <div className="w-10 h-10 rounded-lg bg-purple-100 flex items-center justify-center">
+              <FolderGit2 className="w-5 h-5 text-black" />
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
@@ -540,12 +540,12 @@ function RepoCard({
 
   // Grid card
   return (
-    <Card className="border-border bg-card hover:border-foreground/20 transition-all group">
+    <Card className="border border-border/50 bg-white hover:bg-gray-50 shadow-sm transition-all group hover:scale-[1.01]">
       <CardContent className="p-5">
         <div className="flex items-start justify-between mb-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-secondary flex items-center justify-center">
-              <FolderGit2 className="w-5 h-5 text-muted-foreground" />
+            <div className="w-10 h-10 rounded-lg bg-purple-100 flex items-center justify-center">
+              <FolderGit2 className="w-5 h-5 text-black" />
             </div>
             <div>
               <h3 className="font-medium text-foreground flex items-center gap-2">
@@ -565,19 +565,19 @@ function RepoCard({
           </div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm" className="h-8 w-8 p-0 opacity-0 group-hover:opacity-100 transition-opacity">
+              <Button variant="ghost" size="sm" className="h-8 w-8 p-0 opacity-0 group-hover:opacity-100 transition-opacity text-black hover:bg-purple-900">
                 <MoreVertical className="w-4 h-4" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem asChild>
                 <Link href={`/dashboard/analysis/${repo.id}/results`} className="cursor-pointer">
-                  <Eye className="w-4 h-4 mr-2" />
+                  <Eye className="w-4 h-4 mr-2 text-black" />
                   View Results
                 </Link>
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => onGenerate(repo.id)}>
-                <Play className="w-4 h-4 mr-2" />
+                  <Play className="w-4 h-4 mr-2 text-black" />
                 Start Analysis
               </DropdownMenuItem>
               <DropdownMenuItem className="text-destructive" onClick={() => onDelete(repo.id)}>
@@ -595,7 +595,7 @@ function RepoCard({
           </Badge>
           {repo.overall_score != null && (
             <div className="flex items-center gap-1.5">
-              <Sparkles className="w-4 h-4 text-amber-500" />
+              <Sparkles className="w-4 h-4 text-black" />
               <span className="text-lg font-semibold text-foreground">{Math.round(repo.overall_score)}%</span>
             </div>
           )}
@@ -612,7 +612,7 @@ function RepoCard({
           <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
             <div
               className={`h-full rounded-full transition-all duration-500 ${
-                repo.status === "failed" ? "bg-red-500" : "bg-emerald-500"
+                repo.status === "failed" ? "bg-red-500" : repo.status === "completed" ? "bg-green-500" : "bg-gray-400"
               }`}
               style={{ width: `${repo.progress_percent}%` }}
             />
@@ -621,7 +621,7 @@ function RepoCard({
 
         <div className="flex items-center justify-between text-sm text-muted-foreground mb-5">
           <span className="flex items-center gap-1.5">
-            <Layers className="w-4 h-4" />
+            <Layers className="w-4 h-4 text-black" />
             {repo.file_count} files
           </span>
           <span>{timeLabel}</span>
@@ -629,7 +629,7 @@ function RepoCard({
 
         {repo.status === "completed" && (
           <Link href={`/dashboard/analysis/${repo.id}/results`}>
-            <Button variant="outline" className="w-full border-border bg-transparent hover:bg-secondary">
+            <Button className="w-full bg-black text-white hover:bg-purple-900 transition-colors">
               View Results
               <ChevronRight className="w-4 h-4 ml-1" />
             </Button>
@@ -637,7 +637,7 @@ function RepoCard({
         )}
         {isRunning && (
           <Link href={`/dashboard/analysis/${repo.id}/pipeline`}>
-            <Button variant="outline" className="w-full border-amber-500/30 bg-amber-500/5 text-amber-600 hover:bg-amber-500/10">
+            <Button className="w-full bg-black text-white hover:bg-purple-900 transition-colors">
               <Activity className="w-4 h-4 mr-2" />
               View Progress
             </Button>

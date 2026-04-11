@@ -1,0 +1,1 @@
+{"created_at": 1775854279.6486855, "content": "<DOCSTRING>\nChecks if the object's age is 18 or older.\n@returns {boolean} True if the object is an adult, false otherwise.\n</DOCSTRING>", "model": "qwen2.5-coder-7b-instruct-q4_k_m.gguf", "usage": {"prompt_tokens": 2613, "completion_tokens": 37, "total_tokens": 2650}, "metadata": {"local": true, "memory_based": true}}

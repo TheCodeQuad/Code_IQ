@@ -462,7 +462,7 @@ python -m backend.eval_truthfulness_multi_system \
 export GEMINI_API_KEY="your-api-key"
 
 # For local model path
-export LLAMA_MODEL_PATH="/path/to/qwen2.5-coder-7b.gguf"
+export LLAMA_MODEL_PATH="/path/to/qwen2.5-coder-7b-instruct-q4_k_m.gguf"
 ```
 
 ### Tuning Parameters

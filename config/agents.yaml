@@ -1,7 +1,7 @@
 orchestrator:
   enabled: true
   max_iterations: 10
-  parallel_execution: false
+  parallel_execution: true
 
 reader_agent:
   enabled: true
@@ -58,6 +58,7 @@ verifier_agent:
   enabled: true
   priority: 4
   max_retries: 2
+  max_rejections: 3  # Max writer-verifier refinement cycles
   retry_delay: 1
   timeout: 120
   validation_rules:

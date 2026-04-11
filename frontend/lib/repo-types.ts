@@ -89,6 +89,8 @@ export interface GenerateResponse {
   success: boolean;
   repo_id: string;
   message: string;
+  demo_mode?: boolean;
+  mode?: "full" | "demo";
 }
 
 /** Response from GET /api/repos/[id]/status */

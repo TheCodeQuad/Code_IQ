@@ -458,6 +458,8 @@ export default function DocumentationPage() {
                     className="!bg-foreground !m-0 !p-6 !text-sm"
                     showLineNumbers={true}
                     wrapLines={true}
+                    customStyle={{ fontFamily: "Consolas, 'Courier New', monospace" }}
+                    codeTagProps={{ style: { fontFamily: "Consolas, 'Courier New', monospace" } }}
                   >
                     {displayCode || "// Select a file to view code"}
                   </SyntaxHighlighter>

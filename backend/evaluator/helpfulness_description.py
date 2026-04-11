@@ -44,10 +44,10 @@ class DocstringDescriptionEvaluator:
             DescriptionAspect.MOTIVATION: AspectCriteria(
                 description="How well does the description explain the reason or motivation behind the code?",
                 score_criteria={
-                    ScoreLevel.POOR:      "No explanation of why the code exists or its purpose",
-                    ScoreLevel.FAIR:      "Basic purpose stated but without context or reasoning",
-                    ScoreLevel.GOOD:      "Clear explanation of purpose with some context",
-                    ScoreLevel.VERY_GOOD: "Thorough explanation of purpose with business/technical context",
+                    ScoreLevel.POOR:      "No description at all or completely wrong/misleading",
+                    ScoreLevel.FAIR:      "Very minimal description, just a few words",
+                    ScoreLevel.GOOD:      "Explains what the code does in a clear sentence or paragraph",
+                    ScoreLevel.VERY_GOOD: "Explains what it does AND why it exists or when to use it",
                     ScoreLevel.EXCELLENT: "Comprehensive explanation of purpose, context, and value proposition",
                 },
                 example_good=(
@@ -60,9 +60,9 @@ class DocstringDescriptionEvaluator:
             DescriptionAspect.USAGE_SCENARIOS: AspectCriteria(
                 description="How effectively does it describe when and how to use the code?",
                 score_criteria={
-                    ScoreLevel.POOR:      "No information about usage scenarios",
-                    ScoreLevel.FAIR:      "Basic usage information without specific scenarios",
-                    ScoreLevel.GOOD:      "Some key usage scenarios described",
+                    ScoreLevel.POOR:      "No description or completely uninformative",
+                    ScoreLevel.FAIR:      "Very basic, doesn't explain usage",
+                    ScoreLevel.GOOD:      "Describes the general use case in a clear way",
                     ScoreLevel.VERY_GOOD: "Detailed usage scenarios with common cases",
                     ScoreLevel.EXCELLENT: "Comprehensive coverage of use cases, including edge cases",
                 },
@@ -76,9 +76,9 @@ class DocstringDescriptionEvaluator:
             DescriptionAspect.INTEGRATION: AspectCriteria(
                 description="How well does it explain integration with other system components?",
                 score_criteria={
-                    ScoreLevel.POOR:      "No mention of system integration",
-                    ScoreLevel.FAIR:      "Minimal reference to other components",
-                    ScoreLevel.GOOD:      "Basic explanation of main interactions",
+                    ScoreLevel.POOR:      "No description or completely uninformative",
+                    ScoreLevel.FAIR:      "Very minimal information",
+                    ScoreLevel.GOOD:      "Describes how it works as a standalone component",
                     ScoreLevel.VERY_GOOD: "Clear description of integration points and dependencies",
                     ScoreLevel.EXCELLENT: "Comprehensive overview of system interactions and data flow",
                 },
@@ -91,10 +91,10 @@ class DocstringDescriptionEvaluator:
             DescriptionAspect.FUNCTIONALITY: AspectCriteria(
                 description="How clearly does it explain the functionality without excessive technical detail?",
                 score_criteria={
-                    ScoreLevel.POOR:      "No explanation of functionality",
+                    ScoreLevel.POOR:      "No explanation or completely wrong",
                     ScoreLevel.FAIR:      "Overly technical or vague explanation",
-                    ScoreLevel.GOOD:      "Basic explanation of main functionality",
-                    ScoreLevel.VERY_GOOD: "Clear, balanced explanation of functionality",
+                    ScoreLevel.GOOD:      "Clear explanation of what the code does",
+                    ScoreLevel.VERY_GOOD: "Clear, balanced explanation with good detail",
                     ScoreLevel.EXCELLENT: "Perfect balance of clarity and technical detail",
                 },
                 example_good=(
@@ -221,7 +221,10 @@ class DocstringDescriptionEvaluator:
 
         section_markers = [
             "Args:", "Parameters:", "Arguments:", "Returns:",
-            "Raises:", "Yields:", "Examples:", "@param", "@return",
+            "Raises:", "Yields:", "Examples:", "@param", "@return", "@returns",
+            "@throws", "@exception", "@raise",
+            "Attributes:", "Members:", "Member variables:", "Instance variables:", "Properties:",
+            "@field", "@property", "@var",
         ]
 
         description_lines = []

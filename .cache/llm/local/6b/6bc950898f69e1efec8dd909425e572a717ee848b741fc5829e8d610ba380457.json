@@ -1,0 +1,1 @@
+{"created_at": 1775854075.8408177, "content": "<DOCSTRING>\nSubtracts the second number from the first number.\n\n@returns {number} The result of subtracting `b` from `a`.\n</DOCSTRING>", "model": "qwen2.5-coder-7b-instruct-q4_k_m.gguf", "usage": {"prompt_tokens": 3426, "completion_tokens": 35, "total_tokens": 3461}, "metadata": {"local": true, "memory_based": true}}
