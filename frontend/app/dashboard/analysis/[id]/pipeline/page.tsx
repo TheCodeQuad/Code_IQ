@@ -11,7 +11,7 @@ export default async function PipelinePage({
   const { id } = await params
 
   return (
-    <div className="h-screen overflow-hidden bg-background flex flex-col">
+    <div className="h-screen overflow-hidden bg-[#fef5fb] flex flex-col">
       {/* Slim Header */}
       <header className="border-b border-border bg-card shrink-0 z-50 h-14">
         <div className="px-4 h-full flex items-center justify-between">

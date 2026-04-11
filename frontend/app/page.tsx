@@ -122,7 +122,7 @@ function SpatialZoomCode() {
 }
 
 const heroTexts = [
-  ["Code that", "documents itself"],
+  ["Structured docs", "from codebases"],
   ["Agentic AI", "Code Documentation"],
   ["AI that understands", "your codebase"],
   ["Turn complex code", "into clear docs"],
@@ -379,7 +379,7 @@ export default function LandingPage() {
   const router = useRouter();
 
   return (
-    <div className="min-h-screen relative overflow-hidden bg-gradient-to-b from-[#e897c6] via-[#fff8fc] to-[#fffee1]">
+    <div className="min-h-screen relative overflow-hidden bg-gradient-to-b from-[#e897c6] via-[#fff8fc] to-[#f1b9ff]">
       {/* Background */}
       <div className="fixed inset-0 grid-pattern pointer-events-none opacity-50" />
 
@@ -445,9 +445,9 @@ export default function LandingPage() {
           <HeroVideoCircle />
 
           <div className="text-6xl md:text-7xl lg:text-8xl font-bold text-foreground leading-[1.1] tracking-tight relative z-20 pointer-events-none -mt-16 md:-mt-24 flex flex-col items-center">
-            <span className="block text-foreground font-bold tracking-tighter" style={{ fontFamily: "Arial, Helvetica, sans-serif", textShadow: '0 2px 10px rgba(0,0,0,0.05)' }}>Code that</span>
+            <span className="block text-foreground font-bold tracking-tighter" style={{ fontFamily: "Arial, Helvetica, sans-serif", textShadow: '0 2px 10px rgba(0,0,0,0.05)' }}>Structured docs</span>
             <span className="block font-bold tracking-tighter text-[#dc2d98] pb-3 -mt-1 md:-mt-2" style={{ fontFamily: "Arial, Helvetica, sans-serif" }}>
-              documents itself
+              from codebases
             </span>
           </div>
           
