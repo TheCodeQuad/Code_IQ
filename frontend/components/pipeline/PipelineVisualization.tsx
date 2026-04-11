@@ -1291,7 +1291,7 @@ export function PipelineVisualization({ repoId, autoStart = false }: { repoId: s
     : Math.round((completedNavigatorSteps / Math.max(pipelineState.navigator.steps.length, 1)) * 100)
 
   return (
-    <div className="h-full overflow-hidden bg-gray-50">
+    <div className="h-full overflow-hidden bg-[#fef5fb]">
       <RepositoryToDAG
         isActive={showNavigatorOverlay}
         logs={navigatorLogs}

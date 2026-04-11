@@ -192,7 +192,7 @@ export default function NewAnalysisPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-[#fef5fb]">
       {/* Sidebar */}
       <aside className="fixed left-0 top-0 bottom-0 w-56 bg-card border-r border-border p-4 flex flex-col">
         <Link href="/" className="flex items-center gap-2 mb-8">
@@ -206,50 +206,50 @@ export default function NewAnalysisPage() {
           <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2 px-2">Main</p>
           <Link
             href="/dashboard"
-            className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-all"
+            className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm text-muted-foreground hover:bg-purple-100 hover:text-black transition-all"
           >
-            <FolderGit2 className="w-4 h-4" />
+            <FolderGit2 className="w-4 h-4 text-black" />
             <span>Projects</span>
           </Link>
           <Link
             href="/dashboard/analysis/new"
             className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm bg-secondary text-foreground font-medium"
           >
-            <Plus className="w-4 h-4" />
+            <Plus className="w-4 h-4 text-black" />
             <span>New Analysis</span>
           </Link>
           
           <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2 mt-5 px-2">Insights</p>
           <Link
             href="/dashboard/docs"
-            className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-all"
+            className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm text-muted-foreground hover:bg-purple-100 hover:text-black transition-all"
           >
-            <FileText className="w-4 h-4" />
+            <FileText className="w-4 h-4 text-black" />
             <span>Documentation</span>
           </Link>
           <Link
             href="/dashboard/metrics"
-            className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-all"
+            className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm text-muted-foreground hover:bg-purple-100 hover:text-black transition-all"
           >
-            <BarChart3 className="w-4 h-4" />
+            <BarChart3 className="w-4 h-4 text-black" />
             <span>Metrics</span>
           </Link>
           <Link
             href="/dashboard/activity"
-            className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-all"
+            className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm text-muted-foreground hover:bg-purple-100 hover:text-black transition-all"
           >
-            <Activity className="w-4 h-4" />
+            <Activity className="w-4 h-4 text-black" />
             <span>Activity</span>
           </Link>
         </nav>
 
         <div className="border-t border-border pt-3 space-y-1">
-          <button type="button" className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-all w-full">
-            <Settings className="w-4 h-4" />
+          <button type="button" className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm text-muted-foreground hover:bg-purple-100 hover:text-black transition-all w-full">
+            <Settings className="w-4 h-4 text-black" />
             <span>Settings</span>
           </button>
-          <button type="button" className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-all w-full">
-            <LogOut className="w-4 h-4" />
+          <button type="button" className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm text-muted-foreground hover:bg-purple-100 hover:text-black transition-all w-full">
+            <LogOut className="w-4 h-4 text-black" />
             <span>Sign Out</span>
           </button>
         </div>
@@ -263,7 +263,7 @@ export default function NewAnalysisPage() {
             <div className="flex items-center gap-3">
               <Link href="/dashboard">
                 <Button variant="ghost" size="sm" className="h-8 px-2 text-muted-foreground hover:text-foreground">
-                  <ArrowLeft className="w-4 h-4 mr-1.5" />
+                  <ArrowLeft className="w-4 h-4 mr-1.5 text-black" />
                   Back
                 </Button>
               </Link>
@@ -280,7 +280,7 @@ export default function NewAnalysisPage() {
                   <Button
                     variant="outline"
                     size="sm"
-                    className="h-8 gap-1.5"
+                    className="h-8 gap-1.5 border-black text-black hover:bg-purple-900 hover:text-white hover:border-purple-900"
                     onClick={handleDisconnectGitHub}
                     disabled={disconnectingGitHub}
                   >
@@ -292,7 +292,7 @@ export default function NewAnalysisPage() {
                 <Button 
                   onClick={initiateGitHubAuth}
                   size="sm" 
-                  className="h-8 gap-2 bg-[#24292e] hover:bg-[#1f2937] text-white border-0"
+                  className="h-8 gap-2 bg-black hover:bg-purple-900 text-white border-0"
                 >
                   <Github className="w-4 h-4" />
                   <span className="text-xs font-medium">Connect GitHub</span>
@@ -330,7 +330,7 @@ export default function NewAnalysisPage() {
                           : "border-border hover:border-foreground/20"
                       }`}
                     >
-                      <Upload className="w-5 h-5 mx-auto mb-1.5 text-muted-foreground" />
+                      <Upload className="w-5 h-5 mx-auto mb-1.5 text-black" />
                       <p className="text-sm font-medium text-foreground">Upload ZIP</p>
                       <p className="text-xs text-muted-foreground">Upload a ZIP file</p>
                     </button>
@@ -343,7 +343,7 @@ export default function NewAnalysisPage() {
                           : "border-border hover:border-foreground/20"
                       }`}
                     >
-                      <GitBranch className="w-5 h-5 mx-auto mb-1.5 text-muted-foreground" />
+                      <GitBranch className="w-5 h-5 mx-auto mb-1.5 text-black" />
                       <p className="text-sm font-medium text-foreground">Git Repository</p>
                       <p className="text-xs text-muted-foreground">Clone from URL</p>
                     </button>
@@ -361,7 +361,7 @@ export default function NewAnalysisPage() {
                           : "border-border opacity-50 cursor-not-allowed"
                       }`}
                     >
-                      <Github className="w-5 h-5 mx-auto mb-1.5 text-muted-foreground" />
+                      <Github className="w-5 h-5 mx-auto mb-1.5 text-black" />
                       <p className="text-sm font-medium text-foreground">GitHub Connected</p>
                       <p className="text-xs text-muted-foreground">{isGitHubConnected ? "Select from repos" : "Connect first"}</p>
                     </button>
@@ -377,12 +377,12 @@ export default function NewAnalysisPage() {
                       onDragOver={(e) => e.preventDefault()}
                       onDrop={() => setDragActive(false)}
                     >
-                      <Upload className="w-8 h-8 mx-auto mb-3 text-muted-foreground" />
+                      <Upload className="w-8 h-8 mx-auto mb-3 text-black" />
                       <p className="text-sm text-foreground font-medium mb-0.5">
                         Drag and drop your ZIP file here
                       </p>
                       <p className="text-xs text-muted-foreground mb-3">or click to browse</p>
-                      <Button variant="outline" size="sm" className="border-border bg-transparent h-8 text-xs">
+                      <Button variant="outline" size="sm" className="border-black bg-black h-8 text-xs text-white hover:bg-purple-900 hover:border-purple-900">
                         Select File
                       </Button>
                     </div>
@@ -403,7 +403,7 @@ export default function NewAnalysisPage() {
                           {repoUrl && (
                             <div className="absolute right-3 top-1/2 -translate-y-1/2">
                               {repoValidating ? (
-                                <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                                <Loader2 className="w-4 h-4 animate-spin text-black" />
                               ) : repoValid ? (
                                 <Check className="w-4 h-4 text-emerald-500" />
                               ) : (
@@ -444,8 +444,8 @@ export default function NewAnalysisPage() {
                 <CardContent className="space-y-4">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-lg bg-secondary flex items-center justify-center">
-                        <GitBranch className="w-4 h-4 text-muted-foreground" />
+                      <div className="w-9 h-9 rounded-lg bg-purple-100 flex items-center justify-center">
+                        <GitBranch className="w-4 h-4 text-black" />
                       </div>
                       <div>
                         <p className="text-sm font-medium text-foreground">Graph Visualization</p>
@@ -464,8 +464,8 @@ export default function NewAnalysisPage() {
 
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-lg bg-secondary flex items-center justify-center">
-                        <BarChart3 className="w-4 h-4 text-muted-foreground" />
+                      <div className="w-9 h-9 rounded-lg bg-purple-100 flex items-center justify-center">
+                        <BarChart3 className="w-4 h-4 text-black" />
                       </div>
                       <div>
                         <p className="text-sm font-medium text-foreground">Evaluation Framework</p>
@@ -493,16 +493,16 @@ export default function NewAnalysisPage() {
                   <CardTitle className="text-base font-medium">Analysis Summary</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3">
-                  <div className="flex items-center gap-2.5 p-2.5 bg-secondary rounded-lg">
-                    <FolderGit2 className="w-4 h-4 text-muted-foreground" />
+                  <div className="flex items-center gap-2.5 p-2.5 bg-purple-100 rounded-lg">
+                    <FolderGit2 className="w-4 h-4 text-black" />
                     <div>
                       <p className="text-xs text-muted-foreground">Source</p>
                       <p className="text-sm font-medium text-foreground capitalize">{uploadMethod}</p>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2.5 p-2.5 bg-secondary rounded-lg">
-                    <FileCode className="w-4 h-4 text-muted-foreground" />
+                  <div className="flex items-center gap-2.5 p-2.5 bg-purple-100 rounded-lg">
+                    <FileCode className="w-4 h-4 text-black" />
                     <div>
                       <p className="text-xs text-muted-foreground">Languages</p>
                       <p className="text-sm font-medium text-foreground">
@@ -532,7 +532,7 @@ export default function NewAnalysisPage() {
                   </div>
 
                   <Button
-                    className="w-full bg-foreground text-background hover:bg-foreground/90 mt-3 h-9 text-sm"
+                    className="w-full bg-black text-white hover:bg-purple-900 mt-3 h-9 text-sm"
                     onClick={handleStartAnalysis}
                     disabled={selectedLanguages.length === 0 || isAnalyzing || (uploadMethod === "git" && !repoUrl.trim())}
                   >
