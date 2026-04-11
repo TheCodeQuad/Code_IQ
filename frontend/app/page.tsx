@@ -2,9 +2,12 @@
 
 import { useState, useEffect, useMemo } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { useSession } from "next-auth/react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
+import CardNav from "@/components/ui/card-nav"
+import RadialOrbitalTimeline from "@/components/RadialOrbitalTimeline"
 import {
   ArrowRight,
   Code2,
@@ -119,7 +122,7 @@ function SpatialZoomCode() {
 }
 
 const heroTexts = [
-  ["Code that", "documents itself"],
+  ["Structured docs", "from codebases"],
   ["Agentic AI", "Code Documentation"],
   ["AI that understands", "your codebase"],
   ["Turn complex code", "into clear docs"],
@@ -158,28 +161,96 @@ function SliceSlider() {
   return (
     <div className="flex flex-col items-center">
       {/* First line */}
-      <div className="h-[48px] md:h-[56px] lg:h-[72px] overflow-hidden">
+      <div className="h-[40px] md:h-[60px] lg:h-[72px] overflow-hidden">
         <div
           className={`transition-transform duration-400 ease-[cubic-bezier(0.77,0,0.175,1)] ${
             showFirst ? "translate-y-0" : "translate-y-full"
           }`}
         >
-          <span className="block">{heroTexts[currentIndex][0]}</span>
+          <span className="block text-foreground font-extrabold tracking-tighter" style={{ textShadow: '0 2px 10px rgba(0,0,0,0.05)' }}>{heroTexts[currentIndex][0]}</span>
         </div>
       </div>
       
       {/* Second line */}
-      <div className="h-[48px] md:h-[56px] lg:h-[72px] overflow-hidden">
+      <div className="h-[44px] md:h-[64px] lg:h-[76px] overflow-hidden -mt-1">
         <div
           className={`transition-transform duration-400 ease-[cubic-bezier(0.77,0,0.175,1)] ${
             showSecond ? "translate-y-0" : "translate-y-full"
           }`}
         >
-          <span className="block">{heroTexts[currentIndex][1]}</span>
+          <span className="block font-extrabold tracking-tighter bg-gradient-to-r from-[#e81cff] via-[#9d4edd] to-[#8b5cf6] bg-clip-text text-transparent pb-3">
+            {heroTexts[currentIndex][1]}
+          </span>
         </div>
       </div>
     </div>
   )
+}
+
+function HeroVideoCircle() {
+  const codeLines = [
+    "useEffect(() => {",
+    "  const interval = setInterval(() => {",
+    "  // Hide current lines",
+    "  setShowFirst(false)",
+    "  setTimeout(() => setShowSecond(false), 100)",
+    "",
+    "  // Change index and show new lines",
+    "  setTimeout(() => {",
+    "    setCurrentIndex((prev) => (prev + 1) % heroTexts.length)",
+    "    setShowFirst(true)",
+    "    setTimeout(() => setShowSecond(true), 150)",
+    "  }, 500)",
+    "}, 3500)",
+    "",
+    "return () => clearInterval(interval)",
+    "}, [])"
+  ];
+
+  const [visibleLines, setVisibleLines] = useState(0);
+
+  useEffect(() => {
+    // Typewriter effect logic
+    const inter = setInterval(() => {
+      setVisibleLines(v => {
+        if (v >= codeLines.length + 5) return 0;
+        return v + 1;
+      });
+    }, 300);
+    return () => clearInterval(inter);
+  }, []);
+
+  return (
+    <div className="relative w-[280px] h-[280px] md:w-[400px] md:h-[400px] mx-auto -mb-20 md:-mb-28 z-10 bg-transparent">
+      {/* Circular video mask */}
+      <div className="absolute inset-0 rounded-full overflow-hidden">
+        {/* 
+          NOTE FOR USER: 
+          Place your video file here: "frontend/public/hero-video.mp4" 
+        */}
+        <video 
+          src="/hero-video.mp4" 
+          autoPlay loop muted playsInline
+          className="absolute inset-0 w-full h-full object-cover scale-[1.02]"
+        />
+      </div>
+      
+      {/* Glowing text overlay - sibling to video so it can escape the clipped bounds */}
+      <div className="absolute inset-0 p-4 md:-ml-8 md:pr-12 flex flex-col justify-center pointer-events-none z-30">
+        <div className="text-[10px] md:text-xs text-white font-semibold leading-tight text-right scale-x-[-1] origin-center w-[120%]" style={{ fontFamily: "Consolas, 'Courier New', monospace", opacity: 0.7, textShadow: '0 0 10px rgba(255,255,255,0.8), 0 0 20px rgba(255,255,255,0.6), 0 0 30px rgba(255,255,255,0.4)' }}>
+          {codeLines.slice(0, Math.min(visibleLines, codeLines.length)).map((line, i) => (
+            <div key={i} className="animate-in fade-in zoom-in slide-in-from-bottom-1 duration-300">
+              {line}
+            </div>
+          ))}
+          {/* Blinking cursor */}
+          {visibleLines < codeLines.length && (
+            <div className="inline-block w-1.5 h-3 bg-white ml-1 animate-pulse shadow-[0_0_8px_rgba(255,255,255,1)]" />
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function AgentOrbit() {
@@ -247,112 +318,142 @@ export default function LandingPage() {
     return () => clearInterval(interval)
   }, [])
 
-  const pipelineSteps = [
-    { icon: Terminal, label: "Upload", desc: "Source Code" },
-    { icon: Network, label: "Navigate", desc: "Build Graphs" },
-    { icon: Brain, label: "Reason", desc: "Agent Pipeline" },
-    { icon: FileText, label: "Generate", desc: "Documentation" },
-    { icon: BarChart3, label: "Evaluate", desc: "Quality Metrics" },
-  ]
+  const timelineData = [
+    {
+      id: 1,
+      title: "Upload Source Code",
+      date: "Phase 1",
+      content: "Upload your repository, and let CodeIQ establish the foundational structure for analysis.",
+      category: "Ingestion",
+      icon: Terminal,
+      relatedIds: [2],
+      status: "completed" as const,
+      energy: 20
+    },
+    {
+      id: 2,
+      title: "Build Graphs",
+      date: "Phase 2",
+      content: "CodeIQ navigates the codebase and constructs CFG and PDG graphs for deep structural understanding.",
+      category: "Processing",
+      icon: Network,
+      relatedIds: [1, 3],
+      status: "in-progress" as const,
+      energy: 40
+    },
+    {
+      id: 3,
+      title: "Agent Pipeline",
+      date: "Phase 3",
+      content: "Agents reason over the generated graphs, extracting deep context to formulate comprehensive insights.",
+      category: "Reasoning",
+      icon: Brain,
+      relatedIds: [2, 4],
+      status: "pending" as const,
+      energy: 60
+    },
+    {
+      id: 4,
+      title: "Generate Docs",
+      date: "Phase 4",
+      content: "Our writing agents compile the gathered insights into detailed, intelligent, and context-aware documentation.",
+      category: "Output",
+      icon: FileText,
+      relatedIds: [3, 5],
+      status: "pending" as const,
+      energy: 80
+    },
+    {
+      id: 5,
+      title: "Quality Metrics",
+      date: "Phase 5",
+      content: "The final step evaluates the generated output against truthfulness and helpfulness metrics.",
+      category: "Verification",
+      icon: BarChart3,
+      relatedIds: [4],
+      status: "pending" as const,
+      energy: 100
+    }
+  ];
+
+  const router = useRouter();
 
   return (
-    <div className="min-h-screen relative overflow-hidden" style={{ background: LANDING_GRADIENT }}>
+    <div className="min-h-screen relative overflow-hidden bg-gradient-to-b from-[#e897c6] via-[#fff8fc] to-[#f1b9ff]">
       {/* Background */}
       <div className="fixed inset-0 grid-pattern pointer-events-none opacity-50" />
 
       {/* Navigation */}
-      <nav className="fixed top-0 left-0 right-0 z-50 glass">
-        <div className="max-w-6xl mx-auto px-6 py-3 flex items-center justify-between">
+      <CardNav
+        logo={
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-lg bg-foreground flex items-center justify-center">
               <Code2 className="w-4 h-4 text-background" />
             </div>
-            <span className="text-lg font-semibold text-foreground">CodeIQ</span>
+            <span className="text-xl font-bold text-foreground">CodeIQ</span>
           </div>
-          <div className="hidden md:flex items-center gap-1">
+        }
+        middleContent={
+          <>
             {["Features", "Pipeline", "Agents", "Docs"].map((item) => (
               <Link
                 key={item}
                 href={`#${item.toLowerCase()}`}
-                className="px-3 py-1.5 rounded-md text-sm text-muted-foreground hover:text-foreground hover:bg-secondary transition-all"
+                className="px-4 py-2 rounded-md text-base text-stone-600 hover:text-stone-900 transition-all font-medium"
               >
                 {item}
               </Link>
             ))}
-          </div>
-          <div className="flex items-center gap-2">
+          </>
+        }
+        rightContent={
+          <>
             {isSignedIn ? (
-              <>
-                <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-secondary text-sm text-muted-foreground">
-                  <User className="w-4 h-4" />
-                  <span className="max-w-[160px] truncate">{session?.user?.email}</span>
-                </div>
-                <Link href="/dashboard">
-                  <Button className="bg-foreground text-background hover:bg-foreground/90 h-9 px-4 text-sm">
-                    Dashboard
-                  </Button>
-                </Link>
-              </>
+              <div className="flex items-center gap-2 px-4 py-2 rounded-md bg-secondary text-base text-muted-foreground mr-1">
+                <User className="w-5 h-5" />
+                <span className="max-w-[160px] truncate">{session?.user?.email}</span>
+              </div>
             ) : (
-              <>
-                <Link href="/login">
-                  <Button variant="ghost" className="text-muted-foreground hover:text-foreground h-9 px-3 text-sm">Sign In</Button>
-                </Link>
-                <Link href="/login">
-                  <Button className="bg-foreground text-background hover:bg-foreground/90 h-9 px-4 text-sm">
-                    Get Started
-                  </Button>
-                </Link>
-              </>
+              <Link href="/login">
+                <Button variant="ghost" className="text-stone-600 hover:text-stone-900 h-10 px-4 text-base mr-1 font-medium">Sign In</Button>
+              </Link>
             )}
-          </div>
-        </div>
-      </nav>
+          </>
+        }
+        baseColor="#ffffff99"
+        buttonBgColor="#111827"
+        buttonTextColor="#ffffff"
+        className="backdrop-blur-md border border-black/5"
+        buttonText={isSignedIn ? "Dashboard" : "Get Started"}
+        onButtonClick={() => router.push(getStartedHref)}
+      />
 
       {/* Hero Section - Full Screen */}
       <section 
-        className="min-h-screen pt-28 pb-10 px-6 relative flex items-center"
+        className="min-h-screen pt-24 pb-10 px-6 relative flex flex-col items-center justify-center overflow-hidden"
       >
-        <SpatialZoomCode />
-        
-        <div className="max-w-4xl mx-auto text-center relative z-10">
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-foreground/5 border border-foreground/10 mb-8">
-            <span className="relative flex h-1.5 w-1.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-500 opacity-75" />
-              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500" />
-            </span>
-            <span className="text-xs font-medium text-muted-foreground">Agentic AI Documentation</span>
-          </div>
-          
-          {/* <h1 className="text-6xl md:text-7xl lg:text-8xl font-semibold text-foreground leading-[1.1] tracking-tight">
-            Code that{" "}
-            <span className="relative inline-block">
-              <span className="relative z-10">documents</span>
-              <svg className="absolute -bottom-2 md:-bottom-3 left-0 w-full h-4 md:h-5 overflow-visible" viewBox="0 0 200 20" preserveAspectRatio="none">
-                <path
-                  d="M0 10 Q50 2, 100 10 T200 10"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="3"
-                  strokeLinecap="round"
-                  className="text-primary"
-                />
-              </svg>
-            </span>{" "}
-            itself
-          </h1> */}
+        {/* BIG background text */}
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-0">
+          <h1 className="text-[20vw] md:text-[24vw] font-bold text-white opacity-50 whitespace-nowrap select-none tracking-tighter mix-blend-overlay" style={{ fontFamily: "Arial, Helvetica, sans-serif" }}>
+            CODEIQ
+          </h1>
+        </div>
 
-          <div className="text-6xl md:text-5xl lg:text-6xl font-semibold text-foreground leading-[1.15] tracking-tight">
-            <SliceSlider />
+        <div className="max-w-4xl mx-auto text-center relative z-10 w-full mt-2">
+          
+          {/* New Circular Video Component! */}
+          <HeroVideoCircle />
+
+          <div className="text-6xl md:text-7xl lg:text-8xl font-bold text-foreground leading-[1.1] tracking-tight relative z-20 pointer-events-none -mt-16 md:-mt-24 flex flex-col items-center">
+            <span className="block text-foreground font-bold tracking-tighter" style={{ fontFamily: "Arial, Helvetica, sans-serif", textShadow: '0 2px 10px rgba(0,0,0,0.05)' }}>Structured docs</span>
+            <span className="block font-bold tracking-tighter text-[#dc2d98] pb-3 -mt-1 md:-mt-2" style={{ fontFamily: "Arial, Helvetica, sans-serif" }}>
+              from codebases
+            </span>
           </div>
           
+        
           
-          <p className="mt-5 text-lg text-muted-foreground max-w-2xl mx-auto leading-relaxed">
-            Transform your codebase with AI that understands context, reasons like developers, 
-            and generates documentation that actually helps.
-          </p>
-          
-          <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
+          <div className="mt-6 flex flex-col sm:flex-row items-center justify-center gap-4 relative z-30">
             <Link href={getStartedHref}>
               <Button className="bg-foreground text-background hover:bg-foreground/90 h-11 px-6 text-base font-medium group">
                 Get Started
@@ -368,76 +469,13 @@ export default function LandingPage() {
           </div>
           
           {/* Quick stats - centered */}
-          <div className="mt-16 flex items-center justify-center gap-12 md:gap-16">
-            {[
-              { value: "10x", label: "Faster docs" },
-              { value: "97%", label: "Accuracy" },
-              { value: "4", label: "AI Agents" },
-            ].map((stat) => (
-              <div key={stat.label} className="text-center">
-                <div className="text-3xl md:text-4xl font-semibold text-foreground">{stat.value}</div>
-                <div className="text-sm text-muted-foreground mt-1">{stat.label}</div>
-              </div>
-            ))}
-          </div>
+          
         </div>
       </section>
 
-      {/* Pipeline Section */}
-      <section id="pipeline" className="min-h-screen py-20 px-6 relative flex items-center">
-        <div className="max-w-6xl mx-auto relative">
-          <div className="text-center mb-12">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">How it works</p>
-            <h2 className="text-2xl md:text-3xl font-semibold text-foreground">From Code to Docs</h2>
-            <p className="mt-2 text-sm text-muted-foreground max-w-lg mx-auto">
-              Watch your code transform through our five-stage agentic pipeline
-            </p>
-          </div>
-
-          {/* Animated pipeline */}
-          <div className="relative">
-            {/* Connection line */}
-            <div className="absolute top-1/2 left-0 right-0 h-0.5 bg-border -translate-y-1/2 hidden lg:block" />
-            <div 
-              className="absolute top-1/2 left-0 h-0.5 bg-emerald-500 -translate-y-1/2 transition-all duration-500 hidden lg:block"
-              style={{ width: `${(activeStep + 1) * 20}%` }}
-            />
-            
-            <div className="grid lg:grid-cols-5 gap-4">
-              {pipelineSteps.map((step, i) => (
-                <div
-                  key={step.label}
-                  className={`relative transition-all duration-300 ${
-                    i <= activeStep ? "opacity-100" : "opacity-40"
-                  }`}
-                >
-                  <Card className={`border-border bg-card ${
-                    i === activeStep ? "border-foreground/20 shadow-sm" : ""
-                  }`}>
-                    <CardContent className="p-5 text-center">
-                      <div className={`w-11 h-11 rounded-lg mx-auto mb-3 flex items-center justify-center transition-colors ${
-                        i <= activeStep ? "bg-emerald-50" : "bg-secondary"
-                      }`}>
-                        <step.icon className={`w-5 h-5 ${
-                          i <= activeStep ? "text-emerald-600" : "text-muted-foreground"
-                        }`} />
-                      </div>
-                      <h3 className="text-sm font-medium text-foreground mb-0.5">{step.label}</h3>
-                      <p className="text-xs text-muted-foreground">{step.desc}</p>
-                    </CardContent>
-                  </Card>
-                  
-                  {/* Step number */}
-                  <div className={`absolute -top-2 left-1/2 -translate-x-1/2 w-5 h-5 rounded-full flex items-center justify-center text-xs font-medium ${
-                    i <= activeStep ? "bg-emerald-500 text-white" : "bg-muted text-muted-foreground"
-                  }`}>
-                    {i + 1}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
+      {/* Pipeline Section replaced by Orbital Timeline */}
+      <section id="pipeline" className="min-h-screen py-20 px-6 relative flex items-center justify-center">
+        <RadialOrbitalTimeline timelineData={timelineData} />
       </section>
 
       {/* Features Bento Grid */}

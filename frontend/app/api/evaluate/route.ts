@@ -19,6 +19,62 @@ function buildEvaluateUrls(base: string): string[] {
 }
 
 /**
+ * GET /api/evaluate?repo_name=xxx
+ * Fetches saved evaluation results from backend.
+ * Returns scores as percentages (0-100).
+ */
+export async function GET(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const repoName = searchParams.get("repo_name");
+    
+    if (!repoName) {
+      return NextResponse.json(
+        { error: "repo_name query parameter is required" },
+        { status: 400 }
+      );
+    }
+
+    const base = normalizeBackendBase(BACKEND_URL);
+    const url = `${base}/evaluate/${encodeURIComponent(repoName)}`;
+
+    const backendRes = await fetch(url, {
+      method: "GET",
+      cache: "no-store",
+    });
+
+    const raw = await backendRes.text();
+    let data: any = null;
+    try {
+      data = raw ? JSON.parse(raw) : null;
+    } catch {
+      data = null;
+    }
+
+    if (!backendRes.ok) {
+      return NextResponse.json(
+        {
+          error:
+            data?.detail ||
+            data?.error ||
+            raw ||
+            `No evaluation results found (HTTP ${backendRes.status})`,
+        },
+        { status: backendRes.status }
+      );
+    }
+
+    return NextResponse.json(data ?? { success: false });
+  } catch (error: any) {
+    console.error("Evaluate GET proxy error:", error);
+    return NextResponse.json(
+      { error: error.message || "Failed to fetch evaluation results" },
+      { status: 502 }
+    );
+  }
+}
+
+/**
  * POST /api/evaluate
  * Proxies evaluation request to backend /evaluate endpoint.
  */

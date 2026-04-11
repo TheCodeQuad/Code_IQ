@@ -34,6 +34,8 @@ import {
   type StepStatus,
   type ComponentType,
 } from './pipeline-data'
+import { RepositoryToDAG, type LogEntry } from './RepositoryToDAG'
+import { AgentPipelineExecution } from './AgentPipelineExecution'
 
 // Status icon component
 function StatusIcon({ status, size = 'sm' }: { status: StepStatus; size?: 'sm' | 'md' | 'lg' }) {
@@ -897,6 +899,7 @@ function toComponentType(raw?: string): ComponentType {
 export function PipelineVisualization({ repoId, autoStart = false }: { repoId: string; autoStart?: boolean }) {
   const [pipelineState, setPipelineState] = useState<PipelineState>(createInitialPipelineState)
   const [isStarting, setIsStarting] = useState(false)
+  const [showNavigatorOverlay, setShowNavigatorOverlay] = useState(false)
   const [streamState, setStreamState] = useState<'connecting' | 'live' | 'disconnected' | 'error'>('connecting')
   const [repoMeta, setRepoMeta] = useState<{ name?: string; fileCount?: number }>({})
   const [expandedModules, setExpandedModules] = useState<Record<string, boolean>>({
@@ -908,30 +911,72 @@ export function PipelineVisualization({ repoId, autoStart = false }: { repoId: s
   const eventSourceRef = useRef<EventSource | null>(null)
   const autoStartTriggeredRef = useRef(false)
 
+  const resetPipelineViewState = useCallback(() => {
+    setPipelineState(createInitialPipelineState())
+    setSelectedComponent(null)
+  }, [])
+
   const toggleModule = (module: string) => {
     setExpandedModules((prev) => ({ ...prev, [module]: !prev[module] }))
   }
 
   const applyBackendEvent = useCallback((evt: BackendPipelineEvent) => {
     if (evt.component_id) {
-      setSelectedComponent((current) => current ?? evt.component_id ?? null)
+      setSelectedComponent(evt.component_id)
     }
 
     setPipelineState((prev) => {
       const next = JSON.parse(JSON.stringify(prev)) as PipelineState
+
+      if (evt.event_type === 'pipeline-completed') {
+        next.navigator.status = 'completed'
+        next.navigator.steps.forEach((s) => {
+          s.status = 'completed'
+          s.progress = 100
+        })
+
+        next.agentic.status = 'completed'
+        next.agentic.iterations.forEach((iteration) => {
+          iteration.status = 'completed'
+          iteration.steps.reader.status = 'completed'
+          iteration.steps.searcher.status = 'completed'
+          iteration.steps.writer.status = 'completed'
+          iteration.steps.verifier.status = 'completed'
+          iteration.steps.insertion.status = 'completed'
+          iteration.steps.reader.progress = 100
+          iteration.steps.searcher.progress = 100
+          iteration.steps.writer.progress = 100
+          iteration.steps.verifier.progress = 100
+          iteration.steps.insertion.progress = 100
+        })
+        next.agentic.completedComponents = next.agentic.iterations.length
+
+        next.finalization.status = 'completed'
+        next.finalization.steps.forEach((s) => {
+          s.status = 'completed'
+          s.progress = 100
+        })
+        return next
+      }
+
       const stepStatus = toStepStatus(evt.status)
       const progress = stepStatus === 'completed' ? 100 : Math.max(10, evt.progress_percent ?? 0)
 
-      if (evt.phase === 'navigator' && evt.step_id) {
+      if (evt.phase === 'navigator') {
         next.navigator.status = stepStatus === 'completed' && next.navigator.steps.every((s) => s.status === 'completed')
           ? 'completed'
           : 'running'
+        next.navigator.progress = Math.max(next.navigator.progress, evt.progress_percent ?? 0)
 
-        const step = next.navigator.steps.find((s) => s.id === evt.step_id)
+        const step = evt.step_id ? next.navigator.steps.find((s) => s.id === evt.step_id) : undefined
         if (step) {
           step.status = stepStatus
           step.progress = progress
           if (evt.message) step.logs = [...step.logs, evt.message]
+        } else if (evt.message) {
+          // Fallback: If no strict step map matches, push to the currently open step or the first one
+          const activeStep = next.navigator.steps.find((s) => s.status === 'running') || next.navigator.steps[0];
+          activeStep.logs = [...activeStep.logs, evt.message];
         }
 
         if (typeof evt.component_count === 'number') {
@@ -959,6 +1004,7 @@ export function PipelineVisualization({ repoId, autoStart = false }: { repoId: s
 
         if (next.navigator.steps.every((s) => s.status === 'completed')) {
           next.navigator.status = 'completed'
+          next.navigator.progress = 100
         }
       }
 
@@ -1002,6 +1048,9 @@ export function PipelineVisualization({ repoId, autoStart = false }: { repoId: s
         if (stepKey) {
           iteration.steps[stepKey].status = stepStatus
           iteration.steps[stepKey].progress = progress
+          if (stepStatus === 'running') {
+            iteration.currentStep = stepKey
+          }
           if (evt.message) {
             iteration.steps[stepKey].logs = [...iteration.steps[stepKey].logs, evt.message]
           }
@@ -1101,8 +1150,12 @@ export function PipelineVisualization({ repoId, autoStart = false }: { repoId: s
 
   const startPipeline = async () => {
     setIsStarting(true)
+    setShowNavigatorOverlay(true)
     try {
-      const res = await fetch(`/api/repos/${repoId}/generate`, { method: 'POST' })
+      resetPipelineViewState()
+      const res = await fetch(`/api/repos/${repoId}/generate`, {
+        method: 'POST',
+      })
       if (!res.ok) {
         throw new Error(`Failed to start pipeline (HTTP ${res.status})`)
       }
@@ -1113,6 +1166,19 @@ export function PipelineVisualization({ repoId, autoStart = false }: { repoId: s
       setIsStarting(false)
     }
   }
+
+  useEffect(() => {
+    // Repo change must always start from a clean UI state.
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close()
+      eventSourceRef.current = null
+    }
+    autoStartTriggeredRef.current = false
+    setShowNavigatorOverlay(false)
+    setRepoMeta({})
+    setStreamState('connecting')
+    resetPipelineViewState()
+  }, [repoId, resetPipelineViewState])
 
   useEffect(() => {
     async function bootstrap() {
@@ -1132,6 +1198,9 @@ export function PipelineVisualization({ repoId, autoStart = false }: { repoId: s
 
         if (statusRes.ok) {
           const status = (await statusRes.json()) as BackendPipelineEvent
+          if (status.status && !['pending', 'failed', 'completed'].includes(String(status.status))) {
+            setShowNavigatorOverlay(true)
+          }
           applyBackendEvent({
             phase: 'navigator',
             step_id: 'extract-components',
@@ -1203,85 +1272,40 @@ export function PipelineVisualization({ repoId, autoStart = false }: { repoId: s
     pipelineState.finalization.steps.filter((s) => s.status === 'completed').length
   const overallProgress = totalSteps > 0 ? Math.round((completedSteps / totalSteps) * 100) : 0
   const isPipelineCompleted = pipelineState.finalization.status === 'completed'
+  const navigatorDone =
+    pipelineState.navigator.status === 'completed' ||
+    pipelineState.agentic.status === 'running' ||
+    pipelineState.agentic.status === 'completed' ||
+    pipelineState.finalization.status === 'running' ||
+    pipelineState.finalization.status === 'completed'
+
+  const navigatorLogs: LogEntry[] = pipelineState.navigator.steps.flatMap((step) =>
+    step.logs.map((message) => ({
+      message,
+      type: step.status === 'completed' ? 'success' : step.status === 'running' ? 'process' : 'info',
+    }))
+  )
+  const completedNavigatorSteps = pipelineState.navigator.steps.filter((s) => s.status === 'completed').length
+  const navigatorProgress = pipelineState.navigator.progress > 0
+    ? pipelineState.navigator.progress
+    : Math.round((completedNavigatorSteps / Math.max(pipelineState.navigator.steps.length, 1)) * 100)
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
-      <div className="max-w-6xl mx-auto space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-  <div>
-    <h1 className="text-2xl font-bold text-gray-900">{repoMeta.name ?? 'Pipeline Execution'}</h1>
-    <p className="text-sm text-gray-500 mt-1">
-      Repo ID: {repoId}{typeof repoMeta.fileCount === 'number' ? ` • ${repoMeta.fileCount} files` : ''}
-    </p>
-  </div>
-          <div className="flex items-center gap-3">
-            <Badge variant="outline" className="border-gray-300 text-gray-600">
-              Stream: {streamState}
-            </Badge>
-            <Button onClick={connectEventStream} variant="outline" className="border-gray-300">
-              Reconnect Stream
-            </Button>
-            <Button onClick={startPipeline} className="bg-emerald-600 hover:bg-emerald-700 text-white" disabled={isStarting || streamState === 'live'}>
-              {isStarting ? (
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              ) : (
-                <Play className="w-4 h-4 mr-2" />
-              )}
-              Start Pipeline
-            </Button>
-          </div>
-        </div>
-
-        {/* Progress bar */}
-        <Card className="bg-white border-gray-200 p-4">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-medium text-gray-700">Overall Progress</span>
-            <span className="text-sm text-gray-600">{overallProgress}%</span>
-          </div>
-          <Progress value={overallProgress} className="h-2" />
-          {isPipelineCompleted && (
-            <div className="mt-3 flex items-center gap-2 text-emerald-600">
-              <CheckCircle2 className="w-5 h-5" />
-              <span className="font-medium">Pipeline completed successfully</span>
-            </div>
-          )}
-        </Card>
-
-        {/* Pipeline modules */}
-        <div className="space-y-4">
-          <NavigatorModuleCard
-            module={pipelineState.navigator}
-            detectedTotal={pipelineState.agentic.totalComponents}
-            isExpanded={expandedModules.navigator}
-            onToggle={() => toggleModule('navigator')}
-          />
-
-          <AgenticModuleCard
-            module={pipelineState.agentic}
-            isExpanded={expandedModules.agentic}
-            onToggle={() => toggleModule('agentic')}
-            selectedComponent={selectedComponent}
-            onSelectComponent={setSelectedComponent}
-          />
-
-          <FinalizationModuleCard
-            module={pipelineState.finalization}
-            isExpanded={expandedModules.finalization}
-            onToggle={() => toggleModule('finalization')}
-          />
-        </div>
-
-        {isPipelineCompleted && (
-          <div className="flex justify-end pt-2">
-            <Link href={`/dashboard/analysis/${repoId}/results`}>
-              <Button className="bg-emerald-600 hover:bg-emerald-700 text-white">
-                View Results
-              </Button>
-            </Link>
-          </div>
-        )}
-      </div>
+    <div className="h-full overflow-hidden bg-[#fef5fb]">
+      <RepositoryToDAG
+        isActive={showNavigatorOverlay}
+        logs={navigatorLogs}
+        progress={navigatorProgress}
+        isComplete={navigatorDone}
+        totalComponents={pipelineState.agentic.totalComponents}
+        onComplete={() => setShowNavigatorOverlay(false)}
+      />
+      {/* Agent Pipeline Execution – full-bleed view */}
+      <AgentPipelineExecution
+        pipelineState={pipelineState}
+        repoId={repoId}
+        selectedComponent={selectedComponent}
+      />
     </div>
   )
 }

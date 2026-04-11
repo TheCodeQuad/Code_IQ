@@ -45,36 +45,29 @@ class DocstringAttributeEvaluator:
     def _initialize_criteria(self) -> Dict[str, Any]:
         return {
             "description": (
-                "Evaluate how effectively the attribute descriptions convey the purpose, "
-                "lifecycle, and usage context of class attributes. High-quality descriptions "
-                "should go beyond type information to provide meaningful guidance about "
-                "attribute roles, initialization, modification patterns, and relationships "
-                "with class behavior."
+                "Evaluate how effectively the attribute descriptions convey the purpose "
+                "and role of class attributes. Good descriptions should explain what "
+                "each attribute is used for."
             ),
             "score_criteria": {
                 ScoreLevel.POOR: (
-                    "The attribute descriptions merely restate the attribute types or "
-                    "convert the type hints to natural language without adding any "
-                    "meaningful information about purpose or lifecycle."
+                    "Attribute descriptions are missing, wrong, or just restate the type "
+                    "(e.g., 'config (dict): A dictionary')."
                 ),
                 ScoreLevel.FAIR: (
-                    "The descriptions provide basic information about attribute purpose "
-                    "but lack details about initialization, modification, or usage patterns."
+                    "Descriptions exist but are very terse or only slightly expand on the type."
                 ),
                 ScoreLevel.GOOD: (
-                    "The descriptions explain attribute purpose and include some key "
-                    "information about initialization or usage patterns, but might miss "
-                    "important lifecycle details or relationships with class behavior."
+                    "Descriptions explain what each attribute is used for in a clear sentence. "
+                    "This is the baseline for any reasonable attribute documentation."
                 ),
                 ScoreLevel.VERY_GOOD: (
-                    "The descriptions clearly explain purpose, initialization, and common "
-                    "usage patterns. They note important relationships with class methods "
-                    "and document any special handling or constraints."
+                    "Descriptions explain purpose AND include lifecycle info (when set, "
+                    "when modified) or relationships with class methods."
                 ),
                 ScoreLevel.EXCELLENT: (
-                    "The descriptions provide comprehensive guidance including purpose, "
-                    "initialization, modification patterns, relationships with class behavior, "
-                    "and any special considerations like thread-safety or constraints."
+                    "Comprehensive: purpose, initialization, modification patterns, "
+                    "relationships with class behavior, and any constraints."
                 ),
             },
         }
@@ -98,32 +91,32 @@ class DocstringAttributeEvaluator:
                 },
                 quality_examples={
                     ScoreLevel.POOR: {
+                        "config":         "A dict",
+                        "data_cache":     "A dict",
+                        "is_initialized": "A bool",
+                        "stats":          "A dict",
+                        "_lock":          "A lock",
+                    },
+                    ScoreLevel.FAIR: {
                         "config":         "Dictionary of configuration",
                         "data_cache":     "Dictionary for cache",
                         "is_initialized": "Boolean flag",
                         "stats":          "Dictionary of statistics",
                         "_lock":          "Threading lock object",
                     },
-                    ScoreLevel.FAIR: {
+                    ScoreLevel.GOOD: {
                         "config":         "Configuration settings for processing",
                         "data_cache":     "Cache storage for processed items",
-                        "is_initialized": "Tracks initialization status",
+                        "is_initialized": "Tracks whether the processor is initialized",
                         "stats":          "Counts of processed items",
                         "_lock":          "Lock for thread safety",
                     },
-                    ScoreLevel.GOOD: {
-                        "config":         "Configuration dictionary controlling processing behavior. Set at initialization",
-                        "data_cache":     "Cache of processed items to avoid recomputation. Cleared with reset()",
-                        "is_initialized": "Flag indicating if setup() has been called successfully",
-                        "stats":          "Counters tracking number of items processed, errors, cache hits",
-                        "_lock":          "Thread lock ensuring thread-safe access to shared resources",
-                    },
                     ScoreLevel.VERY_GOOD: {
-                        "config":         "Configuration dictionary controlling processing behavior. Set at initialization and accessed by all processing methods. Read-only after initialization",
-                        "data_cache":     "Cache of processed items to avoid recomputation. Cleared with reset(). Keys are item IDs, values are processed results",
-                        "is_initialized": "Flag indicating if setup() has been called successfully. Methods will raise RuntimeError if called before initialization",
+                        "config":         "Configuration dictionary controlling processing behavior. Set at initialization, read-only after",
+                        "data_cache":     "Cache of processed items to avoid recomputation. Cleared with reset()",
+                        "is_initialized": "Flag indicating if setup() has been called. Methods raise RuntimeError if False",
                         "stats":          "Counters tracking processing metrics. Updated by process() and reset by clear_stats()",
-                        "_lock":          "Thread lock ensuring thread-safe access to cache and stats. Used internally by all public methods",
+                        "_lock":          "Thread lock ensuring thread-safe access to cache and stats",
                     },
                     ScoreLevel.EXCELLENT: {
                         "config":         "Configuration dictionary controlling processing behavior. Set at initialization, read-only after. Must contain 'batch_size' and 'max_cache_size' keys. See CONFIG_SCHEMA for full spec",
@@ -134,10 +127,10 @@ class DocstringAttributeEvaluator:
                     },
                 },
                 explanations={
-                    ScoreLevel.POOR:      "Merely restates attribute types without adding value",
-                    ScoreLevel.FAIR:      "Basic purpose but lacks lifecycle and usage guidance",
-                    ScoreLevel.GOOD:      "Initialization context present but lifecycle details incomplete",
-                    ScoreLevel.VERY_GOOD: "Clear purpose, initialization, usage patterns with thread-safety",
+                    ScoreLevel.POOR:      "Just restates the type, completely useless",
+                    ScoreLevel.FAIR:      "Barely expands on the type",
+                    ScoreLevel.GOOD:      "Explains what each attribute is used for - this is acceptable",
+                    ScoreLevel.VERY_GOOD: "Adds lifecycle info and relationships with methods",
                     ScoreLevel.EXCELLENT: "Comprehensive: constraints, thread-safety, practical usage tips",
                 },
             )

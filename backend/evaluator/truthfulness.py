@@ -128,7 +128,7 @@ class TruthfulnessEvaluator:
             self.use_llm = False
             return
 
-        # Always use the local Qwen model for truthfulness extraction.
+        # Always use the local Qwen2.5-Coder 1.5B model for truthfulness extraction.
         model_path = project_root / "models" / "qwen2.5-coder-7b-instruct-q4_k_m.gguf"
 
         if not model_path.exists():

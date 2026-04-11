@@ -1,8 +1,3 @@
-"""
-Models for GitHub integration.
-
-Tracks GitHub OAuth tokens, App installations, and related metadata.
-"""
 
 from datetime import datetime
 from typing import Optional, Dict, Any

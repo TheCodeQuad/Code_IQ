@@ -28,7 +28,7 @@ logger = get_logger(__name__)
 StatusCallback = Optional[Callable[[str, str, int, str, Optional[Dict[str, Any]]], None]]
 
 
-def run_pipeline(repo_path: str, status_callback: StatusCallback = None):
+def run_pipeline(repo_path: str, status_callback: StatusCallback = None, demo_mode: bool = False):
     """
     Run the documentation pipeline for a given repository path.
     Returns a dict with components, graph, orders, and documentation.
@@ -37,6 +37,8 @@ def run_pipeline(repo_path: str, status_callback: StatusCallback = None):
         repo_path: Path to the cloned repository.
         status_callback: Optional callback invoked after each major stage.
             Signature: callback(agent_name, status, progress_percent, message)
+        demo_mode: When True, run only component extraction + dependency graph
+            generation and skip agentic documentation stages.
     """
     def _cb(
         agent: str,
@@ -93,12 +95,17 @@ def run_pipeline(repo_path: str, status_callback: StatusCallback = None):
     logger.info(f"Populated module_globals metadata for components")
     logger.info(f"Extracted {len(components)} components")
 
-    _cb("navigator", "completed", 10, f"Extracted {len(components)} components", {
+    navigator_details = {
         "phase": "navigator",
         "step_id": "generate-metadata",
         "component_count": len(components),
-        "components": component_summaries,
-    })
+    }
+    # Demo mode skips agentic execution, so avoid emitting component lists
+    # that would create per-component agent iterations in the pipeline UI.
+    if not demo_mode:
+        navigator_details["components"] = component_summaries
+
+    _cb("navigator", "completed", 10, f"Extracted {len(components)} components", navigator_details)
     # Explicit terminal output so the component count is always visible
     # even if logger formatting/filtering changes.
     print(f"[Navigator] Total components extracted: {len(components)}")
@@ -211,6 +218,59 @@ def run_pipeline(repo_path: str, status_callback: StatusCallback = None):
     project_dag = set(components.keys())
     logger.info(f"Created project DAG with {len(project_dag)} components")
     
+    if demo_mode:
+        logger.info("Demo mode enabled: skipping Reader/Searcher/Writer/Verifier stages")
+
+        _cb("evaluator", "in_progress", 92, "Demo mode: skipping docstring generation", {
+            "phase": "finalization",
+            "step_id": "save-outputs",
+            "demo_mode": True,
+        })
+        _cb("evaluator", "completed", 95, "Demo mode outputs ready", {
+            "phase": "finalization",
+            "step_id": "save-outputs",
+            "demo_mode": True,
+        })
+
+        _cb("evaluator", "in_progress", 96, "Generating pipeline summary…", {
+            "phase": "finalization",
+            "step_id": "generate-summary",
+            "demo_mode": True,
+        })
+        _extract_module_globals(components)
+        logger.info("Populated module_globals metadata for components")
+        _cb("evaluator", "completed", 97, "Pipeline summary generated", {
+            "phase": "finalization",
+            "step_id": "generate-summary",
+            "demo_mode": True,
+        })
+        _cb("evaluator", "completed", 100, "Demo analysis complete", {
+            "phase": "finalization",
+            "step_id": "pipeline-completed",
+            "demo_mode": True,
+        })
+
+        graph_edge_count = sum(len(v) for v in graph.values())
+        return {
+            "components": components,
+            "graph": graph,
+            "dag": graph,
+            "topological_order": topo_order,
+            "dfs_order": dfs_order,
+            "documentation": [],
+            "statistics": {
+                "total_processed": 0,
+                "successful": 0,
+                "failed": 0,
+                "success_rate": 0,
+                "component_count": len(components),
+                "graph_node_count": len(graph),
+                "graph_edge_count": graph_edge_count,
+                "demo_mode": True,
+            },
+            "demo_mode": True,
+        }
+
     # Stage 4: Initialize Orchestrator with project DAG
     logger.info("Stage 4: Initializing orchestrator...")
     orchestrator = Orchestrator(project_dag=project_dag)
@@ -299,6 +359,7 @@ def run_pipeline(repo_path: str, status_callback: StatusCallback = None):
     return {
         "components": components,
         "graph": graph,
+        "dag": graph,
         "topological_order": topo_order,
         "dfs_order": dfs_order,
         "documentation": docs,
@@ -306,8 +367,10 @@ def run_pipeline(repo_path: str, status_callback: StatusCallback = None):
             'total_processed': orchestrator.total_components_processed,
             'successful': orchestrator.successful_docs,
             'failed': orchestrator.failed_docs,
-            'success_rate': (orchestrator.successful_docs / max(orchestrator.total_components_processed, 1)) * 100
-        }
+            'success_rate': (orchestrator.successful_docs / max(orchestrator.total_components_processed, 1)) * 100,
+            'demo_mode': False,
+        },
+        "demo_mode": False,
     }
 
 def _extract_module_globals(components: Dict[str, CodeComponent]) -> None:

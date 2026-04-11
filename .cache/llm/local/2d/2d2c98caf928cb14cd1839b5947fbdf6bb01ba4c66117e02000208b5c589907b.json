@@ -1,0 +1,1 @@
+{"created_at": 1775853320.0467005, "content": "<DOCSTRING>\nPrints the activity of an adult.\n\nArgs:\n    activity (str): The activity to be printed.\n</DOCSTRING>", "model": "qwen2.5-coder-7b-instruct-q4_k_m.gguf", "usage": {"prompt_tokens": 2549, "completion_tokens": 29, "total_tokens": 2578}, "metadata": {"local": true, "memory_based": true}}

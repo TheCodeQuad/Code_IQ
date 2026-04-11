@@ -16,7 +16,7 @@ system:
     
     # Continuous docstring insertion settings
     insert_docstrings: true           # Insert docstrings into source files during pipeline
-    replace_existing_docstrings: false  # Replace existing docstrings if already present
+    replace_existing_docstrings: true  # Replace existing docstrings if already present
 
 modules:
   navigator:

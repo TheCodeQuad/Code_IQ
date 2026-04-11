@@ -202,6 +202,11 @@ Examples:
         help="Show per-file extraction details"
     )
     parser.add_argument(
+        "--verbose-completeness",
+        action="store_true",
+        help="Show detailed completeness scoring logs (required sections, docstring content, score calculation)"
+    )
+    parser.add_argument(
         "--save",
         type=str,
         help="Save results to JSON file for truthfulness evaluation"
@@ -248,7 +253,7 @@ Examples:
     print(f"  Running completeness evaluation...")
     print(f"{'='*60}\n")
 
-    results = run_multilang_evaluation(all_components)
+    results = run_multilang_evaluation(all_components, verbose=args.verbose_completeness)
     print_multilang_results(results)
     
     # Save results for truthfulness evaluation if requested

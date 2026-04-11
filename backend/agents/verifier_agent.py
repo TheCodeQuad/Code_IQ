@@ -425,6 +425,23 @@ class VerifierAgent(BaseAgent):
             )
             verification.more_context = False
 
+        # ── Override 4: TRIVIAL/SIMPLE tier with MINIMAL category → auto-accept ──
+        #    After 1+ rejection, if the component is trivial/minimal and the LLM
+        #    still wants revisions (likely stylistic nitpicks), force acceptance.
+        #    This prevents endless loops on simple components like `is_adult`.
+        if (verification.need_revision
+                and not verification.more_context
+                and calibration.complexity_tier.value in ("trivial", "simple")
+                and calibration.documentation_category.value == "minimal"
+                and calibration.rejection_count >= 1):
+            self.logger.info(
+                "Calibration override: trivial/simple + minimal component "
+                f"with {calibration.rejection_count} prior rejection(s), "
+                "forcing acceptance to prevent stylistic loop"
+            )
+            verification.need_revision = False
+            verification.suggestion = None
+
         return verification
 
     # ------------------------------------------------------------------

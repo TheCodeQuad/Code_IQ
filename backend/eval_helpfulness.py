@@ -2,10 +2,11 @@
 #
 # Helpfulness evaluation for docstrings across all languages.
 # Uses your existing LLM client (RemoteAPIClient / LocalLlamaClient)
-# to score docstring quality on 3 aspects:
+# to score docstring quality on 4 aspects:
 #   - Summary quality (1-5)
 #   - Description quality (1-5)
 #   - Parameter description quality (1-5)
+#   - Attributes quality (1-5) - for classes only
 #
 # Works directly with your all_components dict from extractors.
 #
@@ -22,6 +23,7 @@
 import os
 import sys
 import json
+import re
 import argparse
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -34,6 +36,7 @@ from backend.utils.llm_client import get_llm_client, LLMRequest
 from backend.evaluator.helpfulness_summary import DocstringSummaryEvaluator
 from backend.evaluator.helpfulness_description import DocstringDescriptionEvaluator
 from backend.evaluator.helpfulness_parameters import DocstringParametersEvaluator
+from backend.evaluator.helpfulness_attributes import DocstringAttributeEvaluator, extract_attribute_descriptions
 
 
 # ================================================================
@@ -47,7 +50,7 @@ class HelpfulnessResult:
     component_name: str
     language:       str
     comp_type:      str
-    aspect:         str    # "summary" | "description" | "parameters"
+    aspect:         str    # "summary" | "description" | "parameters" | "attributes"
     score:          int    # 1-5
     suggestion:     str
 
@@ -87,6 +90,7 @@ def run_helpfulness_evaluation(
         "summary":     DocstringSummaryEvaluator(),
         "description": DocstringDescriptionEvaluator(),
         "parameters":  DocstringParametersEvaluator(),
+        "attributes":  DocstringAttributeEvaluator(),
     }
 
     results = {
@@ -140,23 +144,71 @@ def run_helpfulness_evaluation(
         else:
             eval_type = "function"
 
+        print(f"\n{'='*70}")
         print(f"[{idx+1}/{total}] {language} {comp_type}: {name}")
+        print(f"{'='*70}")
 
-        # Decide which aspects to evaluate
+        # Show docstring content (truncated)
+        docstring_preview = docstring[:300].replace('\n', '\n    | ') if docstring else "(empty)"
+        print(f"  [DOCSTRING PREVIEW]:")
+        print(f"    | {docstring_preview}{'...' if len(docstring) > 300 else ''}")
+
+        # Decide which aspects to evaluate based on what's present in the docstring
         aspects_to_run = ["summary"]
+        print(f"\n  [SECTION DETECTION]:")
+        print(f"    summary      → ✓ ALWAYS CHECKED")
 
         desc_eval = DocstringDescriptionEvaluator()
-        if desc_eval._extract_description(docstring):
+        desc_content = desc_eval._extract_description(docstring)
+        if desc_content:
             aspects_to_run.append("description")
+            print(f"    description  → ✓ FOUND ({len(desc_content)} chars)")
+        else:
+            print(f"    description  → ✗ NOT FOUND")
 
         if parameters and len(parameters) > 0:
             aspects_to_run.append("parameters")
+            param_names = [p.get('name', str(p)) if isinstance(p, dict) else str(p) for p in parameters[:5]]
+            print(f"    parameters   → ✓ FOUND ({len(parameters)} params: {', '.join(param_names)}{'...' if len(parameters) > 5 else ''})")
+        else:
+            print(f"    parameters   → ✗ NOT FOUND (no parameters)")
+
+        # Check for attributes section (mainly for classes)
+        attr_descriptions = extract_attribute_descriptions(docstring)
+        if attr_descriptions:
+            aspects_to_run.append("attributes")
+            attr_names = list(attr_descriptions.keys())[:5]
+            print(f"    attributes   → ✓ FOUND ({len(attr_descriptions)} attrs: {', '.join(attr_names)}{'...' if len(attr_descriptions) > 5 else ''})")
+        else:
+            print(f"    attributes   → ✗ NOT FOUND")
+
+        print(f"\n  [HELPFULNESS SCORES]:")
 
         # Evaluate each aspect
         for aspect in aspects_to_run:
             evaluator = evaluators[aspect]
             try:
-                prompt = evaluator.get_evaluation_prompt(source_code, docstring, eval_type)
+                # Attributes evaluator has a different signature
+                if aspect == "attributes":
+                    # Extract class signature from source code
+                    class_sig_match = re.search(r'^(class\s+\w+[^:]*:)', source_code, re.MULTILINE)
+                    class_signature = class_sig_match.group(1) if class_sig_match else f"class {name}:"
+                    
+                    # Extract __init__ method from source code
+                    init_match = re.search(
+                        r'(def\s+__init__\s*\([^)]*\).*?)(?=\n\s*def\s|\Z)',
+                        source_code,
+                        re.DOTALL
+                    )
+                    init_function = init_match.group(1) if init_match else ""
+                    
+                    prompt = evaluator.get_evaluation_prompt(
+                        class_signature,
+                        init_function,
+                        attr_descriptions
+                    )
+                else:
+                    prompt = evaluator.get_evaluation_prompt(source_code, docstring, eval_type)
 
                 if prompt.startswith("The docstring does not have"):
                     continue
@@ -185,7 +237,7 @@ def run_helpfulness_evaluation(
 
                 score, suggestion = evaluator.parse_llm_response(response.content)
 
-                print(f"   {aspect}: {score}/5")
+                print(f"    {aspect:12} → {score}/5")
 
                 all_results.append(HelpfulnessResult(
                     component_id=comp_id,

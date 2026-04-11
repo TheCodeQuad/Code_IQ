@@ -1,0 +1,1 @@
+{"created_at": 1775853325.9284642, "content": "<DOCSTRING>\nManages a list of users.\n\nAttributes:\n    users (list): List of user objects.\n</DOCSTRING>", "model": "qwen2.5-coder-7b-instruct-q4_k_m.gguf", "usage": {"prompt_tokens": 2451, "completion_tokens": 27, "total_tokens": 2478}, "metadata": {"local": true, "memory_based": true}}
