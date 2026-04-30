@@ -1,1 +1,0 @@
-{"created_at": 1777538071.2081494, "content": "<DOCSTRING>\nReturns the message as a string.\n</DOCSTRING>", "model": "qwen2.5-7b-instruct-q3_k_m.gguf", "usage": {"prompt_tokens": 2539, "completion_tokens": 15, "total_tokens": 2554}, "metadata": {"local": true, "memory_based": true}}

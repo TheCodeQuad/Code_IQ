@@ -1,1 +1,0 @@
-{"created_at": 1777540922.4247732, "content": "<DOCSTRING>\nTests the wind degree to direction conversion.\n\nArgs:\n    None\n\nReturns:\n    None\n\nRaises:\n    None\n</DOCSTRING>", "model": "qwen2.5-7b-instruct-q3_k_m.gguf", "usage": {"prompt_tokens": 2616, "completion_tokens": 31, "total_tokens": 2647}, "metadata": {"local": true, "memory_based": true}}

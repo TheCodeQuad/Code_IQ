@@ -1,1 +1,0 @@
-{"created_at": 1777537154.8338459, "content": "<DOCSTRING>\nFetches user data from the API.\n\nArgs:\n    None\n\nReturns:\n    {Promise<string>} The user data string.\n</DOCSTRING>", "model": "qwen2.5-7b-instruct-q3_k_m.gguf", "usage": {"prompt_tokens": 2441, "completion_tokens": 33, "total_tokens": 2474}, "metadata": {"local": true, "memory_based": true}}

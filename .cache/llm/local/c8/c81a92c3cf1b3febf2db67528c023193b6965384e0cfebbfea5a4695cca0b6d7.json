@@ -1,1 +1,0 @@
-{"created_at": 1777541054.7422853, "content": "<DOCSTRING>\nChecks if the ship is destroyed.\n\nReturns:\n    bool: True if the ship is destroyed, False otherwise.\n</DOCSTRING>", "model": "qwen2.5-7b-instruct-q3_k_m.gguf", "usage": {"prompt_tokens": 2551, "completion_tokens": 30, "total_tokens": 2581}, "metadata": {"local": true, "memory_based": true}}

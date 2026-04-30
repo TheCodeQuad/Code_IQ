@@ -1,1 +1,0 @@
-{"created_at": 1777541036.837786, "content": "<DOCSTRING>\nGets the winner of the game.\n\nReturns:\n    Player | None: The winning player or None if there is no winner yet.\n</DOCSTRING>", "model": "qwen2.5-7b-instruct-q3_k_m.gguf", "usage": {"prompt_tokens": 2589, "completion_tokens": 34, "total_tokens": 2623}, "metadata": {"local": true, "memory_based": true}}

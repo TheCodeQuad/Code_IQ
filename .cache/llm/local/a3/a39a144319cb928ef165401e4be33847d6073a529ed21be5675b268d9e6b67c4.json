@@ -1,1 +1,0 @@
-{"created_at": 1777540989.5798836, "content": "<DOCSTRING>\nReturns True if all player's ships are destroyed, otherwise False.\n</DOCSTRING>", "model": "qwen2.5-7b-instruct-q3_k_m.gguf", "usage": {"prompt_tokens": 2539, "completion_tokens": 21, "total_tokens": 2560}, "metadata": {"local": true, "memory_based": true}}

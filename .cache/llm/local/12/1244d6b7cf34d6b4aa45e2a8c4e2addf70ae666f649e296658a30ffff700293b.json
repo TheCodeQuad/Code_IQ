@@ -1,1 +1,0 @@
-{"created_at": 1777540979.6214666, "content": "<DOCSTRING>\nReturns the number of ships on the board.\n\nArgs:\n    None\n\nReturns:\n    int: The number of ships currently on the board.\n</DOCSTRING>", "model": "qwen2.5-7b-instruct-q3_k_m.gguf", "usage": {"prompt_tokens": 2522, "completion_tokens": 36, "total_tokens": 2558}, "metadata": {"local": true, "memory_based": true}}

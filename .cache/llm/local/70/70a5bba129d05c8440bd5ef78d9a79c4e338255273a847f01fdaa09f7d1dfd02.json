@@ -1,1 +1,0 @@
-{"created_at": 1777541034.634308, "content": "<DOCSTRING>\nGets the previous player.\n\nReturns:\n    Player | None: The previous player or None if not applicable.\n</DOCSTRING>", "model": "qwen2.5-7b-instruct-q3_k_m.gguf", "usage": {"prompt_tokens": 2551, "completion_tokens": 29, "total_tokens": 2580}, "metadata": {"local": true, "memory_based": true}}

@@ -1,1 +1,0 @@
-{"created_at": 1777538164.9985046, "content": "<DOCSTRING>\nReturns a dictionary with an id value.\n</DOCSTRING>", "model": "qwen2.5-7b-instruct-q3_k_m.gguf", "usage": {"prompt_tokens": 2531, "completion_tokens": 16, "total_tokens": 2547}, "metadata": {"local": true, "memory_based": true}}

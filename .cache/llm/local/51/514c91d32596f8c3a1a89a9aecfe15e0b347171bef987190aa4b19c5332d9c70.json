@@ -1,1 +1,0 @@
-{"created_at": 1777537418.7894733, "content": "<DOCSTRING>\nReturns: bool - Indicates whether the age is 18 or above.\n</DOCSTRING>", "model": "qwen2.5-7b-instruct-q3_k_m.gguf", "usage": {"prompt_tokens": 2543, "completion_tokens": 23, "total_tokens": 2566}, "metadata": {"local": true, "memory_based": true}}
