@@ -1,0 +1,1 @@
+{"created_at": 1777541208.224967, "content": "<DOCSTRING>\nSummary: Defines a command group for list operations.\n\nArgs: None\n\nReturns: None\n</DOCSTRING>", "model": "qwen2.5-7b-instruct-q3_k_m.gguf", "usage": {"prompt_tokens": 2506, "completion_tokens": 26, "total_tokens": 2532}, "metadata": {"local": true, "memory_based": true}}

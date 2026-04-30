@@ -135,7 +135,7 @@ export default function CytoscapeGraphClient({
   const [isFullscreen, setIsFullscreen] = useState(false)
 
   const isCyAlive = useCallback(() => {
-    return Boolean(cyRef.current) && !cyRef.current.destroyed()
+    return Boolean(cyRef.current) && typeof cyRef.current.destroyed === 'function' && !cyRef.current.destroyed()
   }, [])
 
   // Convert our graph data to Cytoscape elements
@@ -222,15 +222,27 @@ export default function CytoscapeGraphClient({
             }
 
         // Destroy existing instance
-        if (cyRef.current && !cyRef.current.destroyed()) {
-          cyRef.current.destroy()
+        if (cyRef.current && typeof cyRef.current.destroyed === 'function' && !cyRef.current.destroyed()) {
+          try {
+            cyRef.current.destroy()
+          } catch (e) {
+            console.warn("Error destroying Cytoscape instance:", e)
+          }
           cyRef.current = null
+        }
+
+        // Ensure container is valid before creating instance
+        if (!containerRef.current) {
+          setError("Container reference not found")
+          return
         }
 
         // Create new Cytoscape instance
         const cy = cytoscape({
           container: containerRef.current,
           elements: elements,
+          wheelSensitivity: 0.1,
+          pixelRatio: window.devicePixelRatio,
           style: [
             // Node styling
             {
@@ -394,7 +406,6 @@ export default function CytoscapeGraphClient({
           layout: layoutConfig as any,
           minZoom: 0.1,
           maxZoom: 3,
-          wheelSensitivity: 0.3,
           boxSelectionEnabled: true,
           selectionType: "single",
         })
@@ -408,23 +419,31 @@ export default function CytoscapeGraphClient({
 
         // Event handlers
         cy.on("tap", "node", (evt: any) => {
-          if (!isCyAlive()) return
-          const node = evt.target
-          if (onNodeClick) {
-            onNodeClick(node.id(), node.data())
+          if (!isCyAlive() || !cyRef.current) return
+          try {
+            const node = evt.target
+            if (onNodeClick) {
+              onNodeClick(node.id(), node.data())
+            }
+          } catch (e) {
+            console.warn("Error in tap handler:", e)
           }
         })
 
         // Double-click to zoom to node
         cy.on("dbltap", "node", (evt: any) => {
-          if (!isCyAlive()) return
-          const node = evt.target
-          cy.animate({
-            center: { eles: node },
-            zoom: 1.5,
-          }, {
-            duration: 300,
-          })
+          if (!isCyAlive() || !cyRef.current) return
+          try {
+            const node = evt.target
+            cy.animate({
+              center: { eles: node },
+              zoom: 1.5,
+            }, {
+              duration: 300,
+            })
+          } catch (e) {
+            console.warn("Error in dbltap handler:", e)
+          }
         })
 
         // Hover effect
@@ -459,8 +478,12 @@ export default function CytoscapeGraphClient({
       if (containerRef.current) {
         containerRef.current.style.cursor = "default"
       }
-      if (cyRef.current && !cyRef.current.destroyed()) {
-        cyRef.current.destroy()
+      if (cyRef.current && typeof cyRef.current.destroyed === 'function' && !cyRef.current.destroyed()) {
+        try {
+          cyRef.current.destroy()
+        } catch (e) {
+          console.warn("Error destroying Cytoscape instance in cleanup:", e)
+        }
       }
       cyRef.current = null
     }
@@ -468,14 +491,22 @@ export default function CytoscapeGraphClient({
 
   // Control functions
   const zoomIn = useCallback(() => {
-    if (isCyAlive()) {
-      cyRef.current.zoom(cyRef.current.zoom() * 1.2)
+    if (isCyAlive() && cyRef.current) {
+      try {
+        cyRef.current.zoom(cyRef.current.zoom() * 1.2)
+      } catch (e) {
+        console.warn("Error zooming in:", e)
+      }
     }
   }, [isCyAlive])
 
   const zoomOut = useCallback(() => {
-    if (isCyAlive()) {
-      cyRef.current.zoom(cyRef.current.zoom() / 1.2)
+    if (isCyAlive() && cyRef.current) {
+      try {
+        cyRef.current.zoom(cyRef.current.zoom() / 1.2)
+      } catch (e) {
+        console.warn("Error zooming out:", e)
+      }
     }
   }, [isCyAlive])
 
@@ -497,12 +528,16 @@ export default function CytoscapeGraphClient({
   useEffect(() => {
     const onFullscreenChange = () => {
       setIsFullscreen(Boolean(document.fullscreenElement))
-      if (isCyAlive()) {
+      if (isCyAlive() && cyRef.current) {
         // Refit graph after fullscreen transition.
         setTimeout(() => {
-          if (isCyAlive()) {
-            cyRef.current.resize()
-            cyRef.current.fit(undefined, 50)
+          if (isCyAlive() && cyRef.current) {
+            try {
+              cyRef.current.resize()
+              cyRef.current.fit(undefined, 50)
+            } catch (e) {
+              console.warn("Error resizing Cytoscape:", e)
+            }
           }
         }, 120)
       }
@@ -513,17 +548,22 @@ export default function CytoscapeGraphClient({
   }, [isCyAlive])
 
   const exportPng = useCallback(() => {
-    if (isCyAlive()) {
-      const png = cyRef.current.png({
-        output: "blob",
-        bg: "#ffffff",
-        full: true,
-        scale: 2,
-      })
-      const link = document.createElement("a")
-      link.href = URL.createObjectURL(png as Blob)
-      link.download = `${graphData.name || "graph"}.png`
-      link.click()
+    if (isCyAlive() && cyRef.current) {
+      try {
+        const png = cyRef.current.png({
+          output: "blob",
+          bg: "#ffffff",
+          full: true,
+          scale: 2,
+        })
+        const link = document.createElement("a")
+        link.href = URL.createObjectURL(png as Blob)
+        link.download = `${graphData.name || "graph"}.png`
+        link.click()
+      } catch (e) {
+        console.error("Error exporting PNG:", e)
+        setError("Failed to export PNG. See console for details.")
+      }
     }
   }, [graphData?.name, isCyAlive])
 
@@ -624,7 +664,7 @@ export default function CytoscapeGraphClient({
 
       {/* Stats overlay */}
       {isReady && !error && (
-        <div className="absolute top-3 left-3 bg-white/90 rounded-lg shadow-md px-2 py-1 text-xs text-stone-600">
+        <div className="absolute bottom-3 right-3 bg-white/90 rounded-lg shadow-md px-3 py-2 text-xs text-stone-600 pointer-events-none">
           <span className="font-medium">{graphData.node_count}</span> nodes · 
           <span className="font-medium ml-1">{graphData.edge_count}</span> edges
         </div>

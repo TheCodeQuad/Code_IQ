@@ -1,0 +1,1 @@
+{"created_at": 1777541194.603877, "content": "<DOCSTRING>\ndef cli(): Performs command-line interface interaction and handling.\n</DOCSTRING>", "model": "qwen2.5-7b-instruct-q3_k_m.gguf", "usage": {"prompt_tokens": 2523, "completion_tokens": 19, "total_tokens": 2542}, "metadata": {"local": true, "memory_based": true}}

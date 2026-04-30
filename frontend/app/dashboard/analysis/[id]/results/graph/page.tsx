@@ -194,9 +194,18 @@ export default function GraphsPage() {
           // Convert Windows backslashes to forward slashes for API
           if (path && typeof path === 'string') {
             path = path.replace(/\\/g, '/')
-            console.log("[Graph] Resolved repo path from analysis:", path)
-            setRepoPath(path)
-            return
+            
+            // Validate path: reject system paths like backend, frontend, node_modules
+            const invalidPatterns = ['/backend', '/frontend', '/node_modules', 'Code_IQ/backend', 'Code_IQ/frontend']
+            const isInvalidPath = invalidPatterns.some(pattern => path.toLowerCase().includes(pattern.toLowerCase()))
+            
+            if (!isInvalidPath) {
+              console.log("[Graph] Resolved repo path from analysis:", path)
+              setRepoPath(path)
+              return
+            } else {
+              console.warn("[Graph] Resolved path appears to be a system folder, ignoring:", path)
+            }
           }
         } else {
           console.log("[Graph] Analysis endpoint not available or returned error:", analysisResponse.status)
@@ -211,22 +220,30 @@ export default function GraphsPage() {
             let path = data.local_path || data.repo_local_path || data.repo_path || `./repos/${data.repo_name}`
             if (typeof path === 'string') {
               path = path.replace(/\\/g, '/')
-              console.log("[Graph] Resolved repo path from repos endpoint:", path)
-              setRepoPath(path)
-              return
+              
+              // Validate path
+              const invalidPatterns = ['/backend', '/frontend', '/node_modules', 'Code_IQ/backend', 'Code_IQ/frontend']
+              const isInvalidPath = invalidPatterns.some(pattern => path.toLowerCase().includes(pattern.toLowerCase()))
+              
+              if (!isInvalidPath) {
+                console.log("[Graph] Resolved repo path from repos endpoint:", path)
+                setRepoPath(path)
+                return
+              }
             }
           }
         } catch (err) {
           console.error("Error fetching repo by ID:", err)
         }
 
-        // Final fallback: for local development
-        console.log("[Graph] Using backend path as fallback")
-        setRepoPath("c:/CODEIQ/Code_IQ/backend")
+        // No valid path found - don't set a fallback, leave it null so user can manually enter
+        console.log("[Graph] Could not resolve repository path from analysis metadata")
+        setRepoPath(null)
+        setLastError("Repository path not found. Please manually enter the path or ensure the analysis was created with a valid repository.")
       } catch (err) {
         console.error("Error resolving repo path:", err)
-        // Always set a fallback path so the UI can still load
-        setRepoPath("c:/CODEIQ/Code_IQ/backend")
+        setRepoPath(null)
+        setLastError("Error resolving repository path. Please manually enter it below.")
       }
     }
 
@@ -243,6 +260,13 @@ export default function GraphsPage() {
     const parseAndFetchComponents = async () => {
       console.log("[Graph] Starting parse and fetch with repoPath:", repoPath)
       setComponentsLoading(true)
+
+      // Validate repo path before attempting to parse
+      if (!repoPath || repoPath.trim() === "") {
+        setLastError("Repository path is not set. Please manually enter a valid repository path in the sidebar.")
+        setComponentsLoading(false)
+        return
+      }
 
       // Avoid stale selections/IDs after backend restart or repo change
       setComponents([])
@@ -277,7 +301,13 @@ export default function GraphsPage() {
           const errText = await parseResponse.text()
           parseError = `Parse failed: ${parseResponse.status} - ${errText}`
           console.error("[Graph]", parseError)
-          setLastError(`Repository parse error: ${errText.substring(0, 200)}`)
+          
+          // Provide helpful error message for invalid paths
+          if (parseResponse.status === 400 && errText.includes("Invalid repository path")) {
+            setLastError(`❌ Invalid repository path: "${repoPath}"\n\nMake sure to:\n• Enter the root directory of a code repository (not backend/frontend folders)\n• Use a path that exists on the server\n• Verify the path contains source code files`)
+          } else {
+            setLastError(`Repository parse error: ${errText.substring(0, 200)}`)
+          }
         }
 
         // Fetch components list
@@ -318,6 +348,13 @@ export default function GraphsPage() {
         } else {
           const errText = await componentsResponse.text()
           const errorMsg = `Components fetch failed: ${componentsResponse.status} - ${errText.substring(0, 150)}`
+          
+          // Provide helpful error message for invalid paths
+          if (componentsResponse.status === 400 && errText.includes("Invalid repository path")) {
+            setLastError(`❌ Repository path is invalid: "${repoPath}"\n\nPlease verify:\n• The path exists on the server\n• The path points to a code repository (not backend/frontend folders)\n• You have permission to access it`)
+          } else {
+            setLastError(errorMsg)
+          }
           console.error("[Graph]", errorMsg)
           setLastError(errorMsg)
         }
@@ -403,15 +440,47 @@ export default function GraphsPage() {
           let graphData: GraphData
           if (selectedGraphType === "ckg") {
             // CKG returns {nodes, edges, stats}
+            const nodes = result.data.nodes || []
+            const edges = result.data.edges || []
+            const stats = result.data.stats || {}
+            
             graphData = {
               id: "ckg",
               name: "Program Knowledge Graph",
               type: "ckg",
-              nodes: result.data.nodes || [],
-              edges: result.data.edges || [],
-              node_count: result.data.stats?.node_count || 0,
-              edge_count: result.data.stats?.edge_count || 0,
-              metadata: result.data.stats || {}
+              nodes: nodes,
+              edges: edges,
+              node_count: stats?.node_count || nodes.length,
+              edge_count: stats?.edge_count || edges.length,
+              metadata: stats
+            }
+            
+            // Log PKG data for debugging
+            console.log("[Graph] PKG data received:", {
+              node_count: graphData.node_count,
+              edge_count: graphData.edge_count,
+              node_types: stats?.node_types,
+              edge_types: stats?.edge_types,
+              has_nodes: nodes.length > 0,
+              has_edges: edges.length > 0,
+              repo_path: stats?.repo_path,
+              warning: result.warning
+            })
+            
+            // Warn if PKG graph is empty
+            if (nodes.length === 0 || edges.length === 0) {
+              const warningMsg = result.warning || "No code components found in repository"
+              console.warn("[Graph] PKG graph is empty:", {
+                repo_path: repoPath,
+                nodes_count: nodes.length,
+                edges_count: edges.length,
+                warning: warningMsg
+              })
+              
+              // Set error message to guide user
+              if (nodes.length === 0) {
+                setGraphError(`📊 Program Knowledge Graph is empty\n\n${warningMsg}\n\nMake sure your repository:\n• Contains Python files (.py)\n• Has functions or classes defined\n• Is not in an excluded folder (e.g., __pycache__, .git, venv)`)
+              }
             }
           } else {
             graphData = result.data as GraphData
@@ -858,13 +927,48 @@ export default function GraphsPage() {
                 componentFlow={selectedComponentFlow || undefined}
               />
             ) : selectedGraphType === "ckg" && currentGraphData ? (
-              <CytoscapeGraph
-                graphData={currentGraphData}
-                onNodeClick={(nodeId, nodeData) => {
-                  console.log("Node clicked:", nodeId, nodeData)
-                }}
-                className="w-full h-full"
-              />
+              currentGraphData.node_count === 0 || currentGraphData.edge_count === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full gap-3 p-8">
+                  <AlertCircle className="w-12 h-12 text-amber-400" />
+                  <p className="text-sm font-semibold text-stone-700">Program Knowledge Graph is Empty</p>
+                  <p className="text-xs text-stone-600 text-center max-w-md leading-relaxed">
+                    No code components were found in the repository. This typically means:
+                  </p>
+                  <ul className="text-xs text-stone-600 space-y-1 text-left bg-amber-50 p-3 rounded-lg border border-amber-200 max-w-md">
+                    <li>❌ The repository path doesn't contain Python files</li>
+                    <li>❌ All Python files are in excluded folders (<code>__pycache__</code>, <code>.git</code>, <code>venv</code>, etc.)</li>
+                    <li>❌ Python files only contain comments/docstrings, no actual code</li>
+                    <li>❌ The repository hasn't been parsed yet</li>
+                  </ul>
+                  <div className="flex gap-2 pt-2">
+                    <Button variant="outline" size="sm" onClick={handleRefresh}>
+                      Refresh
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => {
+                      if (repoPath) {
+                        setComponentsLoading(true)
+                        fetch(`${API_BASE}/api/graphs`, {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ repo_path: repoPath, force: true })
+                        })
+                        .then(() => handleRefresh())
+                        .finally(() => setComponentsLoading(false))
+                      }
+                    }}>
+                      Force Parse
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <CytoscapeGraph
+                  graphData={currentGraphData}
+                  onNodeClick={(nodeId, nodeData) => {
+                    console.log("Node clicked:", nodeId, nodeData)
+                  }}
+                  className="w-full h-full"
+                />
+              )
             ) : (selectedComponent || selectedGraphType === "ckg") && currentGraphData ? (
               <RealGraphVisualization
                 graphData={currentGraphData}
@@ -1074,13 +1178,29 @@ export default function GraphsPage() {
                     componentFlow={selectedComponentFlow || undefined}
                   />
                 ) : selectedGraphType === "ckg" && currentGraphData ? (
-                  <CytoscapeGraph
-                    graphData={currentGraphData}
-                    onNodeClick={(nodeId, nodeData) => {
-                      console.log("Node clicked:", nodeId, nodeData)
-                    }}
-                    className="w-full h-full"
-                  />
+                  currentGraphData.node_count === 0 || currentGraphData.edge_count === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-full gap-3 p-8">
+                      <AlertCircle className="w-12 h-12 text-amber-400" />
+                      <p className="text-sm font-semibold text-stone-700">Program Knowledge Graph is Empty</p>
+                      <p className="text-xs text-stone-600 text-center max-w-md leading-relaxed">
+                        No code components were found in the repository. This typically means:
+                      </p>
+                      <ul className="text-xs text-stone-600 space-y-1 text-left bg-amber-50 p-3 rounded-lg border border-amber-200 max-w-md">
+                        <li>❌ The repository path doesn't contain Python files</li>
+                        <li>❌ All Python files are in excluded folders (<code>__pycache__</code>, <code>.git</code>, <code>venv</code>, etc.)</li>
+                        <li>❌ Python files only contain comments/docstrings, no actual code</li>
+                        <li>❌ The repository hasn't been parsed yet</li>
+                      </ul>
+                    </div>
+                  ) : (
+                    <CytoscapeGraph
+                      graphData={currentGraphData}
+                      onNodeClick={(nodeId, nodeData) => {
+                        console.log("Node clicked:", nodeId, nodeData)
+                      }}
+                      className="w-full h-full"
+                    />
+                  )
                 ) : (selectedComponent || selectedGraphType === "ckg") && currentGraphData ? (
                   <RealGraphVisualization
                     graphData={currentGraphData}

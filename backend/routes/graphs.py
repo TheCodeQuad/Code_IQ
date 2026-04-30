@@ -579,14 +579,31 @@ def get_ckg(
         
         # Auto-parse if not already done
         if not service.get_ir(repo_path) and not force:
-            service.parse_repository(repo_path)
+            try:
+                service.parse_repository(repo_path)
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Failed to parse repository: {str(e)}"
+                )
         
         ckg_data = service.get_ckg_export(repo_path, force)
+        
+        # Check if CKG is empty and provide helpful message
+        if ckg_data.get("stats", {}).get("node_count", 0) == 0:
+            logger.warning(f"CKG is empty for {repo_path}")
+            return {
+                "success": True,
+                "data": ckg_data,
+                "warning": "No code components found in repository. Ensure it contains Python files with functions/classes."
+            }
         
         return {
             "success": True,
             "data": ckg_data
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error building CKG: {e}")
         raise HTTPException(status_code=500, detail=str(e))

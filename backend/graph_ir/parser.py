@@ -799,6 +799,11 @@ class RepositoryParser:
 
     def __init__(self, root_path: str, exclude_patterns: Optional[List[str]] = None):
         self.root_path = os.path.abspath(root_path)
+        
+        # Validate path exists
+        if not os.path.isdir(self.root_path):
+            raise ValueError(f"Repository path does not exist or is not a directory: {self.root_path}")
+        
         self.exclude_patterns = exclude_patterns or [
             "__pycache__", ".git", ".venv", "venv", "node_modules",
             ".pytest_cache", ".mypy_cache", "dist", "build", ".egg-info"
@@ -874,6 +879,8 @@ class RepositoryParser:
 
     def parse_repository(self) -> RepositoryIR:
         """Parse all Python files in the repository"""
+        py_files_found = 0
+        
         for root, dirs, files in os.walk(self.root_path):
             # Filter out excluded directories
             dirs[:] = [d for d in dirs if not self._should_exclude(d)]
@@ -883,7 +890,15 @@ class RepositoryParser:
                     file_path = os.path.join(root, file)
                     if not self._should_exclude(file_path):
                         self.parse_file(file_path)
+                        py_files_found += 1
 
+        if py_files_found == 0:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"⚠️  No Python files found in repository: {self.root_path}")
+            logger.warning(f"   Searched in: {self.root_path}")
+            logger.warning(f"   Exclude patterns: {self.exclude_patterns}")
+        
         return self.ir
 
     def parse_single_file(self, file_path: str) -> RepositoryIR:

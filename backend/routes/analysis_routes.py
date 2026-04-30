@@ -183,13 +183,15 @@ def classify_github_error(status_code: int, error_data: dict) -> tuple[str, str]
 
 
 @router.get("/{analysisId}/repo")
-async def get_analysis_repo(analysisId: str):
+async def get_analysis_repo(analysisId: str, authorization: Optional[str] = Header(None)):
     """
     Get repository information linked to an analysis.
     
     Returns:
     - Repository details (name, owner, branches)
     - Available branches for PR base selection
+    
+    Accepts optional Authorization header for private repo access.
     """
     try:
         repos_col = await get_repos_collection()
@@ -218,15 +220,22 @@ async def get_analysis_repo(analysisId: str):
         owner, repo_name = full_name.split("/", 1)
         
         # Fetch branches from GitHub
-        branches = ["main", "develop", "staging"]  # Fallback default branches
+        branches = ["main", "develop", "staging", "master"]  # Fallback default branches
         default_branch = "main"  # Fallback default branch
         
         try:
-            async with httpx.AsyncClient(timeout=5) as client:
+            # Prepare headers with optional token
+            headers = {}
+            if authorization:
+                headers["Authorization"] = authorization
+                logger.info("[GetRepo] Using provided authorization header")
+            
+            async with httpx.AsyncClient(timeout=10) as client:
                 # First, get repository info to find the actual default branch
                 repo_info_response = await client.get(
                     f"{GITHUB_API_BASE}/repos/{full_name}",
-                    timeout=5,
+                    timeout=10,
+                    headers=headers,
                 )
                 logger.info(f"[GetRepo] Repo info API response status: {repo_info_response.status_code}")
                 if repo_info_response.status_code == 200:
@@ -236,21 +245,25 @@ async def get_analysis_repo(analysisId: str):
                 else:
                     logger.warning(f"[GetRepo] Failed to fetch repo info: {repo_info_response.status_code}")
                 
-                # Try to get branches from GitHub (no auth required for public repos)
+                # Try to get branches from GitHub
                 branches_response = await client.get(
-                    f"{GITHUB_API_BASE}/repos/{full_name}/branches",
-                    timeout=5,
+                    f"{GITHUB_API_BASE}/repos/{full_name}/branches?per_page=50",
+                    timeout=10,
+                    headers=headers,
                 )
                 logger.info(f"[GetRepo] Branches API response status: {branches_response.status_code}")
                 if branches_response.status_code == 200:
                     branch_data = branches_response.json()
                     logger.info(f"[GetRepo] Fetched {len(branch_data)} branches from GitHub")
-                    branches = [b["name"] for b in branch_data[:20]]  # Get first 20 branches
+                    branches = [b["name"] for b in branch_data]  # Get all branches
                     logger.info(f"[GetRepo] Available branches: {branches}")
                     # Ensure default_branch is in the list
                     if default_branch not in branches:
                         logger.warning(f"[GetRepo] Default branch '{default_branch}' not in branches list, using first branch")
                         default_branch = branches[0] if branches else "main"
+                elif branches_response.status_code == 401:
+                    logger.warning(f"[GetRepo] Authentication failed when fetching branches: {branches_response.status_code}")
+                    # If auth failed, the repo might be private - return what we have
                 else:
                     logger.warning(f"[GetRepo] Failed to fetch branches: {branches_response.status_code}")
         except Exception as e:
@@ -547,33 +560,154 @@ async def create_pull_request_safe(request: SafePRRequest):
         }
 
         async with httpx.AsyncClient(timeout=60) as client:
+            # Step 0: Pre-flight check - verify token and repo access
+            logger.info(f"[SafePR] Pre-flight check: verifying GitHub token and repo access")
+            
+            # Check if token is valid by getting authenticated user
+            user_check = await client.get(
+                f"{GITHUB_API_BASE}/user",
+                headers=headers,
+            )
+            
+            if user_check.status_code == 401:
+                logger.error(f"[SafePR] GitHub token is invalid or expired")
+                raise HTTPException(
+                    status_code=401,
+                    detail={
+                        "error_type": PRCreationError.TOKEN_EXPIRED,
+                        "message": "GitHub token is invalid or expired. Please reconnect your GitHub account."
+                    }
+                )
+            elif user_check.status_code != 200:
+                logger.error(f"[SafePR] Could not verify GitHub token: {user_check.status_code}")
+                raise HTTPException(
+                    status_code=500,
+                    detail={"error_type": "token_check_failed", "message": "Could not verify GitHub token"}
+                )
+            
+            authenticated_user = user_check.json().get("login")
+            logger.info(f"[SafePR] Token is valid, authenticated as: {authenticated_user}")
+            
+            # Check if we can access the repository
+            logger.info(f"[SafePR] Checking access to repository: {request.repo}")
+            repo_check = await client.get(
+                f"{GITHUB_API_BASE}/repos/{request.repo}",
+                headers=headers,
+            )
+            
+            if repo_check.status_code == 404:
+                logger.error(f"[SafePR] Repository not found or no access: {request.repo}")
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error_type": PRCreationError.REPO_NOT_FOUND,
+                        "message": f"Repository '{request.repo}' not found or you don't have access. Check the repository name and your token permissions."
+                    }
+                )
+            elif repo_check.status_code != 200:
+                logger.error(f"[SafePR] Could not access repository: {repo_check.status_code}")
+                raise HTTPException(
+                    status_code=500,
+                    detail={"error_type": "repo_check_failed", "message": "Could not access repository"}
+                )
+            
+            repo_data = repo_check.json()
+            logger.info(f"[SafePR] Repository access confirmed. Push access: {repo_data.get('permissions', {}).get('push', False)}")
+            
+            # Verify we have push access
+            if not repo_data.get('permissions', {}).get('push', False):
+                logger.error(f"[SafePR] No push access to repository")
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error_type": PRCreationError.NO_WRITE_ACCESS,
+                        "message": "You don't have write/push access to this repository. You may need to fork the repository or ask for collaborator access."
+                    }
+                )
+
             # Step 1: Get the SHA of the base branch
-            logger.info(f"[SafePR] Getting SHA of base branch '{request.baseBranch}'")
+            logger.info(f"[SafePR] Getting SHA of base branch '{request.baseBranch}' for repo '{request.repo}'")
             base_ref_response = await client.get(
                 f"{GITHUB_API_BASE}/repos/{request.repo}/git/refs/heads/{request.baseBranch}",
                 headers=headers,
             )
 
             if base_ref_response.status_code == 404:
+                logger.error(f"[SafePR] Base branch not found: {base_ref_response.text}")
+                # Try to get available branches to help user
+                available_branches = []
+                try:
+                    branches_list_response = await client.get(
+                        f"{GITHUB_API_BASE}/repos/{request.repo}/branches?per_page=20",
+                        headers=headers,
+                        timeout=5,
+                    )
+                    if branches_list_response.status_code == 200:
+                        branches_data = branches_list_response.json()
+                        available_branches = [b["name"] for b in branches_data]
+                        logger.info(f"[SafePR] Available branches: {available_branches}")
+                except Exception as e:
+                    logger.warning(f"[SafePR] Could not fetch available branches: {e}")
+                
+                detail = {
+                    "error_type": "base_branch_not_found",
+                    "message": f"Base branch '{request.baseBranch}' not found in {request.repo}. Please select a valid base branch.",
+                }
+                if available_branches:
+                    detail["available_branches"] = available_branches
+                    detail["message"] = f"Base branch '{request.baseBranch}' not found. Available branches: {', '.join(available_branches[:5])}"
+                
                 raise HTTPException(
                     status_code=400,
-                    detail={
-                        "error_type": "base_branch_not_found",
-                        "message": f"Base branch '{request.baseBranch}' not found. Please select a valid base branch."
-                    }
+                    detail=detail
                 )
             elif base_ref_response.status_code != 200:
                 error_data = base_ref_response.json() if base_ref_response.text else {}
                 error_type, error_msg = classify_github_error(base_ref_response.status_code, error_data)
+                logger.error(f"[SafePR] Failed to get base branch: {error_data}")
                 raise HTTPException(
                     status_code=base_ref_response.status_code,
                     detail={"error_type": error_type, "message": error_msg}
                 )
 
-            base_sha = base_ref_response.json()["object"]["sha"]
+            try:
+                response_json = base_ref_response.json()
+                base_sha = response_json.get("object", {}).get("sha")
+                if not base_sha:
+                    logger.error(f"[SafePR] Invalid response format - no SHA found: {response_json}")
+                    raise HTTPException(
+                        status_code=500,
+                        detail={"error_type": "invalid_response", "message": "GitHub API returned unexpected response format"}
+                    )
+            except Exception as e:
+                logger.error(f"[SafePR] Failed to parse base branch response: {e}")
+                raise HTTPException(
+                    status_code=500,
+                    detail={"error_type": "parse_error", "message": f"Failed to parse GitHub response: {str(e)}"}
+                )
+            
             logger.info(f"[SafePR] Base branch SHA: {base_sha}")
 
-            # Step 2: Check if source branch already exists
+            # Step 2: Validate the SHA actually exists by checking the commit
+            logger.info(f"[SafePR] Validating SHA exists: {base_sha}")
+            commit_check = await client.get(
+                f"{GITHUB_API_BASE}/repos/{request.repo}/git/commits/{base_sha}",
+                headers=headers,
+            )
+            
+            if commit_check.status_code == 404:
+                logger.error(f"[SafePR] SHA not found in repository: {base_sha}")
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error_type": "commit_not_found",
+                        "message": f"Commit SHA from base branch not found in repository. The repository may have been reset or force-pushed."
+                    }
+                )
+            elif commit_check.status_code != 200:
+                logger.warning(f"[SafePR] Could not validate SHA (continuing anyway): {commit_check.status_code}")
+
+            # Step 3: Check if source branch already exists
             logger.info(f"[SafePR] Checking if source branch '{request.sourceBranch}' exists")
             source_check = await client.get(
                 f"{GITHUB_API_BASE}/repos/{request.repo}/git/refs/heads/{request.sourceBranch}",
@@ -589,8 +723,10 @@ async def create_pull_request_safe(request: SafePRRequest):
                     }
                 )
 
-            # Step 3: Create the new source branch from base
+            # Step 4: Create the new source branch from base
             logger.info(f"[SafePR] Creating source branch '{request.sourceBranch}' from SHA {base_sha}")
+            
+            # Try method 1: Using git refs API
             create_ref_response = await client.post(
                 f"{GITHUB_API_BASE}/repos/{request.repo}/git/refs",
                 headers=headers,
@@ -600,14 +736,78 @@ async def create_pull_request_safe(request: SafePRRequest):
                 }
             )
 
+            if create_ref_response.status_code == 404:
+                # 404 might mean permission denied or endpoint issue
+                # Try fallback: create branch via empty commit
+                logger.warning(f"[SafePR] Git refs endpoint returned 404, trying alternative method...")
+                
+                # Get tree SHA from base commit
+                base_commit = await client.get(
+                    f"{GITHUB_API_BASE}/repos/{request.repo}/git/commits/{base_sha}",
+                    headers=headers,
+                )
+                
+                if base_commit.status_code != 200:
+                    logger.error(f"[SafePR] Could not fetch base commit: {base_commit.text}")
+                    raise HTTPException(
+                        status_code=400,
+                        detail={"error_type": "commit_fetch_failed", "message": "Could not fetch base commit information"}
+                    )
+                
+                tree_sha = base_commit.json()["tree"]["sha"]
+                logger.info(f"[SafePR] Using tree SHA from base commit: {tree_sha}")
+                
+                # Create a new commit with the same tree
+                new_commit_response = await client.post(
+                    f"{GITHUB_API_BASE}/repos/{request.repo}/git/commits",
+                    headers=headers,
+                    json={
+                        "message": request.commitMessage,
+                        "tree": tree_sha,
+                        "parents": [base_sha]
+                    }
+                )
+                
+                if new_commit_response.status_code != 201:
+                    logger.error(f"[SafePR] Failed to create commit: {new_commit_response.text}")
+                    raise HTTPException(
+                        status_code=500,
+                        detail={"error_type": "commit_creation_failed", "message": "Failed to create new commit"}
+                    )
+                
+                new_commit_sha = new_commit_response.json()["sha"]
+                logger.info(f"[SafePR] Created new commit: {new_commit_sha}")
+                
+                # Now create ref pointing to new commit
+                create_ref_response = await client.post(
+                    f"{GITHUB_API_BASE}/repos/{request.repo}/git/refs",
+                    headers=headers,
+                    json={
+                        "ref": f"refs/heads/{request.sourceBranch}",
+                        "sha": new_commit_sha,
+                    }
+                )
+            
             if create_ref_response.status_code not in [200, 201]:
                 error_data = create_ref_response.json() if create_ref_response.text else {}
                 error_type, error_msg = classify_github_error(create_ref_response.status_code, error_data)
-                logger.error(f"[SafePR] Failed to create branch: {error_data}")
-                raise HTTPException(
-                    status_code=create_ref_response.status_code,
-                    detail={"error_type": error_type, "message": error_msg}
-                )
+                logger.error(f"[SafePR] Failed to create branch with SHA {base_sha}: {error_data}")
+                logger.error(f"[SafePR] Response status: {create_ref_response.status_code}, headers: {dict(create_ref_response.headers)}")
+                
+                # Give user a more helpful error message
+                if create_ref_response.status_code == 404:
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error_type": "no_write_access",
+                            "message": f"No write access to repository or branch protection enabled. Check your GitHub token permissions and repository settings."
+                        }
+                    )
+                else:
+                    raise HTTPException(
+                        status_code=create_ref_response.status_code,
+                        detail={"error_type": error_type, "message": error_msg}
+                    )
 
             logger.info(f"[SafePR] Successfully created source branch '{request.sourceBranch}'")
 

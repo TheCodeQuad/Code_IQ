@@ -42,6 +42,9 @@ const customTheme = {
   'hljs-quote': {
     color: '#FFD700',
   },
+  'hljs-string': {
+    color: '#FFD700',
+  },
 }
 
 function getLanguageFromPath(filePath: string): string {
