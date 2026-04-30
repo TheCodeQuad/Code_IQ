@@ -1,1 +1,0 @@
-{"created_at": 1775854865.973473, "content": "<DOCSTRING>\nPrints whether a user is an adult or a minor based on their age.\n\n@param user (User): The user object to check.\n</DOCSTRING>", "model": "qwen2.5-coder-7b-instruct-q4_k_m.gguf", "usage": {"prompt_tokens": 2386, "completion_tokens": 36, "total_tokens": 2422}, "metadata": {"local": true, "memory_based": true}}
