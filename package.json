@@ -1,6 +1,0 @@
-{
-  "dependencies": {
-    "cytoscape": "^3.33.2",
-    "mongodb": "^7.1.0"
-  }
-}
