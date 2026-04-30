@@ -1,0 +1,1 @@
+{"created_at": 1777538494.8550873, "content": "<DOCSTRING>\nclass EmailNotValidError(ValueError):\n    \"\"\"Raises an error when an email is not valid.\"\"\"\n    pass\n</DOCSTRING>", "model": "qwen2.5-7b-instruct-q3_k_m.gguf", "usage": {"prompt_tokens": 2693, "completion_tokens": 30, "total_tokens": 2723}, "metadata": {"local": true, "memory_based": true}}

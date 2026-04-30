@@ -1,0 +1,1 @@
+{"created_at": 1777540887.4407232, "content": "<DOCSTRING>\nSummary: Stops the alarm sound.\n\nArgs: None\n\nReturns: None\n</DOCSTRING>", "model": "qwen2.5-7b-instruct-q3_k_m.gguf", "usage": {"prompt_tokens": 2504, "completion_tokens": 23, "total_tokens": 2527}, "metadata": {"local": true, "memory_based": true}}

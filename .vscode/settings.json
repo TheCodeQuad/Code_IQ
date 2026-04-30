@@ -3,7 +3,41 @@
     "cmake.sourceDirectory": "C:/Users/shruti/OneDrive/Desktop/codeiq/grammar/tree-sitter-c",
     "postman.settings.dotenv-detection-notification-visibility": false,
     "python-envs.defaultEnvManager": "ms-python.python:conda",
-    "python-envs.defaultPackageManager": "ms-python.python:conda"
+    "python-envs.defaultPackageManager": "ms-python.python:conda",
+    "editor.tokenColorCustomizations": {
+        "textMateRules": [
+            {
+                "scope": "string.quoted.docstring.python",
+                "settings": {
+                    "foreground": "#FFFF00"
+                }
+            },
+            {
+                "scope": "string.quoted.single.python",
+                "settings": {
+                    "foreground": "#FFFF00"
+                }
+            },
+            {
+                "scope": "string.quoted.double.python",
+                "settings": {
+                    "foreground": "#FFFF00"
+                }
+            },
+            {
+                "scope": "string.quoted.triple.python",
+                "settings": {
+                    "foreground": "#FFFF00"
+                }
+            },
+            {
+                "scope": "comment.line.number-sign.python",
+                "settings": {
+                    "foreground": "#FFFF00"
+                }
+            }
+        ]
+    }
 }
 
 

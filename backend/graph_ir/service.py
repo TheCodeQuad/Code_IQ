@@ -100,6 +100,9 @@ class GraphService:
 
         Returns:
             RepositoryIR for the repository
+        
+        Raises:
+            ValueError: If repository path is invalid
         """
         cache_key = self._get_cache_key(repo_path)
 
@@ -109,13 +112,28 @@ class GraphService:
 
         # Parse the repository
         logger.info(f"Parsing repository: {repo_path}")
-        parser = RepositoryParser(repo_path, exclude_patterns)
+        try:
+            parser = RepositoryParser(repo_path, exclude_patterns)
+        except ValueError as e:
+            logger.error(f"Invalid repository path: {e}")
+            raise
+        
         ir = parser.parse_repository()
 
         with self._cache_lock:
             self._ir_cache[cache_key] = ir
             self._parse_timestamps[cache_key] = datetime.now()
             self._parse_errors[cache_key] = parser.errors
+
+        # Check if parse was empty
+        has_content = len(ir.functions) > 0 or len(ir.classes) > 0 or len(ir.modules) > 0
+        if not has_content:
+            logger.warning(f"⚠️  Repository parse completed but found no code components")
+            logger.warning(f"   Path: {repo_path}")
+            logger.warning(f"   This could mean:")
+            logger.warning(f"   - Repository has no Python files")
+            logger.warning(f"   - All Python files are in excluded directories")
+            logger.warning(f"   - Python files contain only comments/docstrings")
 
         logger.info(
             f"Parsed {len(ir.functions)} functions, "
@@ -816,6 +834,9 @@ class GraphService:
             
         Returns:
             NetworkX MultiDiGraph
+            
+        Raises:
+            ValueError: If repository path is invalid
         """
         cache_key = self._get_cache_key(repo_path)
         
@@ -828,7 +849,11 @@ class GraphService:
         # Get or parse IR
         ir = self.get_ir(repo_path)
         if not ir:
-            ir = self.parse_repository(repo_path)
+            try:
+                ir = self.parse_repository(repo_path)
+            except ValueError as e:
+                logger.error(f"Invalid repository path: {e}")
+                raise
         
         # Build CKG
         logger.info(f"Building CKG for {repo_path}")

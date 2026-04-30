@@ -74,6 +74,7 @@ type PRErrorType =
 interface PRError {
   type: PRErrorType
   message: string
+  availableBranches?: string[]
 }
 
 const changedFiles = [
@@ -306,7 +307,28 @@ export function PullRequestPanel({ analysisId }: { analysisId: string }) {
 
       try {
         console.log(`Fetching repo data for analysisId: ${analysisId}`)
-        const response = await fetch(`/api/analysis/${analysisId}/repo`)
+        
+        // Get user's token from session if available
+        let headers: Record<string, string> = {}
+        if (session?.user) {
+          // Try to get GitHub token from the session or user data
+          try {
+            const sessionResponse = await fetch("/api/auth/session")
+            if (sessionResponse.ok) {
+              const sessionData = await sessionResponse.json()
+              if (sessionData.github_token) {
+                headers["Authorization"] = `token ${sessionData.github_token}`
+                console.log("[RepoFetch] Using GitHub token from session")
+              }
+            }
+          } catch (e) {
+            console.warn("[RepoFetch] Could not retrieve token from session:", e)
+          }
+        }
+        
+        const response = await fetch(`/api/analysis/${analysisId}/repo`, {
+          headers
+        })
 
         if (!response.ok) {
           const errorText = await response.text()
@@ -318,7 +340,7 @@ export function PullRequestPanel({ analysisId }: { analysisId: string }) {
         const data = await response.json()
         console.log("Repo data fetched successfully:", data)
         setRepoData(data.repo)
-        const fetchedBranches = data.branches || ["main", "develop", "staging"]
+        const fetchedBranches = data.branches || ["main", "develop", "staging", "master"]
         setBranches(fetchedBranches)
 
         // Set the base branch to the repo's default branch
@@ -343,7 +365,7 @@ export function PullRequestPanel({ analysisId }: { analysisId: string }) {
     }
     
     fetchRepoData()
-  }, [analysisId])
+  }, [analysisId, session])
 
   // Check GitHub connection status using the hook
   useEffect(() => {
@@ -488,11 +510,13 @@ export function PullRequestPanel({ analysisId }: { analysisId: string }) {
         // Extract error details from response
         const errorType = data.error_type || data.details?.error_type || "unknown"
         const errorMessage = data.error || data.details?.message || "Failed to create pull request"
+        const availableBranches = data.details?.available_branches || data.available_branches
 
         // Set error state for UI display instead of logging to console
         setPrError({
           type: errorType as PRErrorType,
           message: errorMessage,
+          availableBranches: availableBranches,
         })
         setPrStatus("error")
       }
@@ -1081,26 +1105,27 @@ export function PullRequestPanel({ analysisId }: { analysisId: string }) {
         </div>
       </div>
 
-      <div className="flex gap-2 pt-4 mt-4">
+      <div className="flex gap-2 pt-4 mt-4 w-full">
         <Button
           onClick={handleSubmit}
           disabled={prStatus === "loading" || githubConnected === false || !canSubmit}
+          size="lg"
           className={cn(
-            "flex-1 h-11 font-semibold shadow-lg transition-all duration-200",
+            "flex-1 h-12 px-6 rounded-lg font-semibold transition-all duration-300 flex items-center justify-center gap-2",
             canSubmit && githubConnected !== false
-              ? "bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/30"
-              : "bg-zinc-600 text-zinc-300 shadow-none cursor-not-allowed"
+              ? "bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white shadow-lg shadow-emerald-600/40 hover:shadow-emerald-600/60 hover:scale-[1.02] active:scale-95"
+              : "bg-gradient-to-r from-zinc-700 to-zinc-600 text-zinc-400 shadow-none cursor-not-allowed opacity-60"
           )}
         >
           {prStatus === "loading" ? (
             <>
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              Creating pull request...
+              <Loader2 className="w-5 h-5 animate-spin" />
+              <span>Creating PR...</span>
             </>
           ) : (
             <>
-              <GitPullRequest className="w-4 h-4 mr-2" />
-              Create Pull Request
+              <GitPullRequest className="w-5 h-5" />
+              <span>Create Pull Request</span>
             </>
           )}
         </Button>
@@ -1191,28 +1216,30 @@ export function PullRequestPanel({ analysisId }: { analysisId: string }) {
             </div>
           </ScrollArea>
 
-          <div className="border-t border-border pt-3 pb-3 px-3 flex gap-2 shrink-0 bg-background/95 backdrop-blur-sm sticky bottom-0">
+          <div className="border-t border-border pt-4 pb-4 px-4 flex gap-3 shrink-0 bg-gradient-to-t from-background/98 to-background/90 backdrop-blur-md sticky bottom-0">
             <Button
               onClick={() => setShowPreview(false)}
               variant="outline"
-              className="flex-1 h-10 border-border/60 bg-slate-500/10 hover:bg-slate-500/20 text-foreground font-medium"
+              size="lg"
+              className="flex-1 h-11 px-4 rounded-lg border-border/80 bg-zinc-500/10 hover:bg-zinc-500/20 text-foreground font-medium transition-all duration-200 hover:border-border/60"
             >
-              ← Edit
+              ← Back to Edit
             </Button>
             <Button
               onClick={handleConfirmAndSubmit}
               disabled={prStatus === "loading"}
-              className="flex-1 h-10 bg-emerald-600 hover:bg-emerald-550 text-white shadow-lg shadow-emerald-600/40 font-semibold"
+              size="lg"
+              className="flex-1 h-11 px-4 rounded-lg bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white shadow-lg shadow-emerald-600/40 hover:shadow-emerald-600/60 font-semibold transition-all duration-300 hover:scale-[1.02] active:scale-95 disabled:opacity-70 disabled:cursor-wait disabled:hover:scale-100"
             >
               {prStatus === "loading" ? (
                 <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Creating...
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  <span>Creating PR...</span>
                 </>
               ) : (
                 <>
-                  <GitPullRequest className="w-4 h-4 mr-2" />
-                  Confirm & Create
+                  <GitPullRequest className="w-5 h-5" />
+                  <span>Confirm & Create</span>
                 </>
               )}
             </Button>
@@ -1370,7 +1397,26 @@ function ErrorView({
             </div>
           )}
 
-          <div className="flex gap-2">
+          {error.type === "base_branch_not_found" && (
+            <div className="bg-secondary/50 rounded-lg p-3 mb-6 text-left text-xs text-muted-foreground">
+              <p className="mb-2">The base branch doesn't exist in this repository.</p>
+              {error.availableBranches && error.availableBranches.length > 0 ? (
+                <>
+                  <p className="mb-1 font-medium">Available branches:</p>
+                  <ul className="list-disc list-inside space-y-0.5">
+                    {error.availableBranches.map((branch) => (
+                      <li key={branch}>{branch}</li>
+                    ))}
+                  </ul>
+                  <p className="mt-2">Please go back and select a valid branch from the dropdown.</p>
+                </>
+              ) : (
+                <p>Please go back and select a valid base branch from the dropdown.</p>
+              )}
+            </div>
+          )}
+
+          <div className="flex gap-2 flex-wrap">
             {error.type === "branch_exists" && onRegenerateBranch && (
               <Button
                 onClick={() => {
@@ -1378,26 +1424,29 @@ function ErrorView({
                   onRetry()
                 }}
                 variant="outline"
-                className="flex-1 border-amber-500/40 hover:bg-amber-500/10 hover:border-amber-500/60 font-medium"
+                size="sm"
+                className="flex-1 min-w-[140px] border-amber-500/40 hover:bg-amber-500/10 hover:border-amber-500/60 font-medium text-xs sm:text-sm"
               >
-                <RefreshCw className="w-4 h-4 mr-2" />
-                Regenerate Branch
+                <RefreshCw className="w-3.5 h-3.5 mr-1.5 shrink-0" />
+                <span className="truncate">Regenerate</span>
               </Button>
             )}
             {error.type === "token_expired" && (
               <Button
                 onClick={() => window.location.href = "/dashboard"}
                 variant="outline"
-                className="flex-1 border-orange-500/40 hover:bg-orange-500/10 hover:border-orange-500/60 font-medium"
+                size="sm"
+                className="flex-1 min-w-[120px] border-orange-500/40 hover:bg-orange-500/10 hover:border-orange-500/60 font-medium text-xs sm:text-sm"
               >
-                <ExternalLink className="w-4 h-4 mr-2" />
-                Go to Dashboard
+                <ExternalLink className="w-3.5 h-3.5 mr-1.5 shrink-0" />
+                <span className="truncate">Dashboard</span>
               </Button>
             )}
             <Button
               onClick={onRetry}
               variant="outline"
-              className="flex-1 border-primary/40 hover:bg-primary/10 hover:border-primary/60 font-medium"
+              size="sm"
+              className="flex-1 min-w-[100px] border-primary/40 hover:bg-primary/10 hover:border-primary/60 font-medium text-xs sm:text-sm"
             >
               Try Again
             </Button>

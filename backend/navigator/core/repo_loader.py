@@ -53,10 +53,15 @@ def extract_repo_name(repo_url: str) -> str:
     
     return repo_name
 
-def clone_repo(repo_url: str, base_dir: str | None = None):
+def clone_repo(repo_url: str, base_dir: str | None = None, github_token: str | None = None):
     """
     Clone a GitHub repository and return local path.
     Uses the repository name as the folder name.
+    
+    Args:
+        repo_url: URL of the repository to clone
+        base_dir: Base directory for cloning (default: DATA_ROOT/input/repositories)
+        github_token: GitHub token for private repositories (optional)
     """
     if base_dir is None:
         base_dir = str(DATA_ROOT / "input" / "repositories")
@@ -69,10 +74,20 @@ def clone_repo(repo_url: str, base_dir: str | None = None):
     if os.path.exists(repo_path):
         shutil.rmtree(repo_path, onerror=handle_remove_readonly)
 
-    subprocess.run(
-        ["git", "clone", repo_url, repo_path],
-        check=True
-    )
+    # If github_token provided, inject it into the URL for private repo access
+    clone_url = repo_url
+    if github_token and "github.com" in repo_url and not repo_url.startswith("git@"):
+        # Convert https://github.com/owner/repo.git to https://token@github.com/owner/repo.git
+        clone_url = repo_url.replace("https://github.com", f"https://{github_token}@github.com")
+
+    try:
+        subprocess.run(
+            ["git", "clone", clone_url, repo_path],
+            check=True,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"Failed to clone repository: {e.stderr.decode()}")
 
     return repo_path
 

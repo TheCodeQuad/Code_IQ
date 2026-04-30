@@ -1,0 +1,1 @@
+{"created_at": 1777538686.874656, "content": "<DOCSTRING>\nReturns a dictionary representing the state of the object.\n</DOCSTRING>", "model": "qwen2.5-7b-instruct-q3_k_m.gguf", "usage": {"prompt_tokens": 2534, "completion_tokens": 18, "total_tokens": 2552}, "metadata": {"local": true, "memory_based": true}}

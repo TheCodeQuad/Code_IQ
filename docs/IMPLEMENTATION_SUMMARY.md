@@ -208,7 +208,7 @@ Generated files:
 
 ### Using Local Model (Default)
 The script is **pre-configured** to use your local model:
-- Model: `models/qwen2.5-coder-7b-instruct-q4_k_m.gguf`
+- Model: `models/qwen2.5-7b-instruct-q3_k_m.gguf`
 - Mode: `llama_cpp`
 - GPU: Automatically used if available
 - **No API keys required**
@@ -227,7 +227,7 @@ Trade-off: Faster but less accurate component extraction
 
 | Issue | Solution |
 |-------|----------|
-| **Model not found** | Ensure `models/qwen2.5-coder-7b-instruct-q4_k_m.gguf` exists |
+| **Model not found** | Ensure `models/qwen2.5-7b-instruct-q3_k_m.gguf` exists |
 | **Input file not found** | Create `completeness_evaluation_cleaned.json` in correct format (see sample) |
 | **No components from navigator** | Run navigator: `python -m backend.navigator.scanner` |
 | **Evaluation too slow** | Use `--no-llm` flag for faster regex-based extraction |

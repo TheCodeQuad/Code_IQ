@@ -69,18 +69,36 @@ def _handle_remove_readonly(func, path, _exc_info):
         raise
 
 
-def _clone_repo(repo_url: str) -> str:
-    """Clone a git repo into CLONE_DIR/<repo_name> and return the path."""
+def _clone_repo(repo_url: str, github_token: Optional[str] = None) -> str:
+    """Clone a git repo into CLONE_DIR/<repo_name> and return the path.
+    
+    Args:
+        repo_url: URL of the repository to clone
+        github_token: GitHub token for private repositories (optional)
+    """
     repo_name = _extract_repo_name(repo_url)
     dest = CLONE_DIR / repo_name
     if dest.exists():
         shutil.rmtree(str(dest), onerror=_handle_remove_readonly)
-    subprocess.run(
-        ["git", "clone", repo_url, str(dest)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    
+    # If github_token provided, inject it into the URL for private repo access
+    clone_url = repo_url
+    if github_token and "github.com" in repo_url and not repo_url.startswith("git@"):
+        # Convert https://github.com/owner/repo.git to https://token@github.com/owner/repo.git
+        clone_url = repo_url.replace("https://github.com", f"https://{github_token}@github.com")
+    
+    try:
+        subprocess.run(
+            ["git", "clone", clone_url, str(dest)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        error_msg = e.stderr if e.stderr else str(e)
+        logger.error(f"Failed to clone {repo_url}: {error_msg}")
+        raise
+    
     return str(dest)
 
 
@@ -183,13 +201,28 @@ async def upload_repo(req: RepoUploadRequest):
 
     repo_name = _extract_repo_name(req.repo_url)
 
-    # 2. Clone the repo
+    # 2. Get user's GitHub token for private repo access (if available)
+    github_token = None
     try:
-        repo_path = _clone_repo(req.repo_url)
+        from backend.utils.db import get_users_collection
+        users_col = await get_users_collection()
+        user = await users_col.find_one({"_id": ObjectId(req.user_id)})
+        if user:
+            github_token = user.get("github_access_token")
+            if github_token:
+                logger.info(f"Using GitHub token for user {req.user_id}")
+    except Exception as e:
+        logger.warning(f"Could not retrieve GitHub token for user: {e}")
+
+    # 3. Clone the repo
+    try:
+        repo_path = _clone_repo(req.repo_url, github_token=github_token)
     except subprocess.CalledProcessError as e:
+        error_msg = e.stderr or str(e)
+        logger.error(f"Clone failed: {error_msg}")
         raise HTTPException(
             status_code=400,
-            detail=f"Failed to clone repository: {e.stderr or str(e)}",
+            detail=f"Failed to clone repository: {error_msg}",
         )
 
     # 3. Gather basic metadata from the cloned files

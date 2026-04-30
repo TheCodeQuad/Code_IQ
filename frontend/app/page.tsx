@@ -434,7 +434,7 @@ export default function LandingPage() {
       >
         {/* BIG background text */}
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-0">
-          <h1 className="text-[20vw] md:text-[24vw] font-bold text-white opacity-50 whitespace-nowrap select-none tracking-tighter mix-blend-overlay" style={{ fontFamily: "Arial, Helvetica, sans-serif" }}>
+          <h1 className="text-[20vw] md:text-[24vw] font-bold text-white opacity-50 whitespace-nowrap select-none tracking-tighter mix-blend-overlay" style={{ fontFamily: "Geist, Geist Fallback, system-ui, sans-serif" }}>
             CODEIQ
           </h1>
         </div>
@@ -445,8 +445,8 @@ export default function LandingPage() {
           <HeroVideoCircle />
 
           <div className="text-6xl md:text-7xl lg:text-8xl font-bold text-foreground leading-[1.1] tracking-tight relative z-20 pointer-events-none -mt-16 md:-mt-24 flex flex-col items-center">
-            <span className="block text-foreground font-bold tracking-tighter" style={{ fontFamily: "Arial, Helvetica, sans-serif", textShadow: '0 2px 10px rgba(0,0,0,0.05)' }}>Structured docs</span>
-            <span className="block font-bold tracking-tighter text-[#dc2d98] pb-3 -mt-1 md:-mt-2" style={{ fontFamily: "Arial, Helvetica, sans-serif" }}>
+            <span className="block text-foreground font-bold tracking-tighter" style={{ fontFamily: "Geist, Geist Fallback, system-ui, sans-serif", textShadow: '0 2px 10px rgba(0,0,0,0.05)' }}>Structured docs</span>
+            <span className="block font-bold tracking-tighter text-[#dc2d98] pb-3 -mt-1 md:-mt-2" style={{ fontFamily: "Geist, Geist Fallback, system-ui, sans-serif" }}>
               from codebases
             </span>
           </div>

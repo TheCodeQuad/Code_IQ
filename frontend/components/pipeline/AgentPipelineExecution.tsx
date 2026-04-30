@@ -258,7 +258,7 @@ export function AgentPipelineExecution({ pipelineState, repoId, selectedComponen
   const pathDocstringInserted = verifierCompleted && !feedbackToReader && !feedbackToWriter;
 
   return (
-    <div className="w-full h-[calc(100vh-56px)] max-w-[1550px] mx-auto p-4 md:p-6 lg:p-8 bg-transparent overflow-hidden relative flex flex-col" style={{ fontFamily: "Arial, Helvetica, sans-serif" }}>
+    <div className="w-full h-[calc(100vh-56px)] max-w-[1550px] mx-auto p-4 md:p-6 lg:p-8 bg-transparent overflow-hidden relative flex flex-col" style={{ fontFamily: "Geist, Geist Fallback, system-ui, sans-serif" }}>
 
       <div className="relative z-10 flex flex-col h-full items-center">
         

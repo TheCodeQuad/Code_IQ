@@ -1,0 +1,1 @@
+{"created_at": 1777538077.9994643, "content": "<DOCSTRING>\ndumps(self, obj: t.Any) -> _TSerialized: Serializes the given object into a serialized form.\n</DOCSTRING>", "model": "qwen2.5-7b-instruct-q3_k_m.gguf", "usage": {"prompt_tokens": 2552, "completion_tokens": 32, "total_tokens": 2584}, "metadata": {"local": true, "memory_based": true}}

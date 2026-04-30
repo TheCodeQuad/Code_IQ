@@ -63,7 +63,7 @@ You need the repository dependency graph from the Navigator component:
 ### 3. Local LLM Model
 
 The script uses your local `llama.cpp` model by default:
-- **Model**: `models/qwen2.5-coder-7b-instruct-q4_k_m.gguf`
+- **Model**: `models/qwen2.5-7b-instruct-q3_k_m.gguf`
 - **No API key needed** (works offline)
 - Automatically uses GPU if available
 
@@ -220,7 +220,7 @@ start data/validation/truthfulness/docstring_truthfulness_report.md
 ## Troubleshooting
 
 ### Issue: "Model not found"
-**Solution**: Ensure the model exists at `models/qwen2.5-coder-7b-instruct-q4_k_m.gguf`
+**Solution**: Ensure the model exists at `models/qwen2.5-7b-instruct-q3_k_m.gguf`
 
 ### Issue: "Input file not found"
 **Solution**: Create or specify the correct path to `completeness_evaluation_cleaned.json`

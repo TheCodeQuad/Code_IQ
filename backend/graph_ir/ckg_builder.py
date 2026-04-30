@@ -98,6 +98,19 @@ class CKGBuilder:
         logger.info(f"Building CKG for repository: {ir.root_path}")
         logger.info(f"IR contains: {len(ir.modules)} modules, {len(ir.classes)} classes, {len(ir.functions)} functions")
         
+        # Check if IR is empty
+        if len(ir.modules) == 0 and len(ir.classes) == 0 and len(ir.functions) == 0:
+            logger.warning(f"⚠️  Empty IR - repository has no parseable components")
+            logger.warning(f"   Root path: {ir.root_path}")
+            # Return empty graph with metadata
+            self.graph.graph['repo_path'] = ir.root_path
+            self.graph.graph['node_counts'] = {}
+            self.graph.graph['edge_counts'] = {}
+            self.graph.graph['total_nodes'] = 0
+            self.graph.graph['total_edges'] = 0
+            logger.info(f"CKG built (empty): 0 nodes, 0 edges")
+            return self.graph
+        
         # Phase 1: Build hierarchical structure
         self._add_module_nodes()
         self._add_class_nodes()

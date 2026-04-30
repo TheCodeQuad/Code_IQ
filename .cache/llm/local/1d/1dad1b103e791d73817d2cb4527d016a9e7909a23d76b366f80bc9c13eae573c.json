@@ -1,0 +1,1 @@
+{"created_at": 1777537201.397997, "content": "<DOCSTRING>\nValidates a client response to ensure an invalid question request results in a 400 status code and specific error detail.\n</DOCSTRING>", "model": "qwen2.5-7b-instruct-q3_k_m.gguf", "usage": {"prompt_tokens": 2638, "completion_tokens": 33, "total_tokens": 2671}, "metadata": {"local": true, "memory_based": true}}

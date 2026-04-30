@@ -1,0 +1,1 @@
+{"created_at": 1776841272.1304662, "content": "<DOCSTRING>\nBinds navigation to the '/landing' route.\n\n@returns {void} Narrows the return type to void, indicating no value is returned.\n</DOCSTRING>", "model": "qwen2.5-7b-instruct-q3_k_m.gguf", "usage": {"prompt_tokens": 3389, "completion_tokens": 37, "total_tokens": 3426}, "metadata": {"local": true, "memory_based": true}}
