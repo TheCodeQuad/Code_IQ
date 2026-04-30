@@ -1,1 +1,0 @@
-{"created_at": 1775853305.6971252, "content": "<DOCSTRING>\nReports whether the stored age is at least 18.\n</DOCSTRING>", "model": "qwen2.5-coder-7b-instruct-q4_k_m.gguf", "usage": {"prompt_tokens": 2585, "completion_tokens": 20, "total_tokens": 2605}, "metadata": {"local": true, "memory_based": true}}

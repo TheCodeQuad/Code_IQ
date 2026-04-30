@@ -1,1 +1,0 @@
-{"created_at": 1775880585.0029778, "content": "<DOCSTRING>\nAdds \"driving\" activity to the user's activity list.\n</DOCSTRING>", "model": "qwen2.5-coder-7b-instruct-q4_k_m.gguf", "usage": {"prompt_tokens": 2575, "completion_tokens": 21, "total_tokens": 2596}, "metadata": {"local": true, "memory_based": true}}

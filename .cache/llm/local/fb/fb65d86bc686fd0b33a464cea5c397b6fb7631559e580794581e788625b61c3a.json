@@ -1,1 +1,0 @@
-{"created_at": 1775854346.0332618, "content": "<DOCSTRING>\nChecks if the user is an adult based on their age.\n\nReturns true if the user is 18 or older, false otherwise.\n</DOCSTRING>", "model": "qwen2.5-coder-7b-instruct-q4_k_m.gguf", "usage": {"prompt_tokens": 2808, "completion_tokens": 35, "total_tokens": 2843}, "metadata": {"local": true, "memory_based": true}}
