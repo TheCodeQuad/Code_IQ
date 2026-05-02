@@ -455,17 +455,18 @@ export default function LandingPage() {
           
           <div className="mt-6 flex flex-col sm:flex-row items-center justify-center gap-4 relative z-30">
             <Link href={getStartedHref}>
-              <Button className="bg-foreground text-background hover:bg-foreground/90 h-11 px-6 text-base font-medium group">
+              <Button className="bg-foreground text-background hover:bg-foreground hover:shadow-2xl hover:scale-110 hover:-translate-y-1 h-11 px-6 text-base font-medium transition-all duration-300 group">
                 Get Started
                 <ArrowRight className="ml-2 w-4 h-4 group-hover:translate-x-1 transition-transform" />
               </Button>
             </Link>
-            <Link href="#pipeline">
-              <Button variant="outline" className="h-11 px-6 text-base font-medium border-border bg-transparent hover:bg-secondary group">
-                <Play className="w-4 h-4 mr-2" />
-                Watch Demo
-              </Button>
-            </Link>
+            <Button 
+              className="h-11 px-6 text-base font-medium bg-white text-foreground hover:bg-white hover:shadow-2xl hover:scale-110 hover:-translate-y-1 transition-all duration-300 group"
+              onClick={() => window.open("https://youtu.be/JFnqA6n_mdI", "_blank")}
+            >
+              <Play className="w-4 h-4 mr-2" />
+              Watch Demo
+            </Button>
           </div>
           
           {/* Quick stats - centered */}
