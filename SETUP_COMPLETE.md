@@ -378,3 +378,14 @@ The same fine-tuning methodology you were using in Colab now works reliably on y
 **Created:** February 1, 2026
 **Status:** ✅ Complete and ready to use
 **Next Step:** Open **LOCAL_GPU_QUICKSTART.md** →
+
+
+IMP COMMANDS:
+
+python -m uvicorn backend.app:app --reload
+
+taskkill /F /IM python.exe
+
+
+cd ..
+rmdir /s /q .cache

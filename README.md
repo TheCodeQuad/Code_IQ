@@ -132,3 +132,14 @@ Data folder location:
 conda install -c conda-forge llama-cpp-python -y
 
 <!-- D:\BIA6\Code_IQ -->
+
+
+IMP COMMANDS:
+
+python -m uvicorn backend.app:app --reload
+
+taskkill /F /IM python.exe
+
+
+cd ..
+rmdir /s /q .cache
