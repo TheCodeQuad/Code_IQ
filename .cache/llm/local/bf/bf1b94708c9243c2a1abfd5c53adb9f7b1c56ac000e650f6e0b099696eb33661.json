@@ -1,1 +1,0 @@
-{"created_at": 1777698553.6412706, "content": "<DOCSTRING>\nReturns a welcome message from the Fast API root endpoint.\n</DOCSTRING>", "model": "qwen2.5-7b-instruct-q3_k_m.gguf", "usage": {"prompt_tokens": 2400, "completion_tokens": 19, "total_tokens": 2419}, "metadata": {"local": true, "memory_based": true}}

@@ -30,6 +30,7 @@ backend/repos/
 # Test cache
 .pytest_cache/
 cache/
+.cache/
 
 # Editor / OS files
 .vscode/
