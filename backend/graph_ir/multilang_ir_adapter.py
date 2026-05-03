@@ -112,6 +112,43 @@ _JAVA_KEYWORDS = {
     "String",
 }
 
+_C_KEYWORDS = {
+    "if",
+    "else",
+    "for",
+    "while",
+    "do",
+    "switch",
+    "case",
+    "break",
+    "continue",
+    "return",
+    "goto",
+    "struct",
+    "union",
+    "enum",
+    "typedef",
+    "sizeof",
+    "static",
+    "extern",
+    "const",
+    "volatile",
+    "register",
+    "inline",
+    "void",
+    "int",
+    "long",
+    "short",
+    "unsigned",
+    "signed",
+    "char",
+    "float",
+    "double",
+    "NULL",
+    "true",
+    "false",
+}
+
 
 def _strip_strings_and_comments(line: str) -> str:
     # Remove // comments
@@ -192,7 +229,12 @@ def extract_statements_from_snippet(
     lines = snippet.splitlines()
     stmts: List[IRStatement] = []
 
-    keywords = _JS_LIKE_KEYWORDS if language in {"javascript", "typescript"} else _JAVA_KEYWORDS
+    if language in {"javascript", "typescript"}:
+        keywords = _JS_LIKE_KEYWORDS
+    elif language == "c":
+        keywords = _C_KEYWORDS
+    else:
+        keywords = _JAVA_KEYWORDS
 
     # Skip leading signature line if it looks like a function header.
     signature_skip = False
@@ -201,6 +243,8 @@ def extract_statements_from_snippet(
         if language in {"javascript", "typescript"} and ("function" in first or first.endswith("{") or first.startswith("(")):
             signature_skip = True
         if language == "java" and (first.endswith("{") or re.search(r"\)\s*\{\s*$", first)):
+            signature_skip = True
+        if language == "c" and (first.endswith("{") or re.search(r"\)\s*\{\s*$", first)):
             signature_skip = True
 
     for idx, raw in enumerate(lines, start=1):
@@ -284,6 +328,9 @@ def extract_statements_from_snippet(
                 if not m and language == "java":
                     # Java: Type name = ...
                     m = re.match(r"^[A-Za-z_$][A-Za-z0-9_$.<>\[\]]*\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=", normalized)
+                if not m and language == "c":
+                    # C: type name = ...; (including pointer types)
+                    m = re.match(r"^[A-Za-z_][A-Za-z0-9_*\s]*\s+\*?([A-Za-z_][A-Za-z0-9_]*)\s*=", normalized)
 
                 if m:
                     stype = StatementType.ASSIGNMENT

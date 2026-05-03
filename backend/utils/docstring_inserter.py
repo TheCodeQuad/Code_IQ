@@ -164,9 +164,23 @@ _RUST_CONFIG = LanguageConfig(
     existing_close_markers=[],
 )
 
+_C_CONFIG = LanguageConfig(
+    name="c",
+    extensions=[".c", ".h"],
+    docstring_position="before",
+    doc_open="/**",
+    doc_close=" */",
+    doc_line_prefix=" * ",
+    single_line_template="{indent}/** {text} */",
+    definition_end_chars=["{"],
+    body_indent_offset=0,
+    existing_open_markers=["/**"],
+    existing_close_markers=["*/"],
+)
+
 _CPP_CONFIG = LanguageConfig(
     name="cpp",
-    extensions=[".cpp", ".cc", ".cxx", ".c++", ".hpp", ".h"],
+    extensions=[".cpp", ".cc", ".cxx", ".c++", ".hpp"],
     docstring_position="before",
     doc_open="/**",
     doc_close=" */",
@@ -197,7 +211,7 @@ _CSHARP_CONFIG = LanguageConfig(
 LANGUAGE_CONFIGS: Dict[str, LanguageConfig] = {}
 for _cfg in [
     _PYTHON_CONFIG, _JAVASCRIPT_CONFIG, _TYPESCRIPT_CONFIG, _JAVA_CONFIG,
-    _GO_CONFIG, _RUST_CONFIG, _CPP_CONFIG, _CSHARP_CONFIG,
+    _GO_CONFIG, _RUST_CONFIG, _C_CONFIG, _CPP_CONFIG, _CSHARP_CONFIG,
 ]:
     for _ext in _cfg.extensions:
         LANGUAGE_CONFIGS[_ext] = _cfg
@@ -206,7 +220,7 @@ for _cfg in [
 LANGUAGE_CONFIGS_BY_NAME: Dict[str, LanguageConfig] = {
     cfg.name: cfg for cfg in [
         _PYTHON_CONFIG, _JAVASCRIPT_CONFIG, _TYPESCRIPT_CONFIG, _JAVA_CONFIG,
-        _GO_CONFIG, _RUST_CONFIG, _CPP_CONFIG, _CSHARP_CONFIG,
+        _GO_CONFIG, _RUST_CONFIG, _C_CONFIG, _CPP_CONFIG, _CSHARP_CONFIG,
     ]
 }
 

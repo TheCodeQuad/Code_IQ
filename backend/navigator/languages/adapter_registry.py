@@ -1,7 +1,8 @@
-﻿from .python.adapter import PythonAdapter
+from .python.adapter import PythonAdapter
 from .javascript.adapter import JavaScriptAdapter
 from .typescript.adapter import TypeScriptAdapter
 from .java.adapter import JavaAdapter
+from .c.adapter import CAdapter
 
 
 class AdapterRegistry:
@@ -11,6 +12,7 @@ class AdapterRegistry:
             JavaScriptAdapter(),
             TypeScriptAdapter(),
             JavaAdapter(),
+            CAdapter(),
         ]
 
     def get_adapter_for_file(self, file_path: str):
