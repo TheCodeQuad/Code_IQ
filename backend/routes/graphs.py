@@ -26,7 +26,7 @@ from ..graph_ir import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/graphs", tags=["graphs"])
+router = APIRouter(prefix="/api/graphs", tags=["graphs"])
 
 
 # =============================================================================

@@ -77,11 +77,11 @@ export default function ResultsLayout({ children }: { children: React.ReactNode 
   }, [id])
 
   const status = useMemo(() => statusConfig[repoStatus], [repoStatus])
-  
+
   // Determine current page for nav highlighting
   const basePath = `/dashboard/analysis/${id}/results`
   const currentPath = pathname.replace(basePath, "") || ""
-  
+
   return (
     <div className="min-h-screen bg-[#fef5fb]">
       {/* Header/Navbar */}
@@ -96,12 +96,12 @@ export default function ResultsLayout({ children }: { children: React.ReactNode 
                   Back
                 </Button>
               </Link>
-              
+
               <div className="h-6 w-px bg-pink-200" />
-              
+
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-lg bg-[#dc2d98] flex items-center justify-center">
-                  <Code2 className="w-5 h-5 text-white" />
+                <div className="w-9 h-9 rounded-lg bg-yellow-400 flex items-center justify-center">
+                  <Code2 className="w-5 h-5 text-black" />
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="text-lg font-semibold text-black">
@@ -116,7 +116,7 @@ export default function ResultsLayout({ children }: { children: React.ReactNode 
                 </div>
               </div>
             </div>
-            
+
             {/* Right section */}
             <Button className="bg-black text-white hover:bg-[#dc2d98]">
               <Download className="w-4 h-4 mr-2" />
@@ -129,7 +129,7 @@ export default function ResultsLayout({ children }: { children: React.ReactNode 
       {/* Sub Navigation - Pill Style */}
       <div className="border-b border-pink-200 bg-[#fef5fb]">
         <div className="max-w-[1600px] mx-auto px-6 py-3">
-          <nav className="inline-flex items-center gap-1 p-1.5 bg-pink-100/70 rounded-lg">
+          <nav className="inline-flex items-center gap-1 p-1 bg-white rounded-xl border border-slate-200 shadow-sm">
             {navItems.map((item) => {
               const isActive = currentPath === item.href
               const Icon = item.icon
@@ -137,13 +137,12 @@ export default function ResultsLayout({ children }: { children: React.ReactNode 
                 <Link
                   key={item.href}
                   href={`${basePath}${item.href}`}
-                  className={`flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-md transition-all ${
-                    isActive
-                      ? "bg-[#fef5fb] text-black shadow-sm"
-                      : "text-black hover:bg-white/70"
-                  }`}
+                  className={`flex items-center gap-2.5 px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 ${isActive
+                      ? "bg-slate-900 text-white shadow-sm"
+                      : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+                    }`}
                 >
-                  <Icon className="w-4 h-4 text-black" />
+                  <Icon className={`w-4 h-4 transition-colors ${isActive ? "text-white" : "text-slate-400 group-hover:text-slate-900"}`} />
                   {item.label}
                 </Link>
               )

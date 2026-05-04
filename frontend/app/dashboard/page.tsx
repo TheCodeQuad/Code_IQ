@@ -56,7 +56,7 @@ const statusConfig: Record<
 > = {
   completed: {
     label: "Completed",
-    color: "bg-green-100 text-green-700 border border-green-700",
+    color: "bg-purple-100 text-purple-600 border border-purple-200",
     icon: CheckCircle2,
   },
   pending: {
@@ -149,7 +149,7 @@ export default function DashboardPage() {
       setProcessedCode(code)
       // Remove the one-time code immediately so strict mode / refresh cannot reuse it.
       window.history.replaceState({}, document.title, "/dashboard")
-      
+
       authorizeGitHub(code).then((success) => {
         console.log("[GitHub OAuth] Authorization result:", success)
         if (success) {
@@ -233,27 +233,27 @@ export default function DashboardPage() {
             <span>Projects</span>
             <Badge className="ml-auto bg-foreground/10 text-foreground hover:bg-foreground/10 font-normal">{repos.length}</Badge>
           </Link>
-          
+
           <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 mt-6 px-3">
             Insights
           </div>
           <Link
             href="/dashboard/docs"
-            className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-muted-foreground hover:bg-purple-100 hover:text-black transition-all"
+            className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-muted-foreground hover:bg-purple-50 hover:text-black transition-all"
           >
             <FileText className="w-5 h-5 text-black" />
             <span>Documentation</span>
           </Link>
           <Link
             href="/dashboard/metrics"
-            className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-muted-foreground hover:bg-purple-100 hover:text-black transition-all"
+            className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-muted-foreground hover:bg-purple-50 hover:text-black transition-all"
           >
             <BarChart3 className="w-5 h-5 text-black" />
             <span>Metrics</span>
           </Link>
           <Link
             href="/dashboard/activity"
-            className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-muted-foreground hover:bg-purple-100 hover:text-black transition-all"
+            className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-muted-foreground hover:bg-purple-50 hover:text-black transition-all"
           >
             <Activity className="w-5 h-5 text-black" />
             <span>Activity</span>
@@ -287,9 +287,9 @@ export default function DashboardPage() {
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
-                className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-purple-100 transition-all w-full text-left"
+                className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-purple-50 transition-all w-full text-left"
               >
-                <div className="w-9 h-9 rounded-lg bg-purple-100 flex items-center justify-center shrink-0">
+                <div className="w-9 h-9 rounded-lg bg-purple-50 flex items-center justify-center shrink-0">
                   <User className="w-5 h-5 text-black" />
                 </div>
                 <div className="flex-1 min-w-0">
@@ -330,11 +330,11 @@ export default function DashboardPage() {
         {/* Header Container */}
         <div className="flex items-center justify-between mb-8">
           <div>
-            <h1 className="text-3xl font-bold text-black">Projects</h1>
+            <h1 className="text-3xl font-medium text-black">Projects</h1>
             <p className="text-sm text-muted-foreground mt-1">Manage and analyze your repositories</p>
           </div>
           <Link href="/dashboard/analysis/new">
-            <Button className="bg-black text-white hover:bg-purple-900 h-10 px-6 rounded-full text-sm font-medium shadow-sm transition-all hover:scale-105 active:scale-95">
+            <Button className="bg-black text-white hover:bg-slate-900 h-10 px-6 rounded-full text-sm font-medium shadow-sm transition-all hover:scale-105 active:scale-95">
               <Plus className="w-4 h-4 mr-2" />
               New Analysis
             </Button>
@@ -344,20 +344,20 @@ export default function DashboardPage() {
         {/* Stats Container */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
           {[
-            { icon: FolderGit2, label: "Total Projects", value: repos.length, bgColor: "bg-purple-100/80 dark:bg-purple-900/50", iconColor: "text-black" },
-            { icon: CheckCircle2, label: "Completed", value: completedCount, bgColor: "bg-purple-100/80 dark:bg-purple-900/50", iconColor: "text-black" },
-            { icon: Sparkles, label: "Avg. Score", value: avgScore ? `${avgScore}%` : "–", bgColor: "bg-purple-100/80 dark:bg-purple-900/50", iconColor: "text-black" },
-            { icon: Layers, label: "Total Files", value: totalFiles.toLocaleString(), bgColor: "bg-purple-100/80 dark:bg-purple-900/50", iconColor: "text-black" },
+            { icon: FolderGit2, label: "Total Projects", value: repos.length, bgColor: "bg-purple-200", iconColor: "text-black" },
+            { icon: CheckCircle2, label: "Completed", value: completedCount, bgColor: "bg-purple-200", iconColor: "text-black" },
+            { icon: Sparkles, label: "Avg. Score", value: avgScore ? `${avgScore}%` : "–", bgColor: "bg-purple-200", iconColor: "text-black" },
+            { icon: Layers, label: "Total Files", value: totalFiles.toLocaleString(), bgColor: "bg-purple-200", iconColor: "text-black" },
           ].map((stat) => (
             <Card key={stat.label} className="border-border/50 bg-white shadow-sm transition-colors">
-              <CardContent className="p-4">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 rounded-2xl bg-purple-200 flex items-center justify-center shadow-inner">
-                    <stat.icon className={`w-5 h-5 ${stat.iconColor}`} />
+              <CardContent className="p-3">
+                <div className="flex items-center gap-3">
+                  <div className={`w-10 h-10 rounded-xl ${stat.bgColor} flex items-center justify-center shadow-inner`}>
+                    <stat.icon className={`w-4.5 h-4.5 ${stat.iconColor}`} />
                   </div>
                   <div>
-                    <p className="text-2xl font-bold text-foreground tracking-tight">{stat.value}</p>
-                    <p className="text-sm font-medium text-muted-foreground">{stat.label}</p>
+                    <p className="text-2xl font-medium text-foreground tracking-tight">{stat.value}</p>
+                    <p className="text-sm font-normal text-muted-foreground">{stat.label}</p>
                   </div>
                 </div>
               </CardContent>
@@ -373,14 +373,14 @@ export default function DashboardPage() {
               placeholder="Search projects by name, language, or status..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-12 h-12 bg-white border-border/50 rounded-xl w-full text-base focus-visible:ring-1 focus-visible:ring-purple-600/20"
+              className="pl-12 h-12 bg-white border-border/50 rounded-xl w-full text-base focus-visible:ring-1 focus-visible:ring-purple-500/20"
             />
           </div>
           <div className="flex items-center gap-1 p-1 bg-white border border-border/50 rounded-xl">
             <button
               type="button"
               onClick={() => setView("grid")}
-              className={`p-2.5 rounded-lg transition-all ${view === "grid" ? "bg-black shadow-sm text-white" : "text-black hover:bg-purple-100"}`}
+              className={`p-2.5 rounded-lg transition-all ${view === "grid" ? "bg-black shadow-sm text-white" : "text-black hover:bg-purple-50"}`}
             >
               <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <rect x="3" y="3" width="7" height="7" rx="1" />
@@ -443,7 +443,7 @@ export default function DashboardPage() {
         {!loading && repos.length === 0 && !error && (
           <Card className="border-border/50 bg-white shadow-sm">
             <CardContent className="p-12 text-center">
-              <div className="w-16 h-16 rounded-2xl bg-purple-100 flex items-center justify-center mx-auto mb-4">
+              <div className="w-16 h-16 rounded-2xl bg-purple-50 flex items-center justify-center mx-auto mb-4">
                 <FolderGit2 className="w-8 h-8 text-black" />
               </div>
               <h3 className="text-xl font-semibold text-foreground mb-2">No projects yet</h3>
@@ -462,7 +462,7 @@ export default function DashboardPage() {
         {!loading && repos.length > 0 && filteredProjects.length === 0 && (
           <Card className="border-border/50 bg-white shadow-sm">
             <CardContent className="p-12 text-center">
-              <div className="w-16 h-16 rounded-2xl bg-purple-100 flex items-center justify-center mx-auto mb-4">
+              <div className="w-16 h-16 rounded-2xl bg-purple-50 flex items-center justify-center mx-auto mb-4">
                 <Search className="w-8 h-8 text-black" />
               </div>
               <h3 className="text-xl font-semibold text-foreground mb-2">No projects found</h3>
@@ -495,43 +495,63 @@ function RepoCard({
   const timeLabel = repo.completed_at
     ? new Date(repo.completed_at).toLocaleDateString()
     : repo.updated_at
-    ? new Date(repo.updated_at).toLocaleDateString()
-    : "–"
+      ? new Date(repo.updated_at).toLocaleDateString()
+      : "–"
 
   if (view === "list") {
     return (
-      <Card className="border border-border/50 bg-white hover:bg-gray-50 shadow-sm transition-all">
-        <CardContent className="p-4">
-          <div className="flex items-center gap-4">
-            <div className="w-10 h-10 rounded-lg bg-purple-100 flex items-center justify-center">
-              <FolderGit2 className="w-5 h-5 text-black" />
+      <Card className="border border-border/40 bg-white hover:bg-slate-50/50 shadow-sm transition-all group overflow-hidden">
+        <CardContent className="p-0">
+          <div className="flex items-center gap-6 px-6 py-4">
+            <div className="w-12 h-12 rounded-xl bg-purple-100 flex items-center justify-center shrink-0 border border-purple-200 group-hover:scale-110 transition-transform">
+              <FolderGit2 className="w-6 h-6 text-black" />
             </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <h3 className="font-medium text-foreground truncate">{repo.repo_name}</h3>
-                <div className={`w-2 h-2 rounded-full ${langColor}`} />
-                <span className="text-sm text-muted-foreground">{langLabel(repo.language)}</span>
+
+            <div className="flex-1 min-w-0 flex flex-col gap-1">
+              <div className="flex items-center gap-3">
+                <h3 className="font-medium text-slate-900 truncate text-base">{repo.repo_name}</h3>
+                <div className={`w-2 h-2 rounded-full ${langColor} shadow-sm`} />
+                <span className="text-xs font-normal text-slate-500 uppercase tracking-wider">{langLabel(repo.language)}</span>
               </div>
-              <div className="flex items-center gap-4 mt-0.5">
-                <span className="text-sm text-muted-foreground">{repo.file_count} files</span>
-                <span className="text-sm text-muted-foreground">{timeLabel}</span>
+              <div className="flex items-center gap-4 text-xs text-slate-400 font-medium">
+                <span className="flex items-center gap-1.5"><Layers className="w-3.5 h-3.5 text-black/40" /> {repo.file_count} files</span>
+                <span className="flex items-center gap-1.5"><Clock className="w-3.5 h-3.5 text-black/40" /> {timeLabel}</span>
               </div>
             </div>
-            <Badge className={`${status.color} font-normal`}>
-              <StatusIcon className="w-3 h-3 mr-1.5" />
-              {status.label}
-            </Badge>
-            {repo.overall_score != null && (
-              <div className="text-right">
-                <div className="text-xl font-semibold text-foreground">{Math.round(repo.overall_score)}%</div>
-                <div className="text-xs text-muted-foreground">Score</div>
+
+            <div className="hidden lg:flex flex-col gap-1.5 w-48 shrink-0">
+              <div className="flex items-center justify-between text-[10px] font-medium uppercase tracking-widest text-slate-400">
+                <span>Progress</span>
+                <span>{repo.progress_percent}%</span>
               </div>
-            )}
-            <Link href={`/dashboard/analysis/${repo.id}/results`}>
-              <Button variant="ghost" size="sm" className="h-9 w-9 p-0">
-                <ChevronRight className="w-4 h-4" />
-              </Button>
-            </Link>
+              <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-500 ${repo.status === "failed" ? "bg-red-500" : repo.status === "completed" ? "bg-black" : "bg-purple-500"
+                    }`}
+                  style={{ width: `${repo.progress_percent}%` }}
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-6 shrink-0">
+              <Badge className={`${status.color} font-medium text-[10px] uppercase tracking-widest px-3 py-1 rounded-lg border shadow-sm`}>
+                <StatusIcon className="w-3 h-3 mr-1.5" />
+                {status.label}
+              </Badge>
+
+              {repo.overall_score != null && (
+                <div className="text-center px-4 border-l border-slate-100">
+                  <div className="text-lg font-medium text-slate-900 leading-none">{Math.round(repo.overall_score)}%</div>
+                  <div className="text-[9px] font-medium text-slate-400 uppercase tracking-widest mt-1">Score</div>
+                </div>
+              )}
+
+              <Link href={`/dashboard/analysis/${repo.id}/results`}>
+                <Button variant="ghost" size="sm" className="h-10 w-10 p-0 rounded-full hover:bg-black hover:text-white transition-all">
+                  <ChevronRight className="w-5 h-5" />
+                </Button>
+              </Link>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -540,15 +560,15 @@ function RepoCard({
 
   // Grid card
   return (
-    <Card className="border border-border/50 bg-white hover:bg-gray-50 shadow-sm transition-all group hover:scale-[1.01]">
-      <CardContent className="p-5">
-        <div className="flex items-start justify-between mb-4">
+    <Card className="border border-border/50 bg-white shadow-sm transition-all group hover:scale-[1.02]">
+      <CardContent className="p-4">
+        <div className="flex items-start justify-between mb-2">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-purple-100 flex items-center justify-center">
               <FolderGit2 className="w-5 h-5 text-black" />
             </div>
             <div>
-              <h3 className="font-medium text-foreground flex items-center gap-2">
+              <h3 className="font-medium text-slate-900 flex items-center gap-2">
                 {repo.repo_name}
                 {isRunning && (
                   <span className="relative flex h-2 w-2">
@@ -559,13 +579,13 @@ function RepoCard({
               </h3>
               <div className="flex items-center gap-1.5 mt-0.5">
                 <div className={`w-2 h-2 rounded-full ${langColor}`} />
-                <span className="text-sm text-muted-foreground">{langLabel(repo.language)}</span>
+                <span className="text-xs font-normal text-slate-400 uppercase tracking-wider">{langLabel(repo.language)}</span>
               </div>
             </div>
           </div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm" className="h-8 w-8 p-0 opacity-0 group-hover:opacity-100 transition-opacity text-black hover:bg-purple-900">
+              <Button variant="ghost" size="sm" className="h-8 w-8 p-0 transition-all text-black hover:scale-110 active:scale-90">
                 <MoreVertical className="w-4 h-4" />
               </Button>
             </DropdownMenuTrigger>
@@ -577,7 +597,7 @@ function RepoCard({
                 </Link>
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => onGenerate(repo.id)}>
-                  <Play className="w-4 h-4 mr-2 text-black" />
+                <Play className="w-4 h-4 mr-2 text-black" />
                 Start Analysis
               </DropdownMenuItem>
               <DropdownMenuItem className="text-destructive" onClick={() => onDelete(repo.id)}>
@@ -589,39 +609,38 @@ function RepoCard({
         </div>
 
         <div className="flex items-center justify-between mb-4">
-          <Badge className={`${status.color} font-normal`}>
+          <Badge className={`${status.color} font-medium text-[10px] uppercase tracking-widest px-2.5 py-0.5 rounded-lg border shadow-sm`}>
             <StatusIcon className="w-3 h-3 mr-1.5" />
             {status.label}
           </Badge>
           {repo.overall_score != null && (
             <div className="flex items-center gap-1.5">
-              <Sparkles className="w-4 h-4 text-black" />
-              <span className="text-lg font-semibold text-foreground">{Math.round(repo.overall_score)}%</span>
+              <Sparkles className="w-3.5 h-3.5 text-black" />
+              <span className="text-base font-medium text-slate-900">{Math.round(repo.overall_score)}%</span>
             </div>
           )}
         </div>
 
         {/* Progress bar */}
-        <div className="mb-4">
-          <div className="flex items-center justify-between text-sm mb-2">
-            <span className="text-muted-foreground">
+        <div className="mb-3">
+          <div className="flex items-center justify-between text-[11px] mb-1.5 font-medium uppercase tracking-wider text-slate-400">
+            <span>
               {isRunning ? `Progress (${repo.current_agent ?? "…"})` : "Progress"}
             </span>
-            <span className="font-medium text-foreground">{repo.progress_percent}%</span>
+            <span>{repo.progress_percent}%</span>
           </div>
           <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
             <div
-              className={`h-full rounded-full transition-all duration-500 ${
-                repo.status === "failed" ? "bg-red-500" : repo.status === "completed" ? "bg-green-500" : "bg-gray-400"
-              }`}
+              className={`h-full rounded-full transition-all duration-500 ${repo.status === "failed" ? "bg-red-500" : repo.status === "completed" ? "bg-black" : "bg-purple-500"
+                }`}
               style={{ width: `${repo.progress_percent}%` }}
             />
           </div>
         </div>
 
-        <div className="flex items-center justify-between text-sm text-muted-foreground mb-5">
+        <div className="flex items-center justify-between text-xs font-medium text-slate-400 mb-3.5">
           <span className="flex items-center gap-1.5">
-            <Layers className="w-4 h-4 text-black" />
+            <Layers className="w-3.5 h-3.5 text-black/40" />
             {repo.file_count} files
           </span>
           <span>{timeLabel}</span>
@@ -629,7 +648,7 @@ function RepoCard({
 
         {repo.status === "completed" && (
           <Link href={`/dashboard/analysis/${repo.id}/results`}>
-            <Button className="w-full bg-black text-white hover:bg-purple-900 transition-colors">
+            <Button className="w-full bg-black text-white hover:bg-slate-900 transition-colors">
               View Results
               <ChevronRight className="w-4 h-4 ml-1" />
             </Button>
@@ -637,7 +656,7 @@ function RepoCard({
         )}
         {isRunning && (
           <Link href={`/dashboard/analysis/${repo.id}/pipeline`}>
-            <Button className="w-full bg-black text-white hover:bg-purple-900 transition-colors">
+            <Button className="w-full bg-black text-white hover:bg-slate-900 transition-colors">
               <Activity className="w-4 h-4 mr-2" />
               View Progress
             </Button>

@@ -52,8 +52,13 @@ const AgentVideoCard = ({ top, left, title, icon: Icon, tasks, videoSrc, status 
     >
       <div className={`absolute inset-0 rounded-3xl border-2 transition-colors duration-500 pointer-events-none z-20 ${isRunning ? 'border-[#e897c6] dark:border-[#e897c6]/80' : 'border-transparent'}`}></div>
 
-      {/* Reduced height Video frame */}
-      <div className="relative h-[95px] w-full bg-gradient-to-br from-pink-100 to-rose-200 dark:from-pink-900/40 dark:to-rose-900/40 p-1 flex-shrink-0">
+      {/* Header Background with Agent-specific colors */}
+      <div className={`relative h-[120px] w-full p-1 flex-shrink-0 transition-colors duration-500 ${
+        title.toLowerCase().includes('reader') ? 'bg-gradient-to-br from-blue-100 to-indigo-200 dark:from-blue-900/40 dark:to-indigo-900/40' :
+        title.toLowerCase().includes('searcher') ? 'bg-gradient-to-br from-purple-100 to-violet-200 dark:from-purple-900/40 dark:to-violet-900/40' :
+        title.toLowerCase().includes('verifier') ? 'bg-gradient-to-br from-indigo-100 to-blue-200 dark:from-indigo-900/40 dark:to-blue-900/40' :
+        'bg-gradient-to-br from-rose-100 to-pink-200 dark:from-rose-900/40 dark:to-pink-900/40'
+      }`}>
         <div className="w-full h-full rounded-t-[1.5rem] overflow-hidden bg-[#fff0f7] dark:bg-gray-800 relative">
           <video 
             ref={videoRef}
@@ -78,8 +83,18 @@ const AgentVideoCard = ({ top, left, title, icon: Icon, tasks, videoSrc, status 
         </div>
       </div>
 
-      <div className="bg-[#fff0f7] dark:bg-gray-800/80 py-2 px-4 flex items-center justify-center gap-2.5 border-b border-pink-200/50 dark:border-gray-700 h-[46px] flex-shrink-0">
-        <Icon className="h-[20px] w-[20px] text-[#e897c6] dark:text-pink-400" strokeWidth={2.5} />
+      <div className={`py-2 px-4 flex items-center justify-center gap-2.5 border-b h-[46px] flex-shrink-0 transition-colors duration-500 ${
+        title.toLowerCase().includes('reader') ? 'bg-blue-50/50 dark:bg-blue-900/20 border-blue-100 dark:border-blue-800' :
+        title.toLowerCase().includes('searcher') ? 'bg-purple-50/50 dark:bg-purple-900/20 border-purple-100 dark:border-purple-800' :
+        title.toLowerCase().includes('verifier') ? 'bg-indigo-50/50 dark:bg-indigo-900/20 border-indigo-100 dark:border-indigo-800' :
+        'bg-rose-50/50 dark:bg-rose-900/20 border-rose-100 dark:border-rose-800'
+      }`}>
+        <Icon className={`h-[20px] w-[20px] ${
+          title.toLowerCase().includes('reader') ? 'text-blue-500' :
+          title.toLowerCase().includes('searcher') ? 'text-purple-500' :
+          title.toLowerCase().includes('verifier') ? 'text-indigo-500' :
+          'text-rose-500'
+        }`} strokeWidth={2.5} />
         <h3 className="text-[1.05rem] font-semibold text-gray-800 dark:text-gray-100 tracking-tight">{title}</h3>
       </div>
 
@@ -265,48 +280,79 @@ export function AgentPipelineExecution({ pipelineState, repoId, selectedComponen
         <div className="flex flex-col xl:flex-row gap-6 lg:gap-8 w-full items-start flex-1 min-h-0 pt-2">
           
           {/* LEFT COLUMN: Two stacked Info Cards (retains dynamic props) */}
-          <div className="flex flex-col gap-6 w-full xl:w-[480px] shrink-0 z-20 h-full min-h-0 pl-10 md:pl-20 xl:pl-32">
+          <div className="flex flex-col gap-6 w-full xl:w-[380px] shrink-0 z-20 h-full min-h-0 pl-2 md:pl-4 xl:pl-6">
              
              {/* Info Card 1: Details */}
-             <div className="bg-[#faf0f7] dark:bg-gray-800 rounded-3xl p-6 ring-1 ring-black/5 dark:ring-white/10 relative overflow-hidden group hover:scale-[1.01] transition-transform duration-500 shrink-0 font-sans">
-                <div className="absolute inset-0 bg-transparent pointer-events-none"></div>
-
-                <p className="text-[11px] font-bold tracking-widest text-black uppercase mb-4 pl-1">Analyzing Target</p>
+             <div className="bg-white/80 backdrop-blur-sm rounded-[2rem] p-5 border border-pink-100/50 shadow-[0_8px_30px_rgb(0,0,0,0.04)] relative overflow-hidden group hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] transition-all duration-500 shrink-0 font-sans">
+                <div className="flex items-center justify-between mb-3 px-1">
+                   <div className="flex items-center gap-2">
+                      <div className="h-1.5 w-1.5 rounded-full bg-pink-500 animate-pulse"></div>
+                      <p className="text-[9px] font-black tracking-[0.2em] text-pink-500 uppercase">Live Analysis</p>
+                      <div className="h-1 w-1 rounded-full bg-pink-200"></div>
+                      <p className="text-[9px] font-bold text-slate-400 uppercase">{totalCount} Components</p>
+                   </div>
+                   <div className="flex items-center gap-1 px-2 py-0.5 bg-emerald-50 rounded-full border border-emerald-100">
+                      <div className="w-1 h-1 rounded-full bg-emerald-500 animate-pulse"></div>
+                      <span className="text-[9px] font-bold text-emerald-600">Stable Trace</span>
+                   </div>
+                </div>
                 
-                <h3 className="font-extrabold text-xl text-black mb-6 flex items-center gap-3">
-                  <span className="text-black truncate block" title={componentName}>{componentName}</span>
+                <h3 className="font-bold text-xl text-slate-900 mb-4 leading-tight">
+                   <span className="block truncate" title={componentName}>{componentName}</span>
                 </h3>
 
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between border-b border-black/5 dark:border-gray-700/50 pb-3">
-                    <span className="text-sm font-medium text-black/60 dark:text-gray-400">Component Type</span>
-                    <div className="flex items-center gap-1.5 text-sm font-bold text-gray-600 dark:text-gray-200">
-                      <div className="w-5 h-5 rounded bg-emerald-100 dark:bg-emerald-900/40 flex items-center justify-center text-emerald-600 dark:text-emerald-400 text-xs">
-                        {componentType === 'class' ? 'C' : componentType === 'method' ? 'M' : 'ƒ'}
-                      </div>
-                      {componentType.charAt(0).toUpperCase() + componentType.slice(1)}
+                <div className="space-y-3">
+                  {/* Compact Stats Grid */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="bg-slate-50/70 p-2 rounded-xl border border-slate-100 flex items-center justify-between">
+                      <span className="text-[10px] font-medium text-slate-500 uppercase">Type</span>
+                      <span className="text-[10px] font-bold text-slate-700 bg-white px-1.5 py-0.5 rounded border border-slate-200">{componentType}</span>
+                    </div>
+                    <div className="bg-slate-50/70 p-2 rounded-xl border border-slate-100 flex items-center justify-between">
+                      <span className="text-[10px] font-medium text-slate-500 uppercase">Retries</span>
+                      <span className="text-[10px] font-bold text-pink-600 bg-white px-1.5 py-0.5 rounded border border-slate-200">{currentIteration?.retryCount || 0}</span>
+                    </div>
+                    <div className="bg-slate-50/70 p-2 rounded-xl border border-slate-100 flex items-center justify-between">
+                      <span className="text-[10px] font-medium text-slate-500 uppercase">Speed</span>
+                      <span className="text-[10px] font-bold text-slate-700 bg-white px-1.5 py-0.5 rounded border border-slate-200">1.2s/avg</span>
+                    </div>
+                    <div className="bg-slate-50/70 p-2 rounded-xl border border-slate-100 flex items-center justify-between">
+                      <span className="text-[10px] font-medium text-slate-500 uppercase">Context</span>
+                      <span className="text-[10px] font-bold text-emerald-600 bg-white px-1.5 py-0.5 rounded border border-slate-200">Optimized</span>
                     </div>
                   </div>
 
-                  <div className="border-b border-black/5 dark:border-gray-700/50 pb-3">
-                    <span className="text-sm font-medium text-black/60 dark:text-gray-400 block mb-2">File Path</span>
-                    <span className="font-sans text-[11px] bg-black/5 dark:bg-gray-900 text-black/60 dark:text-gray-300 px-2 py-1.5 rounded-lg border border-black/5 dark:border-gray-700 w-full block break-all leading-relaxed" title={filePath}>
-                      {filePath}
-                    </span>
+                  <div className="space-y-1.5">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase pl-1 tracking-wider">Source Path</span>
+                    <div className="bg-slate-900/5 p-2 rounded-xl border border-slate-200/50 font-mono text-[10px] text-slate-500 break-all leading-tight relative overflow-hidden h-9 flex items-center">
+                      <div className="absolute left-0 top-0 bottom-0 w-1 bg-pink-400"></div>
+                      <span className="truncate pl-2 w-full" title={filePath}>{filePath}</span>
+                    </div>
                   </div>
 
                   <div className="pt-2">
-                    <div className="flex justify-between items-end mb-1.5">
-                      <span className="text-xs font-semibold text-black/60 dark:text-gray-400">Total Progress</span>
-                      <span className="text-xs font-bold text-emerald-600 dark:text-emerald-500 bg-emerald-100/50 dark:bg-emerald-900/30 px-2 py-0.5 rounded ">{completedCount}/{totalCount} components</span>
+                    <div className="flex justify-between items-baseline mb-2 px-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-black text-slate-800 uppercase tracking-widest">Queue Progress</span>
+                        <div className="h-1 w-1 rounded-full bg-slate-300"></div>
+                        <span className="text-[10px] font-bold text-slate-400">{progressPct}%</span>
+                      </div>
+                      <span className="text-[11px] font-black text-pink-600 bg-pink-50 px-2 py-0.5 rounded-lg border border-pink-100/50">
+                        {completedCount} <span className="text-pink-300 mx-0.5">/</span> {totalCount}
+                      </span>
                     </div>
-                    <div className="w-full bg-black/5 dark:bg-gray-700 rounded-full h-2">
-                      <div className="bg-gradient-to-r from-[#6ee7b7] to-[#34d399] h-2 rounded-full transition-all duration-1000" style={{ width: `${progressPct}%` }}></div>
+                    <div className="w-full bg-slate-100/50 rounded-xl h-4 p-1 border border-slate-200/50 backdrop-blur-sm relative overflow-hidden shadow-[inset_0_1px_2px_rgba(0,0,0,0.05)]">
+                      <div 
+                        className="bg-gradient-to-r from-slate-900 via-pink-600 to-rose-500 h-full rounded-lg transition-all duration-1000 relative overflow-hidden shadow-[0_0_10px_rgba(219,39,119,0.3)]" 
+                        style={{ width: `${progressPct}%` }}
+                      >
+                        <div className="absolute inset-0 bg-[linear-gradient(90deg,transparent_0%,rgba(255,255,255,0.2)_50%,transparent_100%)] animate-[shimmer_2s_infinite] w-[200%] translate-x-[-100%]"></div>
+                        <div className="absolute inset-0 bg-[linear-gradient(45deg,rgba(255,255,255,0.1)_25%,transparent_25%,transparent_50%,rgba(255,255,255,0.1)_50%,rgba(255,255,255,0.1)_75%,transparent_75%,transparent)] bg-[length:1rem_1rem]"></div>
+                      </div>
                     </div>
                   </div>
                 </div>
              </div>
-
              {/* Info Card 2: Terminal */}
              <TerminalLogs iteration={currentIteration} pipelineState={pipelineState} filePath={filePath} />
           </div>
@@ -344,48 +390,48 @@ export function AgentPipelineExecution({ pipelineState, repoId, selectedComponen
                   </defs>
                   
                   <g strokeWidth="2" fill="none" strokeDasharray="6 6">
-                    {/* Need context: Reader(320)->Searcher(680) */}
-                    <path d="M 320 95 L 680 95" markerEnd={pathNeedContext ? "url(#pe-arr-blue)" : "url(#pe-arr)"} className={pathNeedContext ? "stroke-blue-400 dark:stroke-blue-500" : "stroke-gray-300 dark:stroke-gray-600"} />
-                    {/* Context not found: Searcher(680)->Reader(320) */}
-                    <path d="M 680 150 L 320 150" markerEnd={pathContextNotFound ? "url(#pe-arr-red)" : "url(#pe-arr)"} className={pathContextNotFound ? "stroke-red-400 dark:stroke-red-500" : "stroke-gray-300 dark:stroke-gray-600"} />
-                    {/* Context found: Searcher(810, 265)->Writer(810, 370) */}
-                    <path d="M 810 265 L 810 370" markerEnd={pathContextFound ? "url(#pe-arr-green)" : "url(#pe-arr)"} className={pathContextFound ? "stroke-emerald-400 dark:stroke-emerald-500" : "stroke-gray-300 dark:stroke-gray-600"} />
+                    {/* Need context: Reader(280)->Searcher(640) */}
+                    <path d="M 280 95 L 640 95" markerEnd={pathNeedContext ? "url(#pe-arr-blue)" : "url(#pe-arr)"} className={pathNeedContext ? "stroke-blue-400 dark:stroke-blue-500" : "stroke-gray-300 dark:stroke-gray-600"} />
+                    {/* Context not found: Searcher(640)->Reader(280) */}
+                    <path d="M 640 150 L 280 150" markerEnd={pathContextNotFound ? "url(#pe-arr-red)" : "url(#pe-arr)"} className={pathContextNotFound ? "stroke-red-400 dark:stroke-red-500" : "stroke-gray-300 dark:stroke-gray-600"} />
+                    {/* Context found: Searcher(770, 265)->Writer(770, 370) */}
+                    <path d="M 770 265 L 770 370" markerEnd={pathContextFound ? "url(#pe-arr-green)" : "url(#pe-arr)"} className={pathContextFound ? "stroke-emerald-400 dark:stroke-emerald-500" : "stroke-gray-300 dark:stroke-gray-600"} />
                     {/* Context not needed: Reader(right bot) -> Writer(top left) */}
-                    <path d="M 320 240 L 680 420" markerEnd={pathContextNotNeeded ? "url(#pe-arr-blue)" : "url(#pe-arr)"} className={pathContextNotNeeded ? "stroke-blue-400 dark:stroke-blue-500" : "stroke-gray-300 dark:stroke-gray-600"} />
-                    {/* Docstring generated: Writer(680)->Verifier(320) */}
-                    <path d="M 680 420 L 320 420" markerEnd={pathDocstringGenerated ? "url(#pe-arr-blue)" : "url(#pe-arr)"} className={pathDocstringGenerated ? "stroke-blue-400 dark:stroke-blue-500" : "stroke-gray-300 dark:stroke-gray-600"} />
-                    {/* Needs Revision: Verifier(320)->Writer(680) */}
-                    <path d="M 320 480 L 680 480" markerEnd={pathNeedsRevision ? "url(#pe-arr-amber)" : "url(#pe-arr)"} className={pathNeedsRevision ? "stroke-amber-400 dark:stroke-amber-500" : "stroke-gray-300 dark:stroke-gray-600"} />
-                    {/* Needs more context: Verifier(190, 370)->Reader(190, 265) */}
-                    <path d="M 190 370 L 190 265" markerEnd={pathNeedsMoreContext ? "url(#pe-arr-indigo)" : "url(#pe-arr)"} className={pathNeedsMoreContext ? "stroke-indigo-400 dark:stroke-indigo-500" : "stroke-gray-300 dark:stroke-gray-600"} />
-                    {/* Docstring Inserted: Verifier(280, 595)->Docstring(380, 660) */}
-                    <path d="M 280 595 L 380 660" markerEnd={pathDocstringInserted ? "url(#pe-arr-green)" : "url(#pe-arr)"} className={pathDocstringInserted ? "stroke-emerald-400 dark:stroke-emerald-500" : "stroke-gray-300 dark:stroke-gray-600"} strokeWidth="2.5" strokeDasharray="8 8" />
+                    <path d="M 280 240 L 640 420" markerEnd={pathContextNotNeeded ? "url(#pe-arr-blue)" : "url(#pe-arr)"} className={pathContextNotNeeded ? "stroke-blue-400 dark:stroke-blue-500" : "stroke-gray-300 dark:stroke-gray-600"} />
+                    {/* Docstring generated: Writer(640)->Verifier(280) */}
+                    <path d="M 640 420 L 280 420" markerEnd={pathDocstringGenerated ? "url(#pe-arr-blue)" : "url(#pe-arr)"} className={pathDocstringGenerated ? "stroke-blue-400 dark:stroke-blue-500" : "stroke-gray-300 dark:stroke-gray-600"} />
+                    {/* Needs Revision: Verifier(280)->Writer(640) */}
+                    <path d="M 280 480 L 640 480" markerEnd={pathNeedsRevision ? "url(#pe-arr-amber)" : "url(#pe-arr)"} className={pathNeedsRevision ? "stroke-amber-400 dark:stroke-amber-500" : "stroke-gray-300 dark:stroke-gray-600"} />
+                    {/* Needs more context: Verifier(150, 370)->Reader(150, 265) */}
+                    <path d="M 150 370 L 150 265" markerEnd={pathNeedsMoreContext ? "url(#pe-arr-indigo)" : "url(#pe-arr)"} className={pathNeedsMoreContext ? "stroke-indigo-400 dark:stroke-indigo-500" : "stroke-gray-300 dark:stroke-gray-600"} />
+                    {/* Docstring Inserted: Verifier(240, 595)->Docstring(340, 660) */}
+                    <path d="M 240 595 L 340 660" markerEnd={pathDocstringInserted ? "url(#pe-arr-green)" : "url(#pe-arr)"} className={pathDocstringInserted ? "stroke-emerald-400 dark:stroke-emerald-500" : "stroke-gray-300 dark:stroke-gray-600"} strokeWidth="2.5" strokeDasharray="8 8" />
                   </g>
                 </svg>
 
                 {/* Specific Labels mapping perfectly to the edge paths */}
                 <div className="absolute inset-0 pointer-events-none z-10">
-                  <LabelBadge x={500} y={80} text="Need context" colorClass={pathNeedContext ? "text-blue-500" : "text-gray-400 dark:text-gray-500 font-normal"} />
-                  <LabelBadge x={500} y={135} text="Context not found" colorClass={pathContextNotFound ? "text-red-500" : "text-gray-400 dark:text-gray-500 font-normal"} />
-                  <LabelBadge x={890} y={317} text="Context found" colorClass={pathContextFound ? "text-emerald-500" : "text-gray-400 dark:text-gray-500 font-normal"} />
-                  <LabelBadge x={500} y={315} text="Context not needed" colorClass={pathContextNotNeeded ? "text-blue-500" : "text-gray-400 dark:text-gray-500 font-normal"} />
-                  <LabelBadge x={500} y={405} text="Docstring generated" colorClass={pathDocstringGenerated ? "text-blue-500" : "text-gray-400 dark:text-gray-500 font-normal"} />
-                  <LabelBadge x={500} y={465} text="Needs Revision" colorClass={pathNeedsRevision ? "text-amber-500" : "text-gray-400 dark:text-gray-500 font-normal"} />
-                  <LabelBadge x={105} y={317} text="Needs more context" colorClass={pathNeedsMoreContext ? "text-indigo-500" : "text-gray-400 dark:text-gray-500 font-normal"} />
-                  <LabelBadge x={300} y={625} text="Docstring Inserted" colorClass={pathDocstringInserted ? "text-emerald-500" : "text-gray-400 dark:text-gray-500 font-normal"} />
+                  <LabelBadge x={460} y={80} text="Need context" colorClass={pathNeedContext ? "text-blue-500" : "text-gray-400 dark:text-gray-500 font-normal"} />
+                  <LabelBadge x={460} y={135} text="Context not found" colorClass={pathContextNotFound ? "text-red-500" : "text-gray-400 dark:text-gray-500 font-normal"} />
+                  <LabelBadge x={850} y={317} text="Context found" colorClass={pathContextFound ? "text-emerald-500" : "text-gray-400 dark:text-gray-500 font-normal"} />
+                  <LabelBadge x={460} y={315} text="Context not needed" colorClass={pathContextNotNeeded ? "text-blue-500" : "text-gray-400 dark:text-gray-500 font-normal"} />
+                  <LabelBadge x={460} y={405} text="Docstring generated" colorClass={pathDocstringGenerated ? "text-blue-500" : "text-gray-400 dark:text-gray-500 font-normal"} />
+                  <LabelBadge x={460} y={465} text="Needs Revision" colorClass={pathNeedsRevision ? "text-amber-500" : "text-gray-400 dark:text-gray-500 font-normal"} />
+                  <LabelBadge x={65} y={317} text="Needs more context" colorClass={pathNeedsMoreContext ? "text-indigo-500" : "text-gray-400 dark:text-gray-500 font-normal"} />
+                  <LabelBadge x={260} y={625} text="Docstring Inserted" colorClass={pathDocstringInserted ? "text-emerald-500" : "text-gray-400 dark:text-gray-500 font-normal"} />
                 </div>
 
                 {/* Card 1: Reader Agent */}
                 <AgentVideoCard 
-                  top="40px" left="60px" 
+                  top="40px" left="20px" 
                   title="Reader agent" icon={Search} status={readerStatus}
-                  tasks={["Analyzing intent...", "Checking signatures", "Requesting context"]} 
+                  tasks={["Analyzing intent...", "Checking signatures"]} 
                   videoSrc="/Robot_Reads_Codebase_Video_Generated.mp4" 
                 />
 
                 {/* Card 2: Searcher Agent */}
                 <AgentVideoCard 
-                  top="40px" left="680px" 
+                  top="40px" left="640px" 
                   title="Searcher agent" icon={Folder} status={searcherStatus}
                   tasks={["Searching repo...", "Fetching context"]} 
                   videoSrc="/Robot_Searches_Codebase_for_Dependencies.mp4"
@@ -393,7 +439,7 @@ export function AgentPipelineExecution({ pipelineState, repoId, selectedComponen
 
                 {/* Card 3: Verifier Agent */}
                 <AgentVideoCard 
-                  top="370px" left="60px" 
+                  top="370px" left="20px" 
                   title="Verifier agent" icon={CheckCircle} status={verifierStatus}
                   tasks={["Reviewing output...", "Validating clarity..."]} 
                   videoSrc="/Robot_verifies_Codebase_Video_Generated.mp4" 
@@ -401,14 +447,14 @@ export function AgentPipelineExecution({ pipelineState, repoId, selectedComponen
 
                 {/* Card 4: Writer Agent */}
                 <AgentVideoCard 
-                  top="370px" left="680px" 
+                  top="370px" left="640px" 
                   title="Writer agent" icon={PenTool} status={writerStatus}
                   tasks={["Generating draft...", "Formatting output"]} 
                   videoSrc="/Robot_writes_Codebase_For_Dependencies.mp4" 
                 />
 
                 {/* Card 5: Docstring Inserted */}
-                <div className="group absolute top-[650px] left-[360px] w-[280px] bg-[#f9dbed] dark:bg-gray-800 rounded-full py-4 px-6 border border-pink-300 transition-all duration-500 hover:scale-105 hover:-translate-y-2 z-20 flex items-center justify-center gap-3">
+                <div className="group absolute top-[650px] left-[320px] w-[280px] bg-[#f9dbed] dark:bg-gray-800 rounded-full py-4 px-6 border border-pink-300 transition-all duration-500 hover:scale-105 hover:-translate-y-2 z-20 flex items-center justify-center gap-3">
                   <div className={`absolute inset-0 rounded-full border opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none ${insertionStatus === 'completed' ? 'border-green-300' : 'border-gray-300'}`}></div>
                   <div className={`rounded-full p-2.5 shadow-[2px_2px_4px_rgba(0,0,0,0.1)] transition-all duration-300 group-hover:scale-110 group-hover:rotate-12 flex-shrink-0 ${insertionStatus === 'completed' ? 'bg-green-500 shadow-[0_0_15px_rgba(34,197,94,0.5)]' : insertionStatus === 'running' ? 'bg-blue-500 animate-pulse' : 'bg-gray-400'}`}>
                     <Check className="h-[22px] w-[22px] text-white" strokeWidth={3} />
@@ -418,17 +464,13 @@ export function AgentPipelineExecution({ pipelineState, repoId, selectedComponen
 
                 {/* Final Pipeline Actions */}
                 {isPipelineCompleted && (
-                  <div className="absolute bottom-[20px] right-[-100px] flex gap-4 z-40 bg-white/95 dark:bg-gray-900/95 backdrop-blur-md px-6 py-4 rounded-full border border-gray-200 dark:border-gray-700">
-                    <Link href={`/dashboard/analysis/${repoId}/results/graph`}>
-                      <Button variant="outline" className="border-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 rounded-full px-6 py-5 text-[15px] font-semibold transition-all hover:scale-105">
-                        View Graph
-                        <ChevronRight className="w-5 h-5 ml-1.5" />
-                      </Button>
-                    </Link>
+                  <div className="absolute bottom-[30px] right-[80px] z-40 animate-in fade-in slide-in-from-bottom-4 duration-700">
                     <Link href={`/dashboard/analysis/${repoId}/results`}>
-                      <Button className="bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white rounded-full px-6 py-5 text-[15px] font-semibold transition-all hover:scale-105">
-                        View Results
-                        <ArrowRight className="w-5 h-5 ml-1.5" />
+                      <Button className="bg-slate-900 hover:bg-slate-800 text-white rounded-2xl px-8 py-6 text-[14px] font-black tracking-[0.1em] shadow-[0_15px_35px_rgba(15,23,42,0.25)] transition-all hover:scale-105 active:scale-95 flex items-center gap-4 group">
+                        <span className="opacity-90">VIEW RESULTS</span>
+                        <div className="bg-emerald-500 rounded-lg p-1.5 shadow-[0_0_15px_rgba(16,185,129,0.4)] group-hover:rotate-90 transition-transform duration-500">
+                           <ChevronRight className="w-4 h-4 text-white" strokeWidth={4} />
+                        </div>
                       </Button>
                     </Link>
                   </div>

@@ -327,27 +327,27 @@ export default function NewAnalysisPage() {
                     <button
                       type="button"
                       onClick={() => setUploadMethod("upload")}
-                      className={`p-3 rounded-lg border transition-all text-center ${
+                      className={`py-2.5 px-4 rounded-xl border-2 transition-all text-center shadow-sm ${
                         uploadMethod === "upload"
-                          ? "border-foreground/30 bg-secondary"
-                          : "border-border hover:border-foreground/20"
+                          ? "border-black bg-purple-100 shadow-md scale-[1.02]"
+                          : "border-gray-200 bg-gray-50/80 hover:border-gray-300 hover:bg-gray-50"
                       }`}
                     >
-                      <Upload className="w-5 h-5 mx-auto mb-1.5 text-black" />
-                      <p className="text-sm font-medium text-foreground">Upload ZIP</p>
-                      <p className="text-xs text-muted-foreground">Upload a ZIP file</p>
+                      <Upload className="w-5 h-5 mx-auto mb-1 text-black" />
+                      <p className="text-sm font-semibold text-foreground">Upload ZIP</p>
+                      <p className="text-xs text-muted-foreground">Local codebase</p>
                     </button>
                     <button
                       type="button"
                       onClick={() => setUploadMethod("git")}
-                      className={`p-3 rounded-lg border transition-all text-center ${
+                      className={`py-2.5 px-4 rounded-xl border-2 transition-all text-center shadow-sm ${
                         uploadMethod === "git"
-                          ? "border-foreground/30 bg-secondary"
-                          : "border-border hover:border-foreground/20"
+                          ? "border-black bg-purple-100 shadow-md scale-[1.02]"
+                          : "border-gray-200 bg-gray-50/80 hover:border-gray-300 hover:bg-gray-50"
                       }`}
                     >
-                      <GitBranch className="w-5 h-5 mx-auto mb-1.5 text-black" />
-                      <p className="text-sm font-medium text-foreground">Git Repository</p>
+                      <GitBranch className="w-5 h-5 mx-auto mb-1 text-black" />
+                      <p className="text-sm font-semibold text-foreground">Git Repository</p>
                       <p className="text-xs text-muted-foreground">Clone from URL</p>
                     </button>
                     <button
@@ -359,15 +359,22 @@ export default function NewAnalysisPage() {
                         }
                       }}
                       disabled={!isGitHubConnected}
-                      className={`p-3 rounded-lg border transition-all text-center ${
+                      className={`py-2.5 px-4 rounded-xl border-2 transition-all text-center shadow-sm relative ${
                         isGitHubConnected
-                          ? "border-border hover:border-foreground/20"
-                          : "border-border opacity-50 cursor-not-allowed"
+                          ? "border-emerald-500/30 bg-emerald-50/50 hover:border-emerald-500/50 hover:bg-emerald-50"
+                          : "border-amber-200 bg-amber-50/50 opacity-60 cursor-not-allowed"
                       }`}
                     >
-                      <Github className="w-5 h-5 mx-auto mb-1.5 text-black" />
-                      <p className="text-sm font-medium text-foreground">GitHub Connected</p>
-                      <p className="text-xs text-muted-foreground">{isGitHubConnected ? "Select from repos" : "Connect first"}</p>
+                      {isGitHubConnected && (
+                        <div className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-emerald-500 border-2 border-white flex items-center justify-center shadow-sm">
+                          <Check className="w-3 h-3 text-white" />
+                        </div>
+                      )}
+                      <Github className={`w-5 h-5 mx-auto mb-1 ${isGitHubConnected ? "text-emerald-600" : "text-black"}`} />
+                      <p className={`text-sm font-semibold ${isGitHubConnected ? "text-emerald-700" : "text-foreground"}`}>GitHub Account</p>
+                      <p className={`text-xs ${isGitHubConnected ? "text-emerald-600/70" : "text-muted-foreground"}`}>
+                        {isGitHubConnected ? "Connected & Ready" : "Connect first"}
+                      </p>
                     </button>
                   </div>
 
@@ -440,7 +447,7 @@ export default function NewAnalysisPage() {
               </Card>
 
               {/* Graphs-only Mode Highlight */}
-              <Card className="border-pink-200 bg-white">
+              <Card className="border-border bg-white">
                 <CardHeader className="pb-3">
                   <div className="flex items-start justify-between gap-3">
                     <div>
@@ -449,14 +456,14 @@ export default function NewAnalysisPage() {
                         Skip doc generation and evaluation; build graphs only
                       </CardDescription>
                     </div>
-                    <span className="text-[11px] font-semibold uppercase tracking-wider text-[#dc2d98]">New</span>
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-black opacity-70">New</span>
                   </div>
                 </CardHeader>
                 <CardContent>
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-white border border-pink-200 flex items-center justify-center">
-                        <Network className="w-4 h-4 text-[#dc2d98]" />
+                      <div className="w-9 h-9 rounded-lg bg-purple-100 flex items-center justify-center">
+                        <Network className="w-4 h-4 text-black" />
                       </div>
                       <div>
                         <p className="text-sm font-medium text-foreground">Generate graphs only</p>
@@ -541,12 +548,12 @@ export default function NewAnalysisPage() {
                 </CardHeader>
                 <CardContent className="space-y-3 pt-0">
                   {config.graphsOnly && (
-                    <div className="flex items-center justify-between gap-4 rounded-xl border border-pink-200 bg-white px-4 py-4">
+                    <div className="flex items-center justify-between gap-4 rounded-xl border border-purple-100 bg-white px-4 py-4">
                       <div>
-                        <p className="text-sm font-semibold text-[#dc2d98]">Graphs-only mode</p>
+                        <p className="text-sm font-semibold text-black">Graphs-only mode</p>
                         <p className="text-xs text-muted-foreground">Docs + evaluation skipped</p>
                       </div>
-                      <span className="rounded-full bg-pink-100 px-3 py-1 text-xs font-semibold text-[#dc2d98]">
+                      <span className="rounded-full bg-purple-100 px-3 py-1 text-xs font-semibold text-black">
                         Graphs
                       </span>
                     </div>
@@ -596,11 +603,7 @@ export default function NewAnalysisPage() {
                   </div>
 
                   <Button
-                    className={`w-full mt-3 h-9 text-sm ${
-                      config.graphsOnly
-                        ? "bg-[#dc2d98] text-white hover:bg-[#c61f83]"
-                        : "bg-black text-white hover:bg-purple-900"
-                    }`}
+                    className="w-full mt-3 h-9 text-sm bg-black text-white hover:bg-purple-900"
                     onClick={handleStartAnalysis}
                     disabled={selectedLanguages.length === 0 || isAnalyzing || (uploadMethod === "git" && !repoUrl.trim())}
                   >

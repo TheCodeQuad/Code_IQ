@@ -22,6 +22,7 @@ import {
   RefreshCw,
   Lock,
   Globe,
+  Code2,
 } from "lucide-react"
 import { useGitHub } from "@/hooks/use-github"
 
@@ -212,7 +213,7 @@ export function GitHubRepositorySelector({
 
   const selectorPanel = (
     <>
-      <div className="px-4 py-2 border-b border-[#d0d7de] bg-gradient-to-r from-[#f6f8fa] via-white to-[#eef4ff]">
+      <div className="px-4 py-2 bg-transparent">
         <div className="flex items-center justify-between gap-3">
           <h2 className="flex items-center gap-2 text-xl font-semibold text-[#24292f]">
             <span className="flex h-6 w-6 items-center justify-center rounded-md bg-[#24292f] text-white">
@@ -221,7 +222,7 @@ export function GitHubRepositorySelector({
             Select GitHub Repository
           </h2>
           {isConnected && (
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-[#dafbe1] border border-[#1f883d33] px-3 py-1 text-xs font-medium text-[#1a7f37]">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-black px-3 py-1 text-xs font-medium text-white">
               <CheckCircle2 className="w-3.5 h-3.5" />
               Connected
             </span>
@@ -236,7 +237,7 @@ export function GitHubRepositorySelector({
           <span className="inline-flex items-center rounded-full bg-white border border-[#d0d7de] px-2.5 py-1 text-xs font-medium text-[#24292f]">
             {repositories.length} total repos
           </span>
-          <span className="inline-flex items-center rounded-full bg-[#dafbe1] border border-[#1f883d33] px-2.5 py-1 text-xs font-medium text-[#1a7f37]">
+          <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
             {installedCount} app installed
           </span>
           <button
@@ -277,7 +278,7 @@ export function GitHubRepositorySelector({
           </div>
         ) : (
           <div className="h-full grid grid-cols-1 xl:grid-cols-[360px_minmax(0,1fr)]">
-            <aside className="border-r border-[#d0d7de] bg-[#f6f8fa] min-h-0 flex flex-col">
+            <aside className="border-r border-[#f3e8f2] bg-transparent min-h-0 flex flex-col">
               <div className="p-2.5 border-b border-[#d8dee4] space-y-2">
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#6e7781]" />
@@ -299,7 +300,7 @@ export function GitHubRepositorySelector({
                 )}
               </div>
 
-              <div className="min-h-0 overflow-y-auto p-2 space-y-1.5">
+              <div className="min-h-0 overflow-y-auto p-3 space-y-3">
                 {filteredRepos.length === 0 ? (
                   <p className="text-center text-sm text-muted-foreground py-8">
                     No repositories found
@@ -313,10 +314,10 @@ export function GitHubRepositorySelector({
                         key={repo.github_repo_id}
                         type="button"
                         onClick={() => setSelectedRepo(repo)}
-                        className={`w-full text-left rounded-lg border p-2.5 transition-all ${
+                        className={`w-full text-left rounded-xl border-2 p-3 transition-all ${
                           isActive
-                            ? "border-[#54aeff] bg-[#ddf4ff] shadow-sm"
-                            : "border-[#d0d7de] bg-white hover:border-[#8c959f] hover:bg-[#f6f8fa]"
+                            ? "border-slate-900 bg-white shadow-lg -translate-y-0.5"
+                            : "border-slate-200 bg-white hover:border-slate-400"
                         }`}
                       >
                         <div className="flex items-center justify-between gap-2">
@@ -332,7 +333,24 @@ export function GitHubRepositorySelector({
                         </p>
                         <div className="mt-2 flex items-center gap-2 flex-wrap">
                           {repo.language && (
-                            <Badge variant="secondary" className="text-[10px] bg-[#eaeef2] text-[#24292f]">
+                            <Badge 
+                              variant="secondary" 
+                              className={`text-[10px] border-none ${
+                                repo.language.toLowerCase() === 'python' ? 'bg-yellow-100 text-yellow-800' :
+                                repo.language.toLowerCase() === 'javascript' ? 'bg-orange-100 text-orange-700' :
+                                repo.language.toLowerCase() === 'typescript' ? 'bg-red-100 text-red-700' :
+                                repo.language.toLowerCase() === 'java' ? 'bg-blue-100 text-blue-700' :
+                                repo.language.toLowerCase() === 'go' ? 'bg-cyan-100 text-cyan-700' :
+                                repo.language.toLowerCase() === 'rust' ? 'bg-rose-100 text-rose-700' :
+                                repo.language.toLowerCase() === 'c++' ? 'bg-indigo-100 text-indigo-700' :
+                                repo.language.toLowerCase() === 'c' ? 'bg-slate-100 text-slate-700' :
+                                repo.language.toLowerCase() === 'ruby' ? 'bg-pink-100 text-pink-700' :
+                                repo.language.toLowerCase() === 'php' ? 'bg-violet-100 text-violet-700' :
+                                repo.language.toLowerCase() === 'swift' ? 'bg-orange-100 text-orange-800' :
+                                repo.language.toLowerCase() === 'kotlin' ? 'bg-purple-100 text-purple-700' :
+                                'bg-slate-100 text-slate-700'
+                              }`}
+                            >
                               {repo.language}
                             </Badge>
                           )}
@@ -345,7 +363,7 @@ export function GitHubRepositorySelector({
                           <span
                             className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${
                               repo.app_installed
-                                ? "bg-[#dafbe1] text-[#1a7f37]"
+                                ? "bg-slate-100 text-slate-700"
                                 : "bg-[#fff8c5] text-[#9a6700]"
                             }`}
                           >
@@ -359,7 +377,7 @@ export function GitHubRepositorySelector({
               </div>
             </aside>
 
-            <section className="min-h-0 overflow-y-auto bg-white">
+            <section className="min-h-0 overflow-y-auto bg-transparent p-4 pb-20">
               {!selectedRepo ? (
                 <div className="h-full flex items-center justify-center px-8">
                   <p className="text-slate-500">
@@ -367,129 +385,132 @@ export function GitHubRepositorySelector({
                   </p>
                 </div>
               ) : (
-                  <div className="h-full flex flex-col p-4">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="min-w-0">
-                          <h3 className="text-xl font-semibold text-[#24292f] truncate leading-tight">
-                        {selectedRepo.full_name}
-                      </h3>
-                      <div className="mt-2.5 flex items-center gap-2 text-[11px]">
-                        <span className="inline-flex items-center gap-1 rounded-full border border-[#d0d7de] bg-[#f6f8fa] px-2.5 py-1 text-[#57606a]">
-                          {selectedRepo.private ? <Lock className="w-2.5 h-2.5" /> : <Globe className="w-2.5 h-2.5" />}
+                  <div className="h-auto flex flex-col p-6 max-w-3xl mx-auto w-full bg-white rounded-xl border border-slate-200 shadow-sm">
+                    <div className="flex items-start justify-between gap-6">
+                      <div className="space-y-2">
+                        <h3 className="text-2xl font-bold text-[#24292f] tracking-tight">
+                          {selectedRepo.full_name.split('/')[1]}
+                        </h3>
+                        <p className="text-xs text-muted-foreground flex items-center gap-2">
+                          <Github className="w-3.5 h-3.5" />
+                          {selectedRepo.full_name}
+                        </p>
+                      </div>
+                      <div className="flex flex-col items-end gap-2">
+                        <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${selectedRepo.private ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                          {selectedRepo.private ? 'Private' : 'Public'}
+                        </span>
+                        <a
+                          href={selectedRepo.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs font-medium text-blue-600 hover:underline flex items-center gap-1.5"
+                        >
+                          View on GitHub <ExternalLink className="w-3.5 h-3.5" />
+                        </a>
+                      </div>
+                    </div>
+
+                    <p className="mt-4 text-slate-600 leading-relaxed text-xs max-w-2xl">
+                      {selectedRepo.description || "No description provided for this repository."}
+                    </p>
+
+                    <div className="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="bg-blue-50/50 rounded-lg border border-blue-100 p-3.5 shadow-sm transition-all hover:bg-blue-50">
+                        <div className="flex items-center gap-2.5 mb-1.5 text-blue-600">
+                          <Code2 className="w-3.5 h-3.5" />
+                          <span className="text-[10px] font-bold uppercase tracking-wider">Language</span>
+                        </div>
+                        <p className="text-base font-medium text-slate-900">
+                          {selectedRepo.language || "Not specified"}
+                        </p>
+                      </div>
+                      <div className="bg-amber-50/50 rounded-lg border border-amber-100 p-3.5 shadow-sm transition-all hover:bg-amber-50">
+                        <div className="flex items-center gap-2.5 mb-1.5 text-amber-600">
+                          <Star className="w-3.5 h-3.5 fill-amber-600/20" />
+                          <span className="text-[10px] font-bold uppercase tracking-wider">Stars</span>
+                        </div>
+                        <p className="text-base font-medium text-slate-900">
+                          {selectedRepo.stars ?? 0}
+                        </p>
+                      </div>
+                      <div className="bg-slate-50 rounded-lg border border-slate-200 p-3.5 shadow-sm transition-all hover:bg-slate-100">
+                        <div className="flex items-center gap-2.5 mb-1.5 text-slate-600">
+                          <Globe className="w-3.5 h-3.5" />
+                          <span className="text-[10px] font-bold uppercase tracking-wider">Visibility</span>
+                        </div>
+                        <p className="text-base font-medium text-slate-900">
                           {selectedRepo.private ? "Private" : "Public"}
-                        </span>
-                        <span className="inline-flex items-center gap-1 rounded-full border border-[#d0d7de] bg-[#f6f8fa] px-2.5 py-1 text-[#57606a]">
-                          Owner {selectedRepo.owner}
-                        </span>
-                      </div>
-                      <a
-                        href={selectedRepo.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 mt-1.5 text-sm text-[#0969da] hover:text-[#0550ae]"
-                      >
-                        Open on GitHub
-                        <ExternalLink className="w-3.5 h-3.5" />
-                      </a>
-                    </div>
-                    {selectedRepo.private && (
-                      <Badge variant="outline" className="text-xs">
-                        Private
-                      </Badge>
-                    )}
-                  </div>
-
-                  <p className="mt-2.5 text-[#57606a] leading-relaxed min-h-8 text-xs max-w-4xl">
-                    {selectedRepo.description || "No description provided for this repository."}
-                  </p>
-
-                  <div className="mt-4 grid sm:grid-cols-3 gap-2">
-                    <div className="rounded-lg border border-[#d0d7de] bg-[#f6f8fa] p-2.5">
-                      <p className="text-xs text-[#57606a]">Language</p>
-                      <p className="mt-1 text-xs font-semibold text-[#24292f]">
-                        {selectedRepo.language || "Not specified"}
-                      </p>
-                    </div>
-                    <div className="rounded-lg border border-[#d0d7de] bg-[#f6f8fa] p-2.5">
-                      <p className="text-xs text-[#57606a]">Stars</p>
-                      <p className="mt-1 text-xs font-semibold text-[#24292f]">
-                        {selectedRepo.stars ?? 0}
-                      </p>
-                    </div>
-                    <div className="rounded-lg border border-[#d0d7de] bg-[#f6f8fa] p-2.5">
-                      <p className="text-xs text-[#57606a]">Owner</p>
-                      <p className="mt-1 text-xs font-semibold text-[#24292f]">
-                        {selectedRepo.owner}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="mt-4 rounded-lg border border-[#d0d7de] bg-gradient-to-br from-white via-[#f6f8fa] to-[#eef4ff] p-3.5">
-                    {selectedRepo.app_installed ? (
-                      <div className="space-y-4">
-                        <div className="inline-flex items-center gap-1.5 rounded-full border border-[#1f883d33] bg-[#dafbe1] px-3 py-1 text-xs font-medium text-[#1a7f37]">
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                          GitHub App Installed
-                        </div>
-                        <p className="text-sm text-[#57606a]">
-                          This repository is ready to clone and start analysis.
                         </p>
-                        <Button
-                          size="lg"
-                          onClick={() => handleCloneRepository(selectedRepo)}
-                          disabled={isCloning}
-                          className="gap-2 h-8 px-4 text-xs bg-[#1f883d] hover:bg-[#1a7f37] text-white"
-                        >
-                          {isCloning && cloningRepoId === selectedRepo.github_repo_id ? (
-                            <>
-                              <Loader2 className="w-4 h-4 animate-spin" />
-                              Cloning repository...
-                            </>
-                          ) : (
-                            <>
-                              <Download className="w-4 h-4" />
-                              Clone this repository
-                            </>
-                          )}
-                        </Button>
                       </div>
-                    ) : (
-                      <div className="space-y-4">
-                        <div className="inline-flex items-center gap-1.5 rounded-full border border-[#9a670033] bg-[#fff8c5] px-3 py-1 text-xs font-medium text-[#9a6700]">
-                          <AlertCircle className="w-3.5 h-3.5" />
-                          GitHub App Not Installed
-                        </div>
-                        <p className="text-sm text-[#57606a]">
-                          Install the app for this repository to enable secure clone access.
-                        </p>
-                        <Button
-                          size="lg"
-                          variant="outline"
-                          onClick={() => handleInstallApp(selectedRepo)}
-                          disabled={installingRepoId === selectedRepo.github_repo_id}
-                          className="gap-2 h-8 px-4 text-xs border-[#d0d7de] text-[#24292f] hover:bg-[#f6f8fa]"
-                        >
-                          {installingRepoId === selectedRepo.github_repo_id ? (
-                            <>
-                              <Loader2 className="w-4 h-4 animate-spin" />
-                              Opening GitHub...
-                            </>
-                          ) : (
-                            <>
-                              <Github className="w-4 h-4" />
-                              Install App for this repo
-                            </>
-                          )}
-                        </Button>
-                      </div>
-                    )}
-                  </div>
+                    </div>
 
-                  <div className="mt-auto pt-6 flex justify-end">
-                    <Button variant="outline" onClick={handleClose}>
-                      {embedded ? "Back" : "Close"}
-                    </Button>
-                  </div>
+                    <div className="mt-6 bg-white/60 rounded-xl border border-border p-5 backdrop-blur-sm shadow-sm">
+                      {selectedRepo.app_installed ? (
+                        <div className="flex flex-col sm:flex-row items-center justify-between gap-6">
+                          <div className="space-y-1.5">
+                            <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-slate-900 text-white text-[10px] font-bold uppercase tracking-wide">
+                              <CheckCircle2 className="w-3 h-3" />
+                              App Ready
+                            </div>
+                            <p className="text-xs text-slate-600">
+                              Repository access confirmed.
+                            </p>
+                          </div>
+                          <Button
+                            size="lg"
+                            onClick={() => handleCloneRepository(selectedRepo)}
+                            disabled={isCloning}
+                            className="bg-[#dc2d98] hover:bg-[#c61f83] text-white px-7 py-5 h-11 rounded-lg font-medium shadow-md shadow-pink-500/10 transition-all hover:scale-105 active:scale-95 text-sm"
+                          >
+                            {isCloning && cloningRepoId === selectedRepo.github_repo_id ? (
+                              <>
+                                <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                                Cloning...
+                              </>
+                            ) : (
+                              <>
+                                <Download className="w-4 h-4 mr-2" />
+                                Clone & Analyze
+                              </>
+                            )}
+                          </Button>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col sm:flex-row items-center justify-between gap-6">
+                          <div className="space-y-1.5">
+                            <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-amber-500 text-white text-[10px] font-bold uppercase tracking-wide">
+                              <AlertCircle className="w-3 h-3" />
+                              Action Required
+                            </div>
+                            <p className="text-xs text-slate-600">
+                              Install the GitHub App.
+                            </p>
+                          </div>
+                          <Button
+                            size="lg"
+                            variant="outline"
+                            onClick={() => handleInstallApp(selectedRepo)}
+                            disabled={installingRepoId === selectedRepo.github_repo_id}
+                            className="border-2 border-slate-900 text-slate-900 font-bold hover:bg-slate-900 hover:text-white rounded-lg transition-all text-sm h-11 px-6"
+                          >
+                            {installingRepoId === selectedRepo.github_repo_id ? (
+                              <>
+                                <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                                Opening...
+                              </>
+                            ) : (
+                              <>
+                                <Github className="w-4 h-4 mr-2" />
+                                Install App
+                              </>
+                            )}
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+
+
                 </div>
               )}
             </section>
@@ -501,7 +522,7 @@ export function GitHubRepositorySelector({
 
   return (
     embedded ? (
-      <div className="w-full h-full min-h-0 overflow-hidden bg-white">
+      <div className="w-full h-full min-h-0 overflow-hidden bg-transparent">
         {selectorPanel}
       </div>
     ) : (

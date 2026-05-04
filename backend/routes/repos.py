@@ -337,6 +337,8 @@ async def delete_repo(repo_id: str):
     # Remove all matching clone directories before deleting DB metadata.
     cleanup_errors: list[str] = []
     removed_paths: list[str] = []
+
+    # 1. Clean up clone directories
     for path in unique_dirs:
         if not path.is_dir():
             continue
@@ -344,13 +346,44 @@ async def delete_repo(repo_id: str):
             shutil.rmtree(str(path), onerror=_handle_remove_readonly)
             removed_paths.append(str(path))
         except Exception as exc:
-            cleanup_errors.append(f"{path}: {exc}")
+            cleanup_errors.append(f"Clone dir {path}: {exc}")
+
+    # 2. Clean up artifacts (navigator_output, agent_output, validation)
+    if repo_name:
+        artifact_dirs = [
+            DATA_ROOT / "intermediate" / "navigator_output",
+            DATA_ROOT / "intermediate" / "agent_output" / "reader",
+            DATA_ROOT / "intermediate" / "agent_output" / "writer",
+            DATA_ROOT / "validation",
+        ]
+        
+        for base_dir in artifact_dirs:
+            if not base_dir.exists():
+                continue
+            
+            # Delete repo-name-specific subdirectories
+            target_sub = base_dir / repo_name
+            if target_sub.is_dir():
+                try:
+                    shutil.rmtree(str(target_sub), onerror=_handle_remove_readonly)
+                    removed_paths.append(str(target_sub))
+                except Exception as exc:
+                    cleanup_errors.append(f"Artifact dir {target_sub}: {exc}")
+
+            # Delete files starting with repo_name (e.g., dag_repoName.json, repoName_timestamp.json)
+            try:
+                for item in base_dir.iterdir():
+                    if item.is_file() and (repo_name in item.name or repo_id in item.name):
+                        item.unlink()
+                        removed_paths.append(str(item))
+            except Exception as exc:
+                cleanup_errors.append(f"Artifact cleanup in {base_dir}: {exc}")
 
     if cleanup_errors:
         raise HTTPException(
             status_code=500,
             detail={
-                "message": "Failed to delete repository files; metadata was not removed",
+                "message": "Partial failure deleting repository files; metadata was not removed",
                 "errors": cleanup_errors,
             },
         )
@@ -451,7 +484,7 @@ def _run_pipeline_thread(
             _publish_pipeline_event(
                 repo_id,
                 {
-                    "event_type": "pipeline_progress",
+                    "event_type": "pipeline-completed",
                     "agent": "pipeline",
                     "status": "completed",
                     "progress_percent": 100,

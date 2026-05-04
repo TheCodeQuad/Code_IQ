@@ -29,6 +29,7 @@ from backend.routes.repos import router as repos_router
 from backend.routes.github_routes import router as github_router
 from backend.routes.analysis_routes import router as analysis_router
 from backend.routes.graphs import router as graphs_router
+from backend.routes.agents import router as agents_router
 
 # ============================================================================
 # APP LIFESPAN (startup / shutdown)
@@ -74,7 +75,8 @@ app.add_middleware(
 app.include_router(repos_router)
 app.include_router(github_router)
 app.include_router(analysis_router)
-app.include_router(graphs_router, prefix="/api")
+app.include_router(graphs_router)
+app.include_router(agents_router)
 
 # ============================================================================
 # OUTPUT DIRECTORY

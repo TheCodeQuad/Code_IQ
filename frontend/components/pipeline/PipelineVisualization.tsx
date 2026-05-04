@@ -48,15 +48,15 @@ function StatusIcon({ status, size = 'sm' }: { status: StepStatus; size?: 'sm' |
 
   switch (status) {
     case 'completed':
-      return <CheckCircle2 className={`${sizeClasses[size]} text-emerald-600`} />
+      return <CheckCircle2 className={`${sizeClasses[size]} text-black`} />
     case 'running':
-      return <Loader2 className={`${sizeClasses[size]} text-emerald-600 animate-spin`} />
-    case 'error':
-      return <Circle className={`${sizeClasses[size]} text-red-500`} />
-    case 'skipped':
+      return <Loader2 className={`${sizeClasses[size]} text-black animate-spin`} />
+    case 'pending':
       return <Circle className={`${sizeClasses[size]} text-gray-300`} />
+    case 'failed':
+      return <AlertCircle className={`${sizeClasses[size]} text-red-500`} />
     default:
-      return <Circle className={`${sizeClasses[size]} text-amber-500`} />
+      return null
   }
 }
 
@@ -80,22 +80,22 @@ function HorizontalStepItem({ step, isLast }: { step: PipelineStep; isLast: bool
         <div
           className={`w-10 h-10 rounded-full flex items-center justify-center transition-all duration-300 ${
             step.status === 'completed'
-              ? 'bg-rose-100 border-2 border-[#dc2d98]'
+              ? 'bg-slate-200 border-2 border-black shadow-sm'
               : step.status === 'running'
-                ? 'bg-rose-50 border-2 border-[#f15bb5]'
-                : 'bg-white border-2 border-rose-100'
+                ? 'bg-white border-2 border-black animate-pulse'
+                : 'bg-slate-50 border-2 border-slate-200'
           }`}
         >
           <StatusIcon status={step.status} />
         </div>
         <div className="mt-2 text-center max-w-22.5">
-          <span className={`font-medium text-xs block ${step.status === 'running' ? 'text-[#dc2d98]' : step.status === 'completed' ? 'text-[#dc2d98]' : 'text-rose-400'}`}>
+          <span className={`font-medium text-xs block ${step.status === 'running' ? 'text-black' : step.status === 'completed' ? 'text-black' : 'text-rose-400'}`}>
             {step.name}
           </span>
         </div>
       </div>
       {!isLast && (
-        <div className={`w-12 h-0.5 mx-2 -mt-5 ${step.status === 'completed' ? 'bg-rose-300' : 'bg-rose-100'}`} />
+        <div className={`w-12 h-0.5 mx-2 -mt-5 ${step.status === 'completed' ? 'bg-black' : 'bg-rose-100'}`} />
       )}
     </div>
   )
@@ -129,13 +129,13 @@ function NavigatorModuleCard({
           <div
             className={`w-12 h-12 rounded-xl flex items-center justify-center transition-all duration-300 ${
               module.status === 'completed'
-                ? 'bg-emerald-100 border border-emerald-300'
+                ? 'bg-black border border-black shadow-lg'
                 : module.status === 'running'
-                  ? 'bg-emerald-50 border border-emerald-300'
+                  ? 'bg-black border border-black shadow-md'
                   : 'bg-gray-100 border border-gray-200'
             }`}
           >
-            <Network className={`w-6 h-6 ${module.status === 'completed' ? 'text-emerald-600' : module.status === 'running' ? 'text-emerald-600' : 'text-gray-400'}`} />
+            <Network className={`w-6 h-6 ${module.status === 'completed' ? 'text-white' : module.status === 'running' ? 'text-white' : 'text-gray-400'}`} />
           </div>
           <div className="text-left">
             <h3 className="text-lg font-semibold text-gray-900">{module.name}</h3>
@@ -159,27 +159,7 @@ function NavigatorModuleCard({
             ))}
           </div>
           
-          {/* Show extracted components count after navigator completes */}
-          {module.status === 'completed' && (
-            <div className="mt-4 p-3 bg-emerald-50 border border-emerald-200 rounded-lg">
-              <p className="text-sm text-emerald-800 font-medium">
-                Extracted {shownTotal} components from repository
-              </p>
-              {module.extractedComponents.length > 0 ? (
-                <p className="text-xs text-emerald-600 mt-1">
-                  {shownFunctionCount} functions, {' '}
-                  {shownClassCount} classes, {' '}
-                  {shownMethodCount} methods
-                </p>
-              ) : (
-                <p className="text-xs text-emerald-600 mt-1">
-                  {showAgenticHint
-                    ? 'Component type breakdown will appear as agentic processing starts.'
-                    : 'Graph outputs are being prepared from the extracted components.'}
-                </p>
-              )}
-            </div>
-          )}
+          {/* Show extracted components count after navigator completes - REMOVED AS REQUESTED */}
         </div>
       )}
     </Card>
@@ -721,13 +701,13 @@ function AgenticModuleCard({
           <div
             className={`w-12 h-12 rounded-xl flex items-center justify-center transition-all duration-300 ${
               module.status === 'completed'
-                ? 'bg-emerald-100 border border-emerald-300'
+                ? 'bg-black border border-black shadow-lg'
                 : module.status === 'running'
-                  ? 'bg-emerald-50 border border-emerald-300'
+                  ? 'bg-black border border-black shadow-md'
                   : 'bg-gray-100 border border-gray-200'
             }`}
           >
-            <Brain className={`w-6 h-6 ${module.status === 'completed' ? 'text-emerald-600' : module.status === 'running' ? 'text-emerald-600' : 'text-gray-400'}`} />
+            <Brain className={`w-6 h-6 ${module.status === 'completed' ? 'text-white' : module.status === 'running' ? 'text-white' : 'text-gray-400'}`} />
           </div>
           <div className="text-left">
             <h3 className="text-lg font-semibold text-gray-900">{module.name}</h3>
@@ -832,13 +812,13 @@ function FinalizationModuleCard({ module, isExpanded, onToggle }: { module: Pipe
           <div
             className={`w-12 h-12 rounded-xl flex items-center justify-center transition-all duration-300 ${
               module.status === 'completed'
-                ? 'bg-emerald-100 border border-emerald-300'
+                ? 'bg-black border border-black shadow-lg'
                 : module.status === 'running'
-                  ? 'bg-emerald-50 border border-emerald-300'
+                  ? 'bg-black border border-black shadow-md'
                   : 'bg-gray-100 border border-gray-200'
             }`}
           >
-            <Save className={`w-6 h-6 ${module.status === 'completed' ? 'text-emerald-600' : module.status === 'running' ? 'text-emerald-600' : 'text-gray-400'}`} />
+            <Save className={`w-6 h-6 ${module.status === 'completed' ? 'text-white' : module.status === 'running' ? 'text-white' : 'text-gray-400'}`} />
           </div>
           <div className="text-left">
             <h3 className="text-lg font-semibold text-gray-900">{module.name}</h3>
@@ -909,10 +889,10 @@ function GraphsOnlyExecution({
                   {repoMeta.name}{repoMeta.fileCount != null ? ` • ${repoMeta.fileCount} files` : ""}
                 </p>
               )}
-              <div className="mt-4">
-                <div className="h-2 w-full rounded-full bg-pink-100/70 overflow-hidden">
+                <div className="mt-4">
+                <div className="h-1.5 w-full rounded-full bg-[#f8e8f2] border border-black/5 shadow-[inset_0_1px_2px_rgba(0,0,0,0.05)] overflow-hidden">
                   <div
-                    className="h-full rounded-full bg-gradient-to-r from-[#dc2d98] via-[#f15bb5] to-[#ff8fd4] transition-all duration-500"
+                    className="h-full rounded-full bg-gradient-to-r from-black to-[#dc2d98] transition-all duration-700 ease-in-out shadow-[0_0_8px_rgba(0,0,0,0.2)]"
                     style={{ width: `${overallProgress}%` }}
                   />
                 </div>
@@ -925,7 +905,7 @@ function GraphsOnlyExecution({
             <div className="flex items-center gap-3">
               {isComplete ? (
                 <Link href={`/dashboard/analysis/${repoId}/results/graph`}>
-                  <Button className="bg-black text-white hover:bg-[#dc2d98] rounded-full px-6">
+                  <Button className="bg-black text-white rounded-full px-6 transition-all hover:scale-105 active:scale-95">
                     Next: View Graphs
                   </Button>
                 </Link>
@@ -1004,9 +984,10 @@ export function PipelineVisualization({
 }) {
   const searchParams = useSearchParams()
   const resolvedMode = mode ?? (searchParams.get('mode') === 'graphs' ? 'graphs' : 'full')
+  const isGraphsOnly = resolvedMode === 'graphs'
   const [pipelineState, setPipelineState] = useState<PipelineState>(createInitialPipelineState)
   const [isStarting, setIsStarting] = useState(false)
-  const [showNavigatorOverlay, setShowNavigatorOverlay] = useState(false)
+  const [showNavigatorOverlay, setShowNavigatorOverlay] = useState(!isGraphsOnly && autoStart)
   const [streamState, setStreamState] = useState<'connecting' | 'live' | 'disconnected' | 'error'>('connecting')
   const [repoMeta, setRepoMeta] = useState<{ name?: string; fileCount?: number }>({})
   const [expandedModules, setExpandedModules] = useState<Record<string, boolean>>({
@@ -1018,7 +999,6 @@ export function PipelineVisualization({
   const eventSourceRef = useRef<EventSource | null>(null)
   const autoStartTriggeredRef = useRef(false)
   const overlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const isGraphsOnly = resolvedMode === 'graphs'
 
   const resetPipelineViewState = useCallback(() => {
     setPipelineState(createInitialPipelineState())
@@ -1026,12 +1006,7 @@ export function PipelineVisualization({
   }, [])
 
   const scheduleOverlayShow = useCallback(() => {
-    if (overlayTimerRef.current) {
-      clearTimeout(overlayTimerRef.current)
-    }
-    overlayTimerRef.current = setTimeout(() => {
-      setShowNavigatorOverlay(true)
-    }, 700)
+    setShowNavigatorOverlay(true)
   }, [])
 
   const cancelOverlayShow = useCallback(() => {
@@ -1054,7 +1029,9 @@ export function PipelineVisualization({
     setPipelineState((prev) => {
       const next = JSON.parse(JSON.stringify(prev)) as PipelineState
 
-      if (evt.event_type === 'pipeline-completed') {
+      if (evt.event_type === 'pipeline-completed' || 
+          (evt.event_type === 'pipeline_snapshot' && evt.status === 'completed') ||
+          (evt.event_type === 'pipeline_progress' && evt.step_id === 'pipeline-completed' && evt.status === 'completed')) {
         next.navigator.status = 'completed'
         next.navigator.steps.forEach((s) => {
           s.status = 'completed'
@@ -1088,6 +1065,11 @@ export function PipelineVisualization({
       const stepStatus = toStepStatus(evt.status)
       const progress = stepStatus === 'completed' ? 100 : Math.max(10, evt.progress_percent ?? 0)
 
+      const componentCount = evt.total_components ?? evt.component_count;
+      if (typeof componentCount === 'number' && componentCount > 0) {
+        next.agentic.totalComponents = componentCount;
+      }
+
       if (evt.phase === 'navigator') {
         next.navigator.status = stepStatus === 'completed' && next.navigator.steps.every((s) => s.status === 'completed')
           ? 'completed'
@@ -1103,10 +1085,6 @@ export function PipelineVisualization({
           // Fallback: If no strict step map matches, push to the currently open step or the first one
           const activeStep = next.navigator.steps.find((s) => s.status === 'running') || next.navigator.steps[0];
           activeStep.logs = [...activeStep.logs, evt.message];
-        }
-
-        if (typeof evt.component_count === 'number') {
-          next.agentic.totalComponents = evt.component_count
         }
 
         if (Array.isArray(evt.components) && evt.components.length > 0) {
@@ -1135,7 +1113,16 @@ export function PipelineVisualization({
       }
 
       if (evt.phase === 'agentic' || evt.component_id) {
-        next.agentic.status = next.agentic.status === 'completed' ? 'completed' : 'running'
+        next.agentic.status = 'running'
+        
+        // If agentic phase is running, finalization cannot be completed yet.
+        if (next.finalization.status === 'completed') {
+          next.finalization.status = 'pending'
+          next.finalization.steps.forEach(s => {
+            s.status = 'pending'
+            s.progress = 0
+          })
+        }
 
         if (!evt.component_id) {
           return next
@@ -1243,6 +1230,8 @@ export function PipelineVisualization({
     })
   }, [])
 
+  const ignoreStaleSnapshotRef = useRef(false)
+
   const connectEventStream = useCallback(() => {
     if (eventSourceRef.current) {
       eventSourceRef.current.close()
@@ -1255,6 +1244,13 @@ export function PipelineVisualization({
     source.addEventListener('snapshot', (event) => {
       try {
         const data = JSON.parse((event as MessageEvent<string>).data) as BackendPipelineEvent
+        
+        // If we just triggered a new pipeline, ignore stale 'completed' snapshots 
+        // from the database until we get fresh progress events.
+        if (ignoreStaleSnapshotRef.current && data.status === 'completed') {
+          return
+        }
+        
         applyBackendEvent(data)
       } catch {
         // Ignore malformed snapshot payloads.
@@ -1263,6 +1259,7 @@ export function PipelineVisualization({
 
     source.addEventListener('progress', (event) => {
       try {
+        ignoreStaleSnapshotRef.current = false // We got fresh progress, stop ignoring
         const data = JSON.parse((event as MessageEvent<string>).data) as BackendPipelineEvent
         applyBackendEvent(data)
       } catch {
@@ -1275,8 +1272,11 @@ export function PipelineVisualization({
   }, [applyBackendEvent, repoId])
 
   const startPipeline = async () => {
+    ignoreStaleSnapshotRef.current = true
     setIsStarting(true)
-    scheduleOverlayShow()
+    if (!isGraphsOnly) {
+      scheduleOverlayShow()
+    }
     try {
       resetPipelineViewState()
       const payload = isGraphsOnly ? { demo_mode: true } : undefined
@@ -1327,12 +1327,18 @@ export function PipelineVisualization({
 
         if (statusRes.ok) {
           const status = (await statusRes.json()) as BackendPipelineEvent
-          if (status.status === 'completed') {
+          if (status.status === 'completed' && !autoStart) {
+            // Only apply completed state when NOT auto-starting.
+            // If autoStart is true, we want to re-run the pipeline,
+            // so skip restoring the old completed state.
             applyBackendEvent({ event_type: 'pipeline-completed' })
             cancelOverlayShow()
+          } else if (status.status === 'completed' && autoStart) {
+            // Auto-start requested on a previously completed repo –
+            // leave pipeline state at initial so auto-start fires.
           } else {
             if (status.status && !['pending', 'failed', 'completed'].includes(String(status.status))) {
-              scheduleOverlayShow()
+              if (!isGraphsOnly) scheduleOverlayShow()
             }
             applyBackendEvent({
               phase: 'navigator',
@@ -1346,8 +1352,9 @@ export function PipelineVisualization({
       } catch {
         setStreamState('error')
       }
-
-      connectEventStream()
+      if (!autoStart) {
+        connectEventStream()
+      }
     }
 
     bootstrap()
@@ -1396,8 +1403,7 @@ export function PipelineVisualization({
     const hasStarted =
       pipelineState.navigator.status === 'running' ||
       pipelineState.agentic.status === 'running' ||
-      pipelineState.finalization.status === 'running' ||
-      pipelineState.finalization.status === 'completed'
+      pipelineState.finalization.status === 'running'
 
     if (hasStarted || isStarting) {
       autoStartTriggeredRef.current = true
@@ -1456,7 +1462,7 @@ export function PipelineVisualization({
   return (
     <div className="h-full overflow-hidden bg-[#fef5fb]">
       <RepositoryToDAG
-        isActive={showNavigatorOverlay}
+        isActive={showNavigatorOverlay && !isGraphsOnly}
         logs={navigatorLogs}
         progress={navigatorProgress}
         isComplete={navigatorDone}
