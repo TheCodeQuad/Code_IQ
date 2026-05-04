@@ -4,6 +4,7 @@ Repository API router.
 Endpoints
 ---------
 POST /api/repos/upload            – Clone a GitHub repo and create a DB record for a user.
+POST /api/repos/upload-zip        – Upload a ZIP file and create a DB record for a user.
 GET  /api/repos                   – List all repos belonging to a user.
 GET  /api/repos/{id}              – Get full details of a single repo.
 DELETE /api/repos/{id}            – Delete a repo record (and optionally its cloned files).
@@ -18,13 +19,15 @@ import shutil
 import stat
 import subprocess
 import threading
+import zipfile
 from datetime import timezone
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
+from io import BytesIO
 
 from bson import ObjectId
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -151,6 +154,71 @@ def _detect_language(repo_path: str) -> str:
     return max(counts, key=counts.get)  # type: ignore[arg-type]
 
 
+def _extract_zip_file(zip_file_bytes: bytes, repo_name: str) -> str:
+    """
+    Extract a ZIP file into CLONE_DIR/<repo_name> and return the path.
+    
+    Handles nested ZIP structures by looking for the main source folder.
+    If the ZIP has a single top-level folder, use that. Otherwise, extract all.
+    
+    Args:
+        zip_file_bytes: Bytes of the ZIP file
+        repo_name: Name for the repository folder
+    
+    Returns:
+        Path to the extracted repository
+    """
+    dest = CLONE_DIR / repo_name
+    if dest.exists():
+        shutil.rmtree(str(dest), onerror=_handle_remove_readonly)
+    
+    dest.mkdir(parents=True, exist_ok=True)
+    
+    try:
+        # Extract ZIP to a temporary location first
+        with zipfile.ZipFile(BytesIO(zip_file_bytes), 'r') as zip_ref:
+            # Get all top-level items
+            namelist = zip_ref.namelist()
+            
+            # Find top-level folders/files
+            top_level = set()
+            for name in namelist:
+                parts = name.split('/')
+                if parts[0]:  # Skip empty parts
+                    top_level.add(parts[0])
+            
+            # If single top-level folder, extract it as the root
+            if len(top_level) == 1 and not any('.' in item for item in top_level):
+                top_folder = list(top_level)[0]
+                # Extract to temp location
+                temp_dest = dest / "temp"
+                zip_ref.extractall(str(temp_dest))
+                
+                # Move the single folder to the root
+                single_folder = temp_dest / top_folder
+                if single_folder.exists():
+                    # Move contents up one level
+                    for item in single_folder.iterdir():
+                        shutil.move(str(item), str(dest))
+                    # Clean up temp folder
+                    shutil.rmtree(str(temp_dest), onerror=_handle_remove_readonly)
+            else:
+                # Extract all files directly
+                zip_ref.extractall(str(dest))
+        
+        logger.info(f"Successfully extracted ZIP to {dest}")
+        return str(dest)
+        
+    except zipfile.BadZipFile as e:
+        logger.error(f"Invalid ZIP file: {e}")
+        raise HTTPException(status_code=400, detail="Invalid or corrupted ZIP file")
+    except Exception as e:
+        logger.error(f"Failed to extract ZIP: {e}")
+        if dest.exists():
+            shutil.rmtree(str(dest), onerror=_handle_remove_readonly)
+        raise HTTPException(status_code=500, detail=f"Failed to extract ZIP: {str(e)}")
+
+
 def _repo_doc_to_summary(doc: dict) -> dict:
     """Convert a raw MongoDB document to a RepoSummary-compatible dict."""
     overall = None
@@ -248,6 +316,80 @@ async def upload_repo(req: RepoUploadRequest):
     collection = await get_repos_collection()
     result = await collection.insert_one(doc.model_dump())
 
+    return {
+        "success": True,
+        "repo_id": str(result.inserted_id),
+        "repo_name": repo_name,
+        "language": language,
+        "file_count": file_count,
+        "total_lines": total_lines,
+    }
+
+
+@router.post("/upload-zip", status_code=201)
+async def upload_zip_repo(user_id: str = Query(..., description="User ObjectId"), file: UploadFile = File(...)):
+    """
+    Upload a ZIP file containing source code and create a DB record for the user.
+    Extracts the ZIP, organizes the files in a folder, and processes it like a cloned repository.
+    Returns the new repo_id so the frontend can redirect to the analysis page.
+    """
+    # 1. Validate user_id looks like a Mongo ObjectId
+    if not ObjectId.is_valid(user_id):
+        raise HTTPException(status_code=400, detail="Invalid user_id")
+    
+    # 2. Validate file is a ZIP
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No filename provided")
+    
+    if not (file.filename.lower().endswith('.zip')):
+        raise HTTPException(status_code=400, detail="File must be a ZIP archive (.zip)")
+    
+    # 3. Read the ZIP file content
+    try:
+        zip_content = await file.read()
+        if not zip_content:
+            raise HTTPException(status_code=400, detail="Empty ZIP file")
+    except Exception as e:
+        logger.error(f"Failed to read ZIP file: {e}")
+        raise HTTPException(status_code=400, detail="Failed to read ZIP file")
+    
+    # 4. Extract repo name from filename (remove .zip extension)
+    repo_name = re.sub(r"[^\w\-]", "_", file.filename[:-4])
+    
+    # 5. Extract the ZIP file
+    try:
+        repo_path = _extract_zip_file(zip_content, repo_name)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to extract ZIP: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to extract ZIP: {str(e)}")
+    
+    # 6. Gather basic metadata from the extracted files
+    file_count, total_lines = _count_files_and_lines(repo_path)
+    language = _detect_language(repo_path)
+    
+    # 7. Build the document
+    now = datetime.utcnow().isoformat()
+    doc = RepositoryDoc(
+        user_id=user_id,
+        repo_name=repo_name,
+        repo_url=f"file://zip/{repo_name}",  # Indicate this is a ZIP upload
+        repo_local_path=repo_path,
+        language=language,
+        file_count=file_count,
+        total_lines=total_lines,
+        status=RepoStatus.PENDING,
+        created_at=now,
+        updated_at=now,
+    )
+    
+    # 8. Insert into MongoDB
+    collection = await get_repos_collection()
+    result = await collection.insert_one(doc.model_dump())
+    
+    logger.info(f"ZIP uploaded for user {user_id}: repo_id={result.inserted_id}, name={repo_name}")
+    
     return {
         "success": True,
         "repo_id": str(result.inserted_id),

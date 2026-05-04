@@ -158,6 +158,22 @@ export async function uploadRepo(
   return handleResponse<RepoUploadResponse>(res);
 }
 
+/** Upload a ZIP file containing source code */
+export async function uploadZipRepo(
+  file: File,
+  userId: string
+): Promise<RepoUploadResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const res = await fetch("/api/repos/upload-zip", {
+    method: "POST",
+    body: formData,
+    // Don't set Content-Type header - browser will set it with boundary
+  });
+  return handleResponse<RepoUploadResponse>(res);
+}
+
 /** List all saved analysis files */
 export async function listFiles(): Promise<FilesResponse> {
   const res = await fetch(`${API_BASE}/files`, {

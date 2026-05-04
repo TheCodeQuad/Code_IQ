@@ -37,6 +37,8 @@ import {
   ImageIcon,
   Archive,
   Layers,
+  Lock,
+  Unlock,
 } from "lucide-react"
 import {
   DropdownMenu,
@@ -137,7 +139,6 @@ const ComponentTypeIcon = ({ type }: { type: ComponentType }) => {
 }
 
 // API base URL - use local Next.js API routes that proxy to backend
-// This avoids CORS issues. The routes are in frontend/app/api/graphs/
 const API_BASE = ""
 
 const isValidComponentId = (id: unknown): id is string => {
@@ -157,6 +158,11 @@ export default function GraphsPage() {
   const [selectedGraphType, setSelectedGraphType] = useState<GraphType>("cfg")
   const [zoom, setZoom] = useState(100)
   const [isGraphFullscreen, setIsGraphFullscreen] = useState(false)
+  const [fullscreenZoom, setFullscreenZoom] = useState(1)
+  const [fullscreenPan, setFullscreenPan] = useState({ x: 0, y: 0 })
+  const [isDraggingFullscreen, setIsDraggingFullscreen] = useState(false)
+  const [lastMousePos, setLastMousePos] = useState({ x: 0, y: 0 })
+  const [isBackgroundLocked, setIsBackgroundLocked] = useState(false)
 
   // Graph data state
   const [cfgData, setCfgData] = useState<GraphData | null>(null)
@@ -194,13 +200,11 @@ export default function GraphsPage() {
       if (!routeId) return
 
       try {
-        // Try to get analysis repo data
         const analysisResponse = await fetch(`/api/analysis/${routeId}/repo`)
         if (analysisResponse.ok) {
           const analysisData = await analysisResponse.json()
           console.log("[Graph] Analysis repo data:", analysisData)
 
-          // Extract path from various possible field names
           let path =
             analysisData.repo_path ||
             analysisData.local_path ||
@@ -208,14 +212,10 @@ export default function GraphsPage() {
             analysisData.repo_local_path ||
             analysisData.path
 
-          // Convert Windows backslashes to forward slashes for API
           if (path && typeof path === 'string') {
             path = path.replace(/\\/g, '/')
-            
-            // Validate path: reject system paths like backend, frontend, node_modules
             const invalidPatterns = ['/backend', '/frontend', '/node_modules', 'Code_IQ/backend', 'Code_IQ/frontend']
             const isInvalidPath = invalidPatterns.some(pattern => path.toLowerCase().includes(pattern.toLowerCase()))
-            
             if (!isInvalidPath) {
               console.log("[Graph] Resolved repo path from analysis:", path)
               setRepoPath(path)
@@ -228,7 +228,6 @@ export default function GraphsPage() {
           console.log("[Graph] Analysis endpoint not available or returned error:", analysisResponse.status)
         }
 
-        // Fallback: Try to get repo info by ID
         try {
           const response = await fetch(`/api/repos/${routeId}`)
           if (response.ok) {
@@ -237,11 +236,8 @@ export default function GraphsPage() {
             let path = data.local_path || data.repo_local_path || data.repo_path || `./repos/${data.repo_name}`
             if (typeof path === 'string') {
               path = path.replace(/\\/g, '/')
-              
-              // Validate path
               const invalidPatterns = ['/backend', '/frontend', '/node_modules', 'Code_IQ/backend', 'Code_IQ/frontend']
               const isInvalidPath = invalidPatterns.some(pattern => path.toLowerCase().includes(pattern.toLowerCase()))
-              
               if (!isInvalidPath) {
                 console.log("[Graph] Resolved repo path from repos endpoint:", path)
                 setRepoPath(path)
@@ -253,7 +249,6 @@ export default function GraphsPage() {
           console.error("Error fetching repo by ID:", err)
         }
 
-        // No valid path found - don't set a fallback, leave it null so user can manually enter
         console.log("[Graph] Could not resolve repository path from analysis metadata")
         setRepoPath(null)
         setLastError("Repository path not found. Please manually enter the path or ensure the analysis was created with a valid repository.")
@@ -278,14 +273,12 @@ export default function GraphsPage() {
       console.log("[Graph] Starting parse and fetch with repoPath:", repoPath)
       setComponentsLoading(true)
 
-      // Validate repo path before attempting to parse
       if (!repoPath || repoPath.trim() === "") {
         setLastError("Repository path is not set. Please manually enter a valid repository path in the sidebar.")
         setComponentsLoading(false)
         return
       }
 
-      // Avoid stale selections/IDs after backend restart or repo change
       setComponents([])
       setSelectedComponent(null)
       setCfgData(null)
@@ -295,7 +288,6 @@ export default function GraphsPage() {
       setGraphError(null)
 
       try {
-        // First, trigger parse (if not already parsed)
         console.log("[Graph] Calling parse endpoint with repo_path:", repoPath)
         const parseResponse = await fetch(`${API_BASE}/api/graphs`, {
           method: "POST",
@@ -305,7 +297,7 @@ export default function GraphsPage() {
 
         console.log("[Graph] Parse response status:", parseResponse.status)
         let parseError: string | null = null
-        
+
         if (parseResponse.ok) {
           const parseData = await parseResponse.json()
           console.log("[Graph] Parse data:", parseData)
@@ -318,8 +310,6 @@ export default function GraphsPage() {
           const errText = await parseResponse.text()
           parseError = `Parse failed: ${parseResponse.status} - ${errText}`
           console.error("[Graph]", parseError)
-          
-          // Provide helpful error message for invalid paths
           if (parseResponse.status === 400 && errText.includes("Invalid repository path")) {
             setLastError(`❌ Invalid repository path: "${repoPath}"\n\nMake sure to:\n• Enter the root directory of a code repository (not backend/frontend folders)\n• Use a path that exists on the server\n• Verify the path contains source code files`)
           } else {
@@ -327,7 +317,6 @@ export default function GraphsPage() {
           }
         }
 
-        // Fetch components list
         console.log("[Graph] Fetching components with repo_path:", repoPath)
         const componentsResponse = await fetch(
           `${API_BASE}/api/graphs?repo_path=${encodeURIComponent(repoPath)}`
@@ -351,9 +340,7 @@ export default function GraphsPage() {
               .filter((c: Component) => isValidComponentId(c.id) && Boolean(c.name))
             console.log("[Graph] Mapped", mappedComponents.length, "components")
             setComponents(mappedComponents)
-            setLastError(null)  // Clear error on success
-
-            // Auto-select first component if none selected
+            setLastError(null)
             if (mappedComponents.length > 0) {
               setSelectedComponent(mappedComponents[0])
               console.log("[Graph] Auto-selected first component:", mappedComponents[0].name)
@@ -365,8 +352,6 @@ export default function GraphsPage() {
         } else {
           const errText = await componentsResponse.text()
           const errorMsg = `Components fetch failed: ${componentsResponse.status} - ${errText.substring(0, 150)}`
-          
-          // Provide helpful error message for invalid paths
           if (componentsResponse.status === 400 && errText.includes("Invalid repository path")) {
             setLastError(`❌ Repository path is invalid: "${repoPath}"\n\nPlease verify:\n• The path exists on the server\n• The path points to a code repository (not backend/frontend folders)\n• You have permission to access it`)
           } else {
@@ -387,13 +372,11 @@ export default function GraphsPage() {
     parseAndFetchComponents()
   }, [repoPath])
 
-  // Fetch graph data when graph type changes (CKG is full-repo and independent of components)
+  // Fetch graph data when graph type changes
   useEffect(() => {
     if (!repoPath) return
-
-    // For non-CKG graphs, still require a selected component
     if (selectedGraphType !== "ckg" && !selectedComponent?.id) return
-    if (selectedGraphType === "agents-flow") return // Agent flow uses different API
+    if (selectedGraphType === "agents-flow") return
 
     if (selectedComponent?.type === "class" && !["dag", "ckg"].includes(selectedGraphType)) {
       setGraphLoading(false)
@@ -421,22 +404,19 @@ export default function GraphsPage() {
             endpoint = `${API_BASE}/api/graphs/dag?repo_path=${encodeURIComponent(repoPath)}&component_id=${encodeURIComponent(selectedComponent.id)}`
             break
           case "ckg":
-            // Always fetch the full repository-level PKG (no subgraph / component filtering)
             endpoint = `${API_BASE}/api/graphs/ckg?repo_path=${encodeURIComponent(repoPath)}&force=true`
             break
         }
 
-        // Graph-type-specific timeouts (in ms)
-        // DAG and CKG are expensive operations that can take longer on large repos
         const timeoutMap: Record<GraphType, number> = {
-          "agents-flow": 30_000,    // 30 seconds
-          "cfg": 60_000,             // 60 seconds
-          "pdg": 60_000,             // 60 seconds
-          "hpg": 90_000,             // 90 seconds
-          "dag": 300_000,            // 5 minutes - DAG can be slow on large repos
-          "ckg": 300_000,            // 5 minutes - CKG is the most expensive
+          "agents-flow": 30_000,
+          "cfg": 60_000,
+          "pdg": 60_000,
+          "hpg": 90_000,
+          "dag": 300_000,
+          "ckg": 300_000,
         }
-        
+
         const timeoutMs = timeoutMap[selectedGraphType] || 120_000
         const controller = new AbortController()
         const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
@@ -453,14 +433,12 @@ export default function GraphsPage() {
         const result = await response.json()
 
         if (result.success && result.data) {
-          // CKG returns data in a different format
           let graphData: GraphData
           if (selectedGraphType === "ckg") {
-            // CKG returns {nodes, edges, stats}
             const nodes = result.data.nodes || []
             const edges = result.data.edges || []
             const stats = result.data.stats || {}
-            
+
             graphData = {
               id: "ckg",
               name: "Program Knowledge Graph",
@@ -471,8 +449,7 @@ export default function GraphsPage() {
               edge_count: stats?.edge_count || edges.length,
               metadata: stats
             }
-            
-            // Log PKG data for debugging
+
             console.log("[Graph] PKG data received:", {
               node_count: graphData.node_count,
               edge_count: graphData.edge_count,
@@ -483,8 +460,7 @@ export default function GraphsPage() {
               repo_path: stats?.repo_path,
               warning: result.warning
             })
-            
-            // Warn if PKG graph is empty
+
             if (nodes.length === 0 || edges.length === 0) {
               const warningMsg = result.warning || "No code components found in repository"
               console.warn("[Graph] PKG graph is empty:", {
@@ -493,8 +469,6 @@ export default function GraphsPage() {
                 edges_count: edges.length,
                 warning: warningMsg
               })
-              
-              // Set error message to guide user
               if (nodes.length === 0) {
                 setGraphError(`📊 Program Knowledge Graph is empty\n\n${warningMsg}\n\nMake sure your repository:\n• Contains Python files (.py)\n• Has functions or classes defined\n• Is not in an excluded folder (e.g., __pycache__, .git, venv)`)
               }
@@ -503,7 +477,6 @@ export default function GraphsPage() {
             graphData = result.data as GraphData
           }
 
-          // Store in appropriate state
           switch (selectedGraphType) {
             case "cfg":
               setCfgData(graphData)
@@ -527,13 +500,11 @@ export default function GraphsPage() {
       } catch (err: any) {
         console.error(`Error fetching ${selectedGraphType}:`, err)
         const isAbort = err instanceof Error && err.name === "AbortError"
-        
+
         let errorMessage = ""
         if (isAbort) {
-          // Timeout error
           const timeoutSeconds = selectedGraphType === "dag" || selectedGraphType === "ckg" ? 300 : 60
           errorMessage = `${selectedGraphType.toUpperCase()} request timed out after ${timeoutSeconds}s. `
-          
           if (selectedGraphType === "dag" || selectedGraphType === "ckg") {
             errorMessage += "These are expensive operations on large repositories. Try:\n"
             errorMessage += "• Check if the repository is very large\n"
@@ -545,7 +516,7 @@ export default function GraphsPage() {
         } else {
           errorMessage = err.message || `Failed to load ${selectedGraphType.toUpperCase()}`
         }
-        
+
         setGraphError(errorMessage)
       } finally {
         setGraphLoading(false)
@@ -604,32 +575,66 @@ export default function GraphsPage() {
   const handleZoomOut = () => setZoom((prev) => Math.max(prev - 25, 50))
   const handleReset = () => setZoom(100)
 
+  const handleFullscreenZoomIn = () => setFullscreenZoom((prev) => Math.min(prev * 1.25, 5))
+  const handleFullscreenZoomOut = () => setFullscreenZoom((prev) => Math.max(prev / 1.25, 0.25))
+  const handleFullscreenReset = () => {
+    setFullscreenZoom(1)
+    setFullscreenPan({ x: 0, y: 0 })
+  }
+
+  const handleFullscreenMouseDown = (e: React.MouseEvent) => {
+    if (isBackgroundLocked) return
+    setIsDraggingFullscreen(true)
+    setLastMousePos({ x: e.clientX, y: e.clientY })
+  }
+
+  const handleFullscreenMouseMove = (e: React.MouseEvent) => {
+    if (!isDraggingFullscreen || isBackgroundLocked) return
+    const dx = e.clientX - lastMousePos.x
+    const dy = e.clientY - lastMousePos.y
+    setFullscreenPan((prev) => ({ x: prev.x + dx, y: prev.y + dy }))
+    setLastMousePos({ x: e.clientX, y: e.clientY })
+  }
+
+  const handleFullscreenMouseUp = () => {
+    setIsDraggingFullscreen(false)
+  }
+
+  const handleFullscreenWheel = (e: React.WheelEvent) => {
+    e.preventDefault()
+    if (e.deltaY < 0) {
+      handleFullscreenZoomIn()
+    } else {
+      handleFullscreenZoomOut()
+    }
+  }
+
   const exportAllAsZip = useCallback(async (scope: "all" | "component") => {
     if (!repoPath || isExporting) return
     setIsExporting(true)
     const zip = new JSZip()
-    
-    const targets = scope === "component" && selectedComponent 
-      ? [selectedComponent] 
+
+    const targets = scope === "component" && selectedComponent
+      ? [selectedComponent]
       : components
 
     setExportProgress({ current: 0, total: targets.length * 4 + 1, label: "Initializing export..." })
-    
+
     try {
       let completed = 0
-      const total = targets.length * 4 + 1 // 4 graph types per component + PKG
+      const total = targets.length * 4 + 1
 
       for (const comp of targets) {
         const folder = zip.folder(comp.name.replace(/[^a-z0-9]/gi, '_'))
-        
+
         const types: GraphType[] = ["cfg", "pdg", "hpg", "dag"]
         for (const type of types) {
-          setExportProgress({ 
-            current: completed++, 
-            total, 
-            label: `Fetching ${type.toUpperCase()} for ${comp.name}...` 
+          setExportProgress({
+            current: completed++,
+            total,
+            label: `Fetching ${type.toUpperCase()} for ${comp.name}...`
           })
-          
+
           try {
             let endpoint = ""
             if (type === "dag") {
@@ -637,7 +642,7 @@ export default function GraphsPage() {
             } else {
               endpoint = `${API_BASE}/api/graphs/${type}/${encodeURIComponent(comp.id)}?repo_path=${encodeURIComponent(repoPath)}`
             }
-            
+
             const res = await fetch(endpoint)
             if (res.ok) {
               const result = await res.json()
@@ -651,7 +656,6 @@ export default function GraphsPage() {
         }
       }
 
-      // Add PKG (CKG)
       setExportProgress({ current: completed++, total, label: "Fetching Program Knowledge Graph..." })
       try {
         const ckgRes = await fetch(`${API_BASE}/api/graphs/ckg?repo_path=${encodeURIComponent(repoPath)}&force=false`)
@@ -688,7 +692,6 @@ export default function GraphsPage() {
 
     const fileName = `${selectedComponent?.name || "repository"}_${selectedGraphType}`
 
-    // 1. JSON Export (Universal)
     if (format === "json") {
       try {
         const dataStr = JSON.stringify(currentGraphData, null, 2)
@@ -707,16 +710,13 @@ export default function GraphsPage() {
       return
     }
 
-    // 2. Cytoscape Export (CKG)
     if (selectedGraphType === "ckg") {
       if (cyRef.current) {
-        // Cytoscape currently only supports PNG via the exposed method
         cyRef.current.exportImage()
       }
       return
     }
 
-    // 3. SVG/PNG Export for SVG-based graphs
     const svgElement = document.querySelector(".center-panel-svg") as SVGSVGElement
     if (!svgElement) {
       console.error("SVG element not found for export")
@@ -726,7 +726,7 @@ export default function GraphsPage() {
     try {
       const serializer = new XMLSerializer()
       let source = serializer.serializeToString(svgElement)
-      
+
       if (!source.match(/^<svg[^>]+xmlns="http\:\/\/www\.w3\.org\/2000\/svg"/)) {
         source = source.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
       }
@@ -747,29 +747,20 @@ export default function GraphsPage() {
         document.body.removeChild(link)
         URL.revokeObjectURL(url)
       } else if (format === "png") {
-        // Ultimate SVG-to-PNG fix: ensures NO clipping regardless of current view
         const img = new Image()
         const bbox = svgElement.getBBox()
-        
-        // 1. Prepare dimensions with generous padding
         const padding = 80
         const scale = 2
-        
-        // 2. Capture the actual content area
         const contentWidth = bbox.width + padding * 2
         const contentHeight = bbox.height + padding * 2
-        
-        // 3. Create a clean source string by re-serializing with a proper viewBox
-        // This is key: we force the SVG to 'look' at the full bounding box
         const clone = svgElement.cloneNode(true) as SVGSVGElement
         clone.setAttribute("viewBox", `${bbox.x - padding} ${bbox.y - padding} ${contentWidth} ${contentHeight}`)
         clone.setAttribute("width", contentWidth.toString())
         clone.setAttribute("height", contentHeight.toString())
-        
+
         const serializer = new XMLSerializer()
         let svgStr = serializer.serializeToString(clone)
-        
-        // Ensure namespaces
+
         if (!svgStr.includes("http://www.w3.org/2000/svg")) {
           svgStr = svgStr.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
         }
@@ -781,14 +772,12 @@ export default function GraphsPage() {
           const canvas = document.createElement("canvas")
           canvas.width = contentWidth * scale
           canvas.height = contentHeight * scale
-          
           const ctx = canvas.getContext("2d")
           if (ctx) {
             ctx.fillStyle = "white"
             ctx.fillRect(0, 0, canvas.width, canvas.height)
             ctx.scale(scale, scale)
             ctx.drawImage(img, 0, 0)
-            
             const pngUrl = canvas.toDataURL("image/png", 1.0)
             const link = document.createElement("a")
             link.href = pngUrl
@@ -804,7 +793,6 @@ export default function GraphsPage() {
     }
   }, [selectedGraphType, selectedComponent?.name, currentGraphData, cyRef, exportAllAsZip])
 
-  // Global event listener for header export button
   useEffect(() => {
     const handleGlobalExport = (e: any) => {
       if (e.detail?.scope === "all") {
@@ -820,20 +808,17 @@ export default function GraphsPage() {
 
     setGraphLoading(true)
     try {
-      // Force re-parse
       await fetch(`${API_BASE}/api/graphs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ repo_path: repoPath, force: true })
       })
 
-      // Clear cached data
       setCfgData(null)
       setPdgData(null)
       setHpgData(null)
       setDagData(null)
 
-      // Re-fetch components so IDs stay in sync with the new parse
       const componentsResponse = await fetch(
         `${API_BASE}/api/graphs?repo_path=${encodeURIComponent(repoPath)}`
       )
@@ -890,7 +875,6 @@ export default function GraphsPage() {
                   const data = await response.json()
                   console.log("[Graph] Manual parse result:", data)
                   if (data.success) {
-                    // Re-fetch components
                     const compResponse = await fetch(
                       `${API_BASE}/api/graphs?repo_path=${encodeURIComponent(repoPath)}`
                     )
@@ -932,7 +916,6 @@ export default function GraphsPage() {
                 components.map((component) => (
                   <button
                     key={component.id}
-                    // For full-repository PKG view, component clicks should not change the graph
                     onClick={() => {
                       if (selectedGraphType !== "ckg") {
                         setSelectedComponent(component)
@@ -978,7 +961,7 @@ export default function GraphsPage() {
                       <p className="text-xs text-red-600 break-words">{lastError}</p>
                     </div>
                   )}
-                  
+
                   <div className="p-3 bg-amber-50 rounded-lg border border-amber-200">
                     <p className="text-xs font-medium text-amber-700 mb-1">Repository Path</p>
                     {repoPath ? (
@@ -1032,7 +1015,6 @@ export default function GraphsPage() {
                           console.log("[Graph] Force parse result:", data)
                           if (data.success) {
                             setLastError(null)
-                            // Re-fetch components
                             const compResponse = await fetch(
                               `${API_BASE}/api/graphs?repo_path=${encodeURIComponent(repoPath)}`
                             )
@@ -1163,7 +1145,6 @@ export default function GraphsPage() {
                     <FileJson className="mr-2 h-4 w-4" />
                     <span>JSON (Raw Data)</span>
                   </DropdownMenuItem>
-                  
                   <DropdownMenuSeparator />
                   <DropdownMenuLabel>Batch Export</DropdownMenuLabel>
                   <DropdownMenuItem onClick={() => handleExport("zip-component")}>
@@ -1191,7 +1172,7 @@ export default function GraphsPage() {
                   <p className="text-stone-500 text-sm">{exportProgress.label}</p>
                 </div>
                 <div className="w-full bg-stone-100 h-2 rounded-full overflow-hidden">
-                  <div 
+                  <div
                     className="h-full bg-amber-500 transition-all duration-300 ease-out"
                     style={{ width: `${(exportProgress.current / exportProgress.total) * 100}%` }}
                   />
@@ -1237,8 +1218,8 @@ export default function GraphsPage() {
                           headers: { "Content-Type": "application/json" },
                           body: JSON.stringify({ repo_path: repoPath, force: true })
                         })
-                        .then(() => handleRefresh())
-                        .finally(() => setComponentsLoading(false))
+                          .then(() => handleRefresh())
+                          .finally(() => setComponentsLoading(false))
                       }
                     }}>
                       Force Parse
@@ -1439,24 +1420,113 @@ export default function GraphsPage() {
         </ScrollArea>
       </Card>
 
+      {/* ============================================================
+          FULLSCREEN OVERLAY
+      ============================================================ */}
       {isGraphFullscreen && (
         <div className="fixed inset-0 z-50 bg-white">
-          <div className="h-full w-full flex flex-col">
-            <div className="h-14 border-b border-stone-200 px-4 flex items-center justify-between bg-white">
-              <div className="flex items-center gap-2">
-                <Badge className="bg-amber-400 text-white text-xs">{currentGraph?.label}</Badge>
-                <span className="text-sm font-medium text-stone-700">{currentGraph?.fullName}</span>
+          <div className="relative h-full w-full flex flex-col">
+
+            {/* ── Top Bar ── */}
+            <div className="h-14 border-b border-stone-200 px-6 flex items-center justify-between bg-white flex-shrink-0">
+              {/* Left: badge + title */}
+              <div className="flex items-center gap-3">
+                <Badge className="bg-amber-400 text-white text-sm px-3 py-1">{currentGraph?.label}</Badge>
+                <span className="text-base font-semibold text-stone-700">{currentGraph?.fullName}</span>
               </div>
-              <Button variant="outline" size="sm" onClick={() => setIsGraphFullscreen(false)}>
-                <Minimize2 className="w-4 h-4 mr-1" />
-                Exit Fullscreen
-              </Button>
+
+              {/* Right: zoom controls + exit */}
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 bg-stone-100 rounded-lg p-1.5">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0 hover:bg-stone-200"
+                    onClick={handleFullscreenZoomOut}
+                  >
+                    <ZoomOut className="w-5 h-5 text-stone-600" />
+                  </Button>
+                  <span className="text-sm font-bold min-w-[3.5rem] text-center text-stone-700">
+                    {Math.round(fullscreenZoom * 100)}%
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0 hover:bg-stone-200"
+                    onClick={handleFullscreenZoomIn}
+                  >
+                    <ZoomIn className="w-5 h-5 text-stone-600" />
+                  </Button>
+                </div>
+
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 w-8 p-0 hover:bg-stone-100"
+                  onClick={handleFullscreenReset}
+                  title="Reset zoom and pan"
+                >
+                  <RotateCcw className="w-5 h-5 text-stone-600" />
+                </Button>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9 px-4 gap-2 text-sm font-semibold border-stone-300 hover:bg-stone-100"
+                  onClick={() => setIsGraphFullscreen(false)}
+                >
+                  <Minimize2 className="w-4 h-4" />
+                  Exit
+                </Button>
+              </div>
             </div>
 
-            <div className="flex-1 bg-stone-50/50">
+            {/* ── Pan / Nodes toggle — floats below the top bar, right-aligned ── */}
+            <div className="absolute top-14 right-6 z-20 pt-3">
+              <button
+                onClick={() => setIsBackgroundLocked(!isBackgroundLocked)}
+               className={[
+  "flex items-center gap-3 px-6 py-3 rounded-xl text-base font-semibold",
+  "border transition-all duration-200 select-none",
+  "focus:outline-none focus:ring-2 focus:ring-stone-300",
+  isBackgroundLocked
+    ? "bg-stone-900 text-white border-stone-900 shadow-md"
+    : "bg-white text-stone-700 border-stone-300 hover:bg-stone-100 shadow-sm",
+].join(" ")}
+                title={isBackgroundLocked ? "Switch to pan background mode" : "Switch to drag nodes mode"}
+              >
+                {isBackgroundLocked ? (
+                  <>
+                    <Lock className="w-5 h-5" />
+                    Drag Nodes
+                  </>
+                ) : (
+                  <>
+                    <Unlock className="w-5 h-5" />
+                    Pan Background
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* ── Canvas ── */}
+            <div
+              className={[
+                "flex-1 bg-white overflow-hidden",
+                isBackgroundLocked ? "cursor-default" : "cursor-grab active:cursor-grabbing",
+              ].join(" ")}
+              onMouseDown={handleFullscreenMouseDown}
+              onMouseMove={handleFullscreenMouseMove}
+              onMouseUp={handleFullscreenMouseUp}
+              onMouseLeave={handleFullscreenMouseUp}
+              onWheel={handleFullscreenWheel}
+            >
               <div
-                className="w-full h-full flex items-center justify-center"
-                style={selectedGraphType !== "ckg" ? { transform: `scale(${zoom / 100})`, transformOrigin: "center center" } : undefined}
+                className="w-full h-full flex items-center justify-center transition-transform duration-75 ease-out"
+                style={{
+                  transform: `translate(${fullscreenPan.x}px, ${fullscreenPan.y}px) scale(${fullscreenZoom})`,
+                  transformOrigin: "center center",
+                }}
               >
                 {selectedComponent && selectedGraphType === "agents-flow" ? (
                   <AgentsFlowGraph
@@ -1526,7 +1596,7 @@ export default function GraphsPage() {
   )
 }
 
-// Real Graph Visualization Component - renders actual graph data from backend
+// Real Graph Visualization Component
 function RealGraphVisualization({
   graphData,
   graphType
@@ -1539,17 +1609,14 @@ function RealGraphVisualization({
   const [dragging, setDragging] = useState<string | null>(null)
   const [offset, setOffset] = useState({ x: 0, y: 0 })
 
-  // Initialize nodes with positions
   useEffect(() => {
     if (!graphData?.nodes) return
 
-    // Use provided positions or calculate layout
     const positionedNodes = graphData.nodes.map((node, index) => {
       if (node.x !== undefined && node.y !== undefined) {
         return node
       }
 
-      // Auto-layout if no positions provided
       const cols = Math.ceil(Math.sqrt(graphData.nodes.length))
       const row = Math.floor(index / cols)
       const col = index % cols
@@ -1592,10 +1659,8 @@ function RealGraphVisualization({
     setDragging(null)
   }
 
-  // Color scheme based on node type
   const getNodeColor = (nodeType: string) => {
     const colors: Record<string, { bg: string; border: string; text: string }> = {
-      // CFG node types
       entry: { bg: "#dcfce7", border: "#22c55e", text: "#166534" },
       exit: { bg: "#fee2e2", border: "#ef4444", text: "#991b1b" },
       branch: { bg: "#fef9c3", border: "#eab308", text: "#854d0e" },
@@ -1611,20 +1676,14 @@ function RealGraphVisualization({
       try: { bg: "#fce7f3", border: "#ec4899", text: "#9d174d" },
       except: { bg: "#fee2e2", border: "#ef4444", text: "#991b1b" },
       finally: { bg: "#ccfbf1", border: "#14b8a6", text: "#0f766e" },
-
-      // PDG node types
       parameter: { bg: "#fce7f3", border: "#ec4899", text: "#9d174d" },
       assignment: { bg: "#e0e7ff", border: "#6366f1", text: "#3730a3" },
       expression: { bg: "#f3f4f6", border: "#9ca3af", text: "#374151" },
       call: { bg: "#fef3c7", border: "#f59e0b", text: "#92400e" },
-
-      // DAG node types
       function: { bg: "#dbeafe", border: "#3b82f6", text: "#1e40af" },
       method: { bg: "#ccfbf1", border: "#14b8a6", text: "#0f766e" },
       class: { bg: "#f3e8ff", border: "#a855f7", text: "#6b21a8" },
       module: { bg: "#fef3c7", border: "#f59e0b", text: "#92400e" },
-
-      // Neighborhood DAG
       selected: { bg: "#dbeafe", border: "#2563eb", text: "#1e3a8a" },
       dependency: { bg: "#dcfce7", border: "#16a34a", text: "#166534" },
       dependent: { bg: "#fef3c7", border: "#d97706", text: "#92400e" },
@@ -1632,7 +1691,6 @@ function RealGraphVisualization({
     return colors[nodeType] || { bg: "#f3f4f6", border: "#9ca3af", text: "#374151" }
   }
 
-  // Edge color based on type
   const getEdgeColor = (edgeType: string) => {
     const colors: Record<string, string> = {
       flow: "#9ca3af",
@@ -1644,7 +1702,6 @@ function RealGraphVisualization({
       call: "#ec4899",
       inherits: "#8b5cf6",
       imports: "#6366f1",
-      // CKG edge types
       hierarchy: "#94a3b8",
       calls: "#ec4899",
       extends: "#8b5cf6",
@@ -1654,7 +1711,6 @@ function RealGraphVisualization({
     return colors[edgeType] || "#9ca3af"
   }
 
-  // Calculate viewBox based on node positions
   const viewBox = useMemo(() => {
     if (nodes.length === 0) return "0 0 600 500"
 
@@ -1672,8 +1728,6 @@ function RealGraphVisualization({
     return `${minX} ${minY} ${width} ${height}`
   }, [nodes])
 
-  // Avoid overlapping edges by offsetting the curve for parallel edges
-  // (multiple edges with the same source/target).
   const edgeBendById = useMemo(() => {
     const bends: Record<string, number> = {}
     if (!graphData?.edges) return bends
@@ -1720,7 +1774,6 @@ function RealGraphVisualization({
       onMouseLeave={handleMouseUp}
     >
       <defs>
-        {/* Arrow markers for different edge types */}
         <marker id="arrow-default" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
           <polygon points="0 0, 8 3, 0 6" fill="#9ca3af" />
         </marker>
@@ -1741,10 +1794,8 @@ function RealGraphVisualization({
         </marker>
       </defs>
 
-      {/* Background */}
       <rect width="100%" height="100%" fill="#fafafa" />
 
-      {/* Edges */}
       {graphData.edges.map((edge) => {
         const fromNode = nodes.find((n) => n.id === edge.source)
         const toNode = nodes.find((n) => n.id === edge.target)
@@ -1758,7 +1809,6 @@ function RealGraphVisualization({
         const edgeColor = getEdgeColor(edge.type)
         const markerId = `arrow-${edge.type === "true" || edge.type === "false" || edge.type === "data" || edge.type === "control" || edge.type === "call" ? edge.type : "default"}`
 
-        // Use curved path for cleaner look
         const midY = (y1 + y2) / 2
         const bend = edgeBendById[edge.id] ?? 0
         const midX = (x1 + x2) / 2
@@ -1791,7 +1841,6 @@ function RealGraphVisualization({
         )
       })}
 
-      {/* Nodes */}
       {nodes.map((node) => {
         const colors = getNodeColor(node.type)
         const label = node.label.length > 20 ? `${node.label.substring(0, 18)}…` : node.label
@@ -1840,7 +1889,6 @@ function RealGraphVisualization({
         )
       })}
 
-      {/* Legend */}
       <g transform={`translate(10, 10)`}>
         <text fontSize="10" fill="#6b7280" fontWeight="600">
           {graphData.name}
@@ -1853,7 +1901,7 @@ function RealGraphVisualization({
   )
 }
 
-// Agents Flow Graph - Shows default agent flow with highlighting for executed agents
+// Agents Flow Graph
 function AgentsFlowGraph({ component, componentFlow }: { component: Component; componentFlow?: ComponentFlow }) {
   const executedAgents = componentFlow?.agents_involved.map(a => a.toLowerCase()) || []
   const executionMessages = componentFlow?.executions?.map((e) => (e.message || "").toLowerCase()) || []
@@ -1909,8 +1957,8 @@ function AgentsFlowGraph({ component, componentFlow }: { component: Component; c
 
   const isConnectionHighlighted = (agent1: string, agent2: string) => {
     return executedAgents.length > 0 &&
-           executedAgents.includes(agent1.toLowerCase()) &&
-           executedAgents.includes(agent2.toLowerCase())
+      executedAgents.includes(agent1.toLowerCase()) &&
+      executedAgents.includes(agent2.toLowerCase())
   }
 
   return (
@@ -1930,47 +1978,22 @@ function AgentsFlowGraph({ component, componentFlow }: { component: Component; c
           </marker>
         </defs>
 
-        {/* Main flow arrows */}
-        <path
-          d="M 140 60 L 300 60"
-          fill="none"
-          stroke={readerNeedsContext ? "#10b981" : "#d1d5db"}
-          strokeWidth="2"
-          markerEnd={readerNeedsContext ? "url(#arrowhead-emerald)" : "url(#arrowhead-gray)"}
-        />
+        <path d="M 140 60 L 300 60" fill="none" stroke={readerNeedsContext ? "#10b981" : "#d1d5db"} strokeWidth="2" markerEnd={readerNeedsContext ? "url(#arrowhead-emerald)" : "url(#arrowhead-gray)"} />
         <text x="220" y="50" textAnchor="middle" className="text-[10px] font-medium" fill={readerNeedsContext ? "#059669" : "#9ca3af"}>Need Context</text>
 
-        <path
-          d="M 400 80 Q 445 115, 400 155"
-          fill="none"
-          stroke={searcherContextFound ? "#10b981" : "#d1d5db"}
-          strokeWidth="2"
-          markerEnd={searcherContextFound ? "url(#arrowhead-emerald)" : "url(#arrowhead-gray)"}
-        />
+        <path d="M 400 80 Q 445 115, 400 155" fill="none" stroke={searcherContextFound ? "#10b981" : "#d1d5db"} strokeWidth="2" markerEnd={searcherContextFound ? "url(#arrowhead-emerald)" : "url(#arrowhead-gray)"} />
         <text x="475" y="95" textAnchor="middle" className="text-[10px] font-medium" fill={searcherContextFound ? "#059669" : "#9ca3af"}>
           <tspan x="475" dy="0">Context</tspan>
           <tspan x="475" dy="13">Found</tspan>
         </text>
 
-        <path
-          d="M 95 82 C 95 130, 240 105, 305 160"
-          fill="none"
-          stroke={readerContextNotNeeded ? "#10b981" : "#d1d5db"}
-          strokeWidth="2"
-          markerEnd={readerContextNotNeeded ? "url(#arrowhead-emerald)" : "url(#arrowhead-gray)"}
-        />
+        <path d="M 95 82 C 95 130, 240 105, 305 160" fill="none" stroke={readerContextNotNeeded ? "#10b981" : "#d1d5db"} strokeWidth="2" markerEnd={readerContextNotNeeded ? "url(#arrowhead-emerald)" : "url(#arrowhead-gray)"} />
         <text x="155" y="125" textAnchor="middle" className="text-[10px] font-medium" fill={readerContextNotNeeded ? "#059669" : "#9ca3af"}>
           <tspan x="155" dy="0">Context</tspan>
           <tspan x="155" dy="13">Not Needed</tspan>
         </text>
 
-        <path
-          d="M 355 195 L 355 220"
-          fill="none"
-          stroke={isConnectionHighlighted("writer", "verifier") ? "#10b981" : "#d1d5db"}
-          strokeWidth="2"
-          markerEnd={isConnectionHighlighted("writer", "verifier") ? "url(#arrowhead-emerald)" : "url(#arrowhead-gray)"}
-        />
+        <path d="M 355 195 L 355 220" fill="none" stroke={isConnectionHighlighted("writer", "verifier") ? "#10b981" : "#d1d5db"} strokeWidth="2" markerEnd={isConnectionHighlighted("writer", "verifier") ? "url(#arrowhead-emerald)" : "url(#arrowhead-gray)"} />
 
         <path d="M 400 230 Q 455 195, 400 165" fill="none" stroke={verifierToWriterLoop ? "#10b981" : "#d1d5db"} strokeWidth="2" markerEnd={verifierToWriterLoop ? "url(#arrowhead-emerald)" : "url(#arrowhead-gray)"} />
         <text x="478" y="195" textAnchor="middle" className="text-[10px] font-medium" fill={verifierToWriterLoop ? "#059669" : "#9ca3af"}>
@@ -1980,18 +2003,11 @@ function AgentsFlowGraph({ component, componentFlow }: { component: Component; c
 
         <path d="M 305 255 C 170 290, 50 215, 50 120 C 50 75, 70 60, 95 60" fill="none" stroke={verifierToReaderLoop ? "#10b981" : "#d1d5db"} strokeWidth="2" markerEnd={verifierToReaderLoop ? "url(#arrowhead-emerald)" : "url(#arrowhead-gray)"} />
 
-        <path
-          d="M 355 262 L 355 290"
-          fill="none"
-          stroke={verifierAccepted ? "#10b981" : "#d1d5db"}
-          strokeWidth="2"
-          markerEnd={verifierAccepted ? "url(#arrowhead-emerald)" : "url(#arrowhead-gray)"}
-        />
+        <path d="M 355 262 L 355 290" fill="none" stroke={verifierAccepted ? "#10b981" : "#d1d5db"} strokeWidth="2" markerEnd={verifierAccepted ? "url(#arrowhead-emerald)" : "url(#arrowhead-gray)"} />
         <text x="400" y="280" textAnchor="middle" className="text-[10px] font-medium" fill={verifierAccepted ? "#059669" : "#9ca3af"}>Accepted</text>
 
         <path d="M 300 40 Q 220 15, 140 40" fill="none" stroke={searcherContextNotFound ? "#10b981" : "#d1d5db"} strokeWidth="2" markerEnd={searcherContextNotFound ? "url(#arrowhead-emerald)" : "url(#arrowhead-gray)"} />
 
-        {/* Agent Nodes */}
         <AgentNode label="Reader" x={95} y={60} status={isAgentExecuted("reader") ? "completed" : "pending"} />
         <AgentNode label="Searcher" x={355} y={60} status={isAgentExecuted("searcher") ? "completed" : "pending"} />
         <AgentNode label="Writer" x={355} y={175} status={isAgentExecuted("writer") ? "completed" : "pending"} />

@@ -234,6 +234,7 @@ export function AgentPipelineExecution({ pipelineState, repoId, selectedComponen
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [lastMousePos, setLastMousePos] = useState({ x: 0, y: 0 });
+  const wrapperRef = useRef<HTMLDivElement>(null);
 
   // Initial centering and scaling
   useEffect(() => {

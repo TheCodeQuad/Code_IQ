@@ -40,7 +40,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { uploadRepo } from "@/lib/api"
+import { uploadRepo, uploadZipRepo } from "@/lib/api"
 import { useGitHub } from "@/hooks/use-github"
 
 const LANGUAGE_EXTENSIONS: Record<string, string[]> = {
@@ -80,6 +80,7 @@ export default function NewAnalysisPage() {
   const [repoValid, setRepoValid] = useState(false)
   const [extractedRepoName, setExtractedRepoName] = useState("")
   const [repoValidationMessage, setRepoValidationMessage] = useState("")
+  const [zipFile, setZipFile] = useState<File | null>(null)
 
   const languages = [
     { id: "python", label: "Python" },
@@ -134,6 +135,35 @@ export default function NewAnalysisPage() {
     )
   }
 
+  const handleZipFileSelect = (files: FileList | null) => {
+    if (files && files.length > 0) {
+      const file = files[0]
+      if (file.name.toLowerCase().endsWith(".zip")) {
+        setZipFile(file)
+        setAnalysisError(null)
+      } else {
+        setAnalysisError("Please select a valid ZIP file (.zip)")
+      }
+    }
+  }
+
+  const handleZipDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setDragActive(false)
+    
+    const files = e.dataTransfer.files
+    if (files && files.length > 0) {
+      const file = files[0]
+      if (file.name.toLowerCase().endsWith(".zip")) {
+        setZipFile(file)
+        setAnalysisError(null)
+      } else {
+        setAnalysisError("Please drop a valid ZIP file (.zip)")
+      }
+    }
+  }
+
   const handleStartAnalysis = async () => {
     // Validate inputs
     if (uploadMethod === "git") {
@@ -143,6 +173,15 @@ export default function NewAnalysisPage() {
       }
       if (!repoValid) {
         setAnalysisError("Please enter a valid Git repository URL")
+        return
+      }
+    } else if (uploadMethod === "upload") {
+      if (!zipFile) {
+        setAnalysisError("Please select a ZIP file")
+        return
+      }
+      if (!zipFile.name.toLowerCase().endsWith(".zip")) {
+        setAnalysisError("Please select a valid ZIP file")
         return
       }
     }
@@ -161,11 +200,19 @@ export default function NewAnalysisPage() {
     setAnalysisError(null)
 
     try {
-      // Step 1: Upload/clone the repository and persist metadata.
-      const uploadResponse = await uploadRepo({
-        repo_url: repoUrl,
-        user_id: session.user.id,
-      })
+      let uploadResponse
+      
+      if (uploadMethod === "upload") {
+        // Step 1: Upload ZIP file
+        uploadResponse = await uploadZipRepo(zipFile, session.user.id)
+        setZipFile(null)
+      } else {
+        // Step 1: Upload/clone the repository and persist metadata.
+        uploadResponse = await uploadRepo({
+          repo_url: repoUrl,
+          user_id: session.user.id,
+        })
+      }
 
       // Step 2: Navigate to pipeline page; execution auto-starts there.
       const modeParam = config.graphsOnly ? "?mode=graphs" : ""
@@ -379,23 +426,53 @@ export default function NewAnalysisPage() {
                   </div>
 
                   {uploadMethod === "upload" ? (
-                    <div
-                      className={`border border-dashed rounded-lg p-6 text-center transition-colors ${
-                        dragActive ? "border-foreground/30 bg-secondary" : "border-border"
-                      }`}
-                      onDragEnter={() => setDragActive(true)}
-                      onDragLeave={() => setDragActive(false)}
-                      onDragOver={(e) => e.preventDefault()}
-                      onDrop={() => setDragActive(false)}
-                    >
-                      <Upload className="w-8 h-8 mx-auto mb-3 text-black" />
-                      <p className="text-sm text-foreground font-medium mb-0.5">
-                        Drag and drop your ZIP file here
-                      </p>
-                      <p className="text-xs text-muted-foreground mb-3">or click to browse</p>
-                      <Button variant="outline" size="sm" className="border-black bg-black h-8 text-xs text-white hover:bg-purple-900 hover:border-purple-900">
-                        Select File
-                      </Button>
+                    <div>
+                      <input
+                        id="zip-file-input"
+                        type="file"
+                        accept=".zip"
+                        onChange={(e) => handleZipFileSelect(e.currentTarget.files)}
+                        className="hidden"
+                      />
+                      <div
+                        className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors cursor-pointer ${
+                          dragActive ? "border-black/50 bg-purple-50" : "border-border hover:border-border/80"
+                        }`}
+                        onDragEnter={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          setDragActive(true)
+                        }}
+                        onDragLeave={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          setDragActive(false)
+                        }}
+                        onDragOver={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                        }}
+                        onDrop={handleZipDrop}
+                        onClick={() => document.getElementById("zip-file-input")?.click()}
+                      >
+                        <Upload className="w-8 h-8 mx-auto mb-3 text-black" />
+                        <p className="text-sm text-foreground font-medium mb-0.5">
+                          {zipFile ? `Selected: ${zipFile.name}` : "Drag and drop your ZIP file here"}
+                        </p>
+                        <p className="text-xs text-muted-foreground mb-3">or click to browse</p>
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          className="border-black bg-black h-8 text-xs text-white hover:bg-purple-900 hover:border-purple-900"
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            document.getElementById("zip-file-input")?.click()
+                          }}
+                        >
+                          Select File
+                        </Button>
+                      </div>
                     </div>
                   ) : uploadMethod === "git" ? (
                     <div className="space-y-3">
@@ -605,7 +682,12 @@ export default function NewAnalysisPage() {
                   <Button
                     className="w-full mt-3 h-9 text-sm bg-black text-white hover:bg-purple-900"
                     onClick={handleStartAnalysis}
-                    disabled={selectedLanguages.length === 0 || isAnalyzing || (uploadMethod === "git" && !repoUrl.trim())}
+                    disabled={
+                      selectedLanguages.length === 0 || 
+                      isAnalyzing || 
+                      (uploadMethod === "git" && !repoUrl.trim()) ||
+                      (uploadMethod === "upload" && !zipFile)
+                    }
                   >
                     {isAnalyzing ? (
                       <>
