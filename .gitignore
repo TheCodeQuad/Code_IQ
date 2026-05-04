@@ -44,3 +44,6 @@ node_modules/bson/src/parser/utils.ts
 .envold
 *.mp4 
 *.mp4 
+
+# Ignore cloned repositories
+db/input/repositories/

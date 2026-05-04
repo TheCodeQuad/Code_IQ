@@ -302,6 +302,12 @@ class GraphService:
                     return IRComponentType.METHOD
                 return IRComponentType.FUNCTION
 
+            def coerce_line(value: object) -> Optional[int]:
+                try:
+                    return int(value)  # type: ignore[arg-type]
+                except (TypeError, ValueError):
+                    return None
+
             for comp in comps.values():
                 raw_type = getattr(comp.type, "value", comp.type)
 
@@ -313,7 +319,25 @@ class GraphService:
                 if component_type and mapped_type.value != component_type:
                     continue
 
-                comp_file_path = comp.location.file_path
+                location = getattr(comp, "location", None)
+                if not location:
+                    logger.warning(
+                        "Skipping component without location: %s",
+                        getattr(comp, "id", "<unknown>")
+                    )
+                    continue
+
+                comp_file_path = getattr(location, "file_path", None)
+                start_line = coerce_line(getattr(location, "start_line", None))
+                end_line = coerce_line(getattr(location, "end_line", None))
+
+                if not comp_file_path or start_line is None or end_line is None:
+                    logger.warning(
+                        "Skipping component with incomplete location: %s",
+                        getattr(comp, "id", "<unknown>")
+                    )
+                    continue
+
                 if file_path and comp_file_path != file_path:
                     continue
 
@@ -324,19 +348,23 @@ class GraphService:
                         parent_class = parts[-2]
 
                 components.append(ComponentInfo(
-                    id=comp.id,
-                    name=comp.name,
+                    id=str(comp.id),
+                    name=str(comp.name),
                     type=mapped_type,
                     file_path=comp_file_path,
-                    start_line=comp.location.start_line,
-                    end_line=comp.location.end_line,
+                    start_line=start_line,
+                    end_line=end_line,
                     parent_class=parent_class,
                 ))
         else:
             # Fallback: Python-only IR
-            ir = self.get_ir(repo_path)
-            if not ir:
-                ir = self.parse_repository(repo_path)
+            try:
+                ir = self.get_ir(repo_path)
+                if not ir:
+                    ir = self.parse_repository(repo_path)
+            except Exception as e:
+                logger.error(f"Error parsing repository for component listing: {e}")
+                return GraphListResponse(success=True, components=[], total=0)
 
             # Add functions
             for func_id, func_ir in ir.functions.items():

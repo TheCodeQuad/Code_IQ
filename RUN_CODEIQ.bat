@@ -3,7 +3,7 @@ setlocal enabledelayedexpansion
 
 echo.
 echo ========================================
-echo     CodeIQ FULL INSTALL (Stable)
+echo        CodeIQ Setup ^& Run Script
 echo ========================================
 echo.
 
@@ -11,126 +11,117 @@ REM ----------------------------------------
 REM CHECK PROJECT STRUCTURE
 REM ----------------------------------------
 if not exist "backend" (
-    echo [ERROR] backend folder missing!
+    echo [ERROR] backend folder not found!
     pause
     exit /b 1
 )
 
 if not exist "frontend" (
-    echo [ERROR] frontend folder missing!
+    echo [ERROR] frontend folder not found!
     pause
     exit /b 1
 )
 
 REM ----------------------------------------
-REM FIND CONDA
+REM CONFIG
 REM ----------------------------------------
 set VENV_NAME=codeiq
-set CONDA_PATH=
 
+REM Detect Conda install
 if exist "%USERPROFILE%\anaconda3\Scripts\activate.bat" (
     set CONDA_PATH=%USERPROFILE%\anaconda3
 ) else if exist "%USERPROFILE%\miniconda3\Scripts\activate.bat" (
     set CONDA_PATH=%USERPROFILE%\miniconda3
 ) else (
     echo [ERROR] Conda not found!
+    echo Install from: https://www.anaconda.com/download
     pause
     exit /b 1
 )
 
-echo [OK] Conda found at: %CONDA_PATH%
+echo [INFO] Using Conda at: %CONDA_PATH%
 
 REM ----------------------------------------
-REM CREATE ENV
+REM CREATE ENV IF NOT EXISTS
 REM ----------------------------------------
 call "%CONDA_PATH%\Scripts\activate.bat"
 
 conda env list | find "%VENV_NAME%" >nul
 if %errorlevel% neq 0 (
-    echo Creating environment...
-    conda create -y -n %VENV_NAME% python=3.11
+    echo [INFO] Creating conda environment: %VENV_NAME%
+    call conda create -y -n %VENV_NAME% python=3.11
+    if %errorlevel% neq 0 (
+        echo [ERROR] Failed to create environment
+        pause
+        exit /b 1
+    )
 )
 
 REM ----------------------------------------
 REM ACTIVATE ENV
 REM ----------------------------------------
+echo [INFO] Activating environment...
 call "%CONDA_PATH%\Scripts\activate.bat" %VENV_NAME%
 
-echo [OK] Environment activated
-
 REM ----------------------------------------
-REM INSTALL BACKEND
+REM INSTALL BACKEND DEPENDENCIES
 REM ----------------------------------------
 echo.
-echo Installing Python dependencies...
+echo [1/3] Installing backend dependencies...
 
 if exist "requirements.txt" (
     pip install -r requirements.txt
 ) else (
-    echo [WARN] No requirements.txt
+    echo [WARN] No requirements.txt found
 )
 
 REM ----------------------------------------
-REM CHECK NODE
+REM INSTALL FRONTEND DEPENDENCIES
 REM ----------------------------------------
 echo.
-echo Checking Node.js...
-
-node -v >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [ERROR] Node.js not installed!
-    echo Install: https://nodejs.org
-    pause
-    exit /b 1
-)
-
-echo [OK] Node installed
-
-REM ----------------------------------------
-REM INSTALL LLAMA CPP
-REM ----------------------------------------
-echo.
-echo Installing llama-cpp-python...
-
-pip install --upgrade llama-cpp-python
-
-REM ----------------------------------------
-REM DOWNLOAD MODEL
-REM ----------------------------------------
-echo.
-echo Downloading model...
-
-if not exist "models" mkdir models
-
-set MODEL_FILE=Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf
-set MODEL_URL=https://huggingface.co/bartowski/Qwen2.5-Coder-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf?download=true
-
-if exist "models\%MODEL_FILE%" (
-    echo [OK] Model already exists
-) else (
-    powershell -Command "Invoke-WebRequest -Uri '%MODEL_URL%' -OutFile 'models\%MODEL_FILE%'"
-)
-
-REM ----------------------------------------
-REM INSTALL FRONTEND
-REM ----------------------------------------
-echo.
-echo Installing frontend...
+echo [2/3] Installing frontend dependencies...
 
 cd frontend
-npm install
+if exist "package.json" (
+    call npm install
+) else (
+    echo [WARN] No package.json found
+)
 cd ..
+
+REM ----------------------------------------
+REM START BACKEND
+REM ----------------------------------------
+echo.
+echo [3/3] Starting backend...
+
+start cmd /k ^
+"cd /d %cd% && ^
+CALL %CONDA_PATH%\Scripts\activate.bat %VENV_NAME% && ^
+python -m uvicorn backend.main:app --reload --port 8000"
+
+timeout /t 3 >nul
+
+REM ----------------------------------------
+REM START FRONTEND
+REM ----------------------------------------
+echo Starting frontend...
+
+start cmd /k ^
+"cd /d %cd%\frontend && ^
+npm run dev"
 
 REM ----------------------------------------
 REM DONE
 REM ----------------------------------------
 echo.
 echo ========================================
-echo     INSTALLATION COMPLETE ✅
+echo        CodeIQ is Running 🚀
 echo ========================================
-echo.
-echo Next:
-echo Run: run_codeiq.bat
+echo Backend  : http://localhost:8000
+echo API Docs : http://localhost:8000/docs
+echo Frontend : http://localhost:3000
+echo ========================================
 echo.
 
 pause

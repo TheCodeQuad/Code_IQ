@@ -30,6 +30,7 @@ interface GitHubRepositorySelectorProps {
   onRepositoryCloned?: (repoPath: string) => void
   embedded?: boolean
   onClose?: () => void
+  analysisMode?: "full" | "graphs"
 }
 
 export function GitHubRepositorySelector({
@@ -37,6 +38,7 @@ export function GitHubRepositorySelector({
   onRepositoryCloned,
   embedded = false,
   onClose,
+  analysisMode = "full",
 }: GitHubRepositorySelectorProps) {
   const router = useRouter()
   const [open, setOpen] = useState(false)
@@ -186,7 +188,8 @@ export function GitHubRepositorySelector({
       onRepositorySelected?.(repo)
 
       // Navigate to analysis page
-      router.push(`/dashboard/analysis/${data.repo_id}/pipeline`)
+      const modeParam = analysisMode === "graphs" ? "?mode=graphs" : ""
+      router.push(`/dashboard/analysis/${data.repo_id}/pipeline${modeParam}`)
       if (!embedded) {
         setOpen(false)
       }

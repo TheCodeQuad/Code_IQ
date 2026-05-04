@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef, useCallback, useEffect } from 'react'
+import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
@@ -79,22 +80,22 @@ function HorizontalStepItem({ step, isLast }: { step: PipelineStep; isLast: bool
         <div
           className={`w-10 h-10 rounded-full flex items-center justify-center transition-all duration-300 ${
             step.status === 'completed'
-              ? 'bg-emerald-100 border-2 border-emerald-500'
+              ? 'bg-rose-100 border-2 border-[#dc2d98]'
               : step.status === 'running'
-                ? 'bg-emerald-50 border-2 border-emerald-500'
-                : 'bg-gray-50 border-2 border-gray-200'
+                ? 'bg-rose-50 border-2 border-[#f15bb5]'
+                : 'bg-white border-2 border-rose-100'
           }`}
         >
           <StatusIcon status={step.status} />
         </div>
         <div className="mt-2 text-center max-w-22.5">
-          <span className={`font-medium text-xs block ${step.status === 'running' ? 'text-emerald-700' : step.status === 'completed' ? 'text-emerald-700' : 'text-gray-700'}`}>
+          <span className={`font-medium text-xs block ${step.status === 'running' ? 'text-[#dc2d98]' : step.status === 'completed' ? 'text-[#dc2d98]' : 'text-rose-400'}`}>
             {step.name}
           </span>
         </div>
       </div>
       {!isLast && (
-        <div className={`w-12 h-0.5 mx-2 -mt-5 ${step.status === 'completed' ? 'bg-emerald-300' : 'bg-gray-200'}`} />
+        <div className={`w-12 h-0.5 mx-2 -mt-5 ${step.status === 'completed' ? 'bg-rose-300' : 'bg-rose-100'}`} />
       )}
     </div>
   )
@@ -106,11 +107,13 @@ function NavigatorModuleCard({
   detectedTotal,
   isExpanded,
   onToggle,
+  showAgenticHint = true,
 }: {
   module: PipelineState['navigator']
   detectedTotal: number
   isExpanded: boolean
   onToggle: () => void
+  showAgenticHint?: boolean
 }) {
   const completedSteps = module.steps.filter((s) => s.status === 'completed').length
   const totalSteps = module.steps.length
@@ -120,8 +123,8 @@ function NavigatorModuleCard({
   const shownMethodCount = module.extractedComponents.length > 0 ? module.extractedComponents.filter(c => c.type === 'method').length : 0
 
   return (
-    <Card className="bg-white border-gray-200 shadow-sm overflow-hidden">
-      <button onClick={onToggle} className="w-full p-4 flex items-center justify-between hover:bg-gray-50 transition-colors">
+    <Card className="bg-white/85 border-pink-100 shadow-[0_12px_28px_rgba(241,143,193,0.18)] overflow-hidden">
+      <button onClick={onToggle} className="w-full p-4 flex items-center justify-between hover:bg-pink-50/60 transition-colors">
         <div className="flex items-center gap-4">
           <div
             className={`w-12 h-12 rounded-xl flex items-center justify-center transition-all duration-300 ${
@@ -140,7 +143,7 @@ function NavigatorModuleCard({
           </div>
         </div>
         <div className="flex items-center gap-4">
-          <Badge variant="outline" className="text-xs text-gray-600 border-gray-300">
+          <Badge variant="outline" className="text-xs text-rose-600 border-rose-200 bg-white/70">
             {completedSteps}/{totalSteps} steps
           </Badge>
           {isExpanded ? <ChevronDown className="w-5 h-5 text-gray-400" /> : <ChevronRight className="w-5 h-5 text-gray-400" />}
@@ -148,7 +151,7 @@ function NavigatorModuleCard({
       </button>
 
       {isExpanded && (
-        <div className="px-4 pb-4 pt-4 border-t border-gray-100">
+        <div className="px-4 pb-4 pt-4 border-t border-pink-100">
           {/* Horizontal pipeline layout */}
           <div className="flex items-start justify-center gap-0 overflow-x-auto py-2">
             {module.steps.map((step, idx) => (
@@ -169,7 +172,11 @@ function NavigatorModuleCard({
                   {shownMethodCount} methods
                 </p>
               ) : (
-                <p className="text-xs text-emerald-600 mt-1">Component type breakdown will appear as agentic processing starts.</p>
+                <p className="text-xs text-emerald-600 mt-1">
+                  {showAgenticHint
+                    ? 'Component type breakdown will appear as agentic processing starts.'
+                    : 'Graph outputs are being prepared from the extracted components.'}
+                </p>
               )}
             </div>
           )}
@@ -708,8 +715,8 @@ function AgenticModuleCard({
   const selectedIteration = visibleIterations.find((i) => i.componentId === selectedComponent)
 
   return (
-    <Card className="bg-white border-gray-200 shadow-sm overflow-hidden">
-      <button onClick={onToggle} className="w-full p-4 flex items-center justify-between hover:bg-gray-50 transition-colors">
+    <Card className="bg-white/85 border-pink-100 shadow-[0_12px_28px_rgba(241,143,193,0.18)] overflow-hidden">
+      <button onClick={onToggle} className="w-full p-4 flex items-center justify-between hover:bg-pink-50/60 transition-colors">
         <div className="flex items-center gap-4">
           <div
             className={`w-12 h-12 rounded-xl flex items-center justify-center transition-all duration-300 ${
@@ -839,7 +846,7 @@ function FinalizationModuleCard({ module, isExpanded, onToggle }: { module: Pipe
           </div>
         </div>
         <div className="flex items-center gap-4">
-          <Badge variant="outline" className="text-xs text-gray-600 border-gray-300">
+          <Badge variant="outline" className="text-xs text-rose-600 border-rose-200 bg-white/70">
             {completedSteps}/{totalSteps} steps
           </Badge>
           {isExpanded ? <ChevronDown className="w-5 h-5 text-gray-400" /> : <ChevronRight className="w-5 h-5 text-gray-400" />}
@@ -847,7 +854,7 @@ function FinalizationModuleCard({ module, isExpanded, onToggle }: { module: Pipe
       </button>
 
       {isExpanded && (
-        <div className="px-4 pb-4 pt-4 border-t border-gray-100">
+        <div className="px-4 pb-4 pt-4 border-t border-pink-100">
           {/* Horizontal pipeline layout */}
           <div className="flex items-start justify-center gap-0 overflow-x-auto py-2">
             {module.steps.map((step, idx) => (
@@ -857,6 +864,96 @@ function FinalizationModuleCard({ module, isExpanded, onToggle }: { module: Pipe
         </div>
       )}
     </Card>
+  )
+}
+
+function GraphsOnlyExecution({
+  pipelineState,
+  repoId,
+  repoMeta,
+  expandedModules,
+  onToggleModule,
+}: {
+  pipelineState: PipelineState
+  repoId: string
+  repoMeta: { name?: string; fileCount?: number }
+  expandedModules: Record<string, boolean>
+  onToggleModule: (module: string) => void
+}) {
+  const isComplete = pipelineState.finalization.status === 'completed'
+  const totalSteps = pipelineState.navigator.steps.length + pipelineState.finalization.steps.length
+  const completedSteps =
+    pipelineState.navigator.steps.filter((s) => s.status === 'completed').length +
+    pipelineState.finalization.steps.filter((s) => s.status === 'completed').length
+  const overallProgress = totalSteps > 0 ? Math.round((completedSteps / totalSteps) * 100) : 0
+
+  return (
+    <div className="relative h-full overflow-y-auto bg-[radial-gradient(80%_60%_at_5%_0%,#fde7f3_0%,transparent_60%),radial-gradient(70%_55%_at_95%_10%,#ffe2ef_0%,transparent_60%),linear-gradient(180deg,#fff7fb_0%,#fdf4f9_45%,#fff9fb_100%)]">
+      <div className="pointer-events-none absolute -top-24 left-10 h-56 w-56 rounded-full bg-[#ffd5ea] opacity-40 blur-3xl" />
+      <div className="pointer-events-none absolute top-20 right-6 h-64 w-64 rounded-full bg-[#f9b7d5] opacity-30 blur-[90px]" />
+      <div className="max-w-5xl mx-auto px-6 py-10 relative z-10">
+        <div className="rounded-3xl border border-pink-100 bg-white/80 backdrop-blur-sm shadow-[0_18px_50px_rgba(241,143,193,0.18)] p-6 sm:p-8">
+          <div className="flex flex-wrap items-start justify-between gap-6">
+            <div className="max-w-2xl">
+              <Badge className="bg-white text-[#dc2d98] border border-[#f3b3d1] shadow-sm">
+                Graphs-only mode
+              </Badge>
+              <h2 className="text-3xl sm:text-4xl font-semibold text-foreground mt-3 tracking-tight">
+                Architecture Ingestion
+              </h2>
+              <p className="text-sm text-muted-foreground mt-2">
+                Building CFG, PDG, HPG, and CKG graphs from your repository.
+              </p>
+              {repoMeta.name && (
+                <p className="text-xs text-muted-foreground mt-2">
+                  {repoMeta.name}{repoMeta.fileCount != null ? ` • ${repoMeta.fileCount} files` : ""}
+                </p>
+              )}
+              <div className="mt-4">
+                <div className="h-2 w-full rounded-full bg-pink-100/70 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-[#dc2d98] via-[#f15bb5] to-[#ff8fd4] transition-all duration-500"
+                    style={{ width: `${overallProgress}%` }}
+                  />
+                </div>
+                <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+                  <span>{isComplete ? 'Graphs ready' : 'Preparing graphs'}</span>
+                  <span>{overallProgress}%</span>
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              {isComplete ? (
+                <Link href={`/dashboard/analysis/${repoId}/results/graph`}>
+                  <Button className="bg-black text-white hover:bg-[#dc2d98] rounded-full px-6">
+                    Next: View Graphs
+                  </Button>
+                </Link>
+              ) : (
+                <Button disabled className="rounded-full px-6 border border-pink-200 bg-white/70 text-pink-600">
+                  Preparing graphs... {overallProgress}%
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-4 mt-6">
+          <NavigatorModuleCard
+            module={pipelineState.navigator}
+            detectedTotal={pipelineState.agentic.totalComponents}
+            isExpanded={expandedModules.navigator}
+            onToggle={() => onToggleModule('navigator')}
+            showAgenticHint={false}
+          />
+          <FinalizationModuleCard
+            module={pipelineState.finalization}
+            isExpanded={expandedModules.finalization}
+            onToggle={() => onToggleModule('finalization')}
+          />
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -896,7 +993,17 @@ function toComponentType(raw?: string): ComponentType {
   return 'function'
 }
 
-export function PipelineVisualization({ repoId, autoStart = false }: { repoId: string; autoStart?: boolean }) {
+export function PipelineVisualization({
+  repoId,
+  autoStart = false,
+  mode,
+}: {
+  repoId: string
+  autoStart?: boolean
+  mode?: 'full' | 'graphs'
+}) {
+  const searchParams = useSearchParams()
+  const resolvedMode = mode ?? (searchParams.get('mode') === 'graphs' ? 'graphs' : 'full')
   const [pipelineState, setPipelineState] = useState<PipelineState>(createInitialPipelineState)
   const [isStarting, setIsStarting] = useState(false)
   const [showNavigatorOverlay, setShowNavigatorOverlay] = useState(false)
@@ -910,10 +1017,29 @@ export function PipelineVisualization({ repoId, autoStart = false }: { repoId: s
   const [selectedComponent, setSelectedComponent] = useState<string | null>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
   const autoStartTriggeredRef = useRef(false)
+  const overlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const isGraphsOnly = resolvedMode === 'graphs'
 
   const resetPipelineViewState = useCallback(() => {
     setPipelineState(createInitialPipelineState())
     setSelectedComponent(null)
+  }, [])
+
+  const scheduleOverlayShow = useCallback(() => {
+    if (overlayTimerRef.current) {
+      clearTimeout(overlayTimerRef.current)
+    }
+    overlayTimerRef.current = setTimeout(() => {
+      setShowNavigatorOverlay(true)
+    }, 700)
+  }, [])
+
+  const cancelOverlayShow = useCallback(() => {
+    if (overlayTimerRef.current) {
+      clearTimeout(overlayTimerRef.current)
+      overlayTimerRef.current = null
+    }
+    setShowNavigatorOverlay(false)
   }, [])
 
   const toggleModule = (module: string) => {
@@ -1150,11 +1276,14 @@ export function PipelineVisualization({ repoId, autoStart = false }: { repoId: s
 
   const startPipeline = async () => {
     setIsStarting(true)
-    setShowNavigatorOverlay(true)
+    scheduleOverlayShow()
     try {
       resetPipelineViewState()
+      const payload = isGraphsOnly ? { demo_mode: true } : undefined
       const res = await fetch(`/api/repos/${repoId}/generate`, {
         method: 'POST',
+        headers: payload ? { 'Content-Type': 'application/json' } : undefined,
+        body: payload ? JSON.stringify(payload) : undefined,
       })
       if (!res.ok) {
         throw new Error(`Failed to start pipeline (HTTP ${res.status})`)
@@ -1174,11 +1303,11 @@ export function PipelineVisualization({ repoId, autoStart = false }: { repoId: s
       eventSourceRef.current = null
     }
     autoStartTriggeredRef.current = false
-    setShowNavigatorOverlay(false)
+    cancelOverlayShow()
     setRepoMeta({})
     setStreamState('connecting')
     resetPipelineViewState()
-  }, [repoId, resetPipelineViewState])
+  }, [cancelOverlayShow, repoId, resetPipelineViewState])
 
   useEffect(() => {
     async function bootstrap() {
@@ -1198,16 +1327,21 @@ export function PipelineVisualization({ repoId, autoStart = false }: { repoId: s
 
         if (statusRes.ok) {
           const status = (await statusRes.json()) as BackendPipelineEvent
-          if (status.status && !['pending', 'failed', 'completed'].includes(String(status.status))) {
-            setShowNavigatorOverlay(true)
+          if (status.status === 'completed') {
+            applyBackendEvent({ event_type: 'pipeline-completed' })
+            cancelOverlayShow()
+          } else {
+            if (status.status && !['pending', 'failed', 'completed'].includes(String(status.status))) {
+              scheduleOverlayShow()
+            }
+            applyBackendEvent({
+              phase: 'navigator',
+              step_id: 'extract-components',
+              status: status.status,
+              progress_percent: status.progress_percent,
+              agent: status.agent,
+            })
           }
-          applyBackendEvent({
-            phase: 'navigator',
-            step_id: 'extract-components',
-            status: status.status,
-            progress_percent: status.progress_percent,
-            agent: status.agent,
-          })
         }
       } catch {
         setStreamState('error')
@@ -1223,7 +1357,36 @@ export function PipelineVisualization({ repoId, autoStart = false }: { repoId: s
         eventSourceRef.current.close()
       }
     }
-  }, [applyBackendEvent, connectEventStream, repoId])
+  }, [applyBackendEvent, cancelOverlayShow, connectEventStream, repoId, scheduleOverlayShow])
+
+  useEffect(() => {
+    if (!isGraphsOnly || !showNavigatorOverlay) {
+      return
+    }
+
+    let isMounted = true
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/repos/${repoId}/status`, { cache: 'no-store' })
+        if (!res.ok) return
+        const status = (await res.json()) as BackendPipelineEvent
+        if (status.status === 'completed' && isMounted) {
+          applyBackendEvent({ event_type: 'pipeline-completed' })
+          cancelOverlayShow()
+        }
+      } catch {
+        // Ignore polling errors; SSE may recover.
+      }
+    }
+
+    const interval = setInterval(poll, 1500)
+    void poll()
+
+    return () => {
+      isMounted = false
+      clearInterval(interval)
+    }
+  }, [applyBackendEvent, cancelOverlayShow, isGraphsOnly, repoId, showNavigatorOverlay])
 
   useEffect(() => {
     if (!autoStart || autoStartTriggeredRef.current) {
@@ -1300,12 +1463,21 @@ export function PipelineVisualization({ repoId, autoStart = false }: { repoId: s
         totalComponents={pipelineState.agentic.totalComponents}
         onComplete={() => setShowNavigatorOverlay(false)}
       />
-      {/* Agent Pipeline Execution – full-bleed view */}
-      <AgentPipelineExecution
-        pipelineState={pipelineState}
-        repoId={repoId}
-        selectedComponent={selectedComponent}
-      />
+      {isGraphsOnly ? (
+        <GraphsOnlyExecution
+          pipelineState={pipelineState}
+          repoId={repoId}
+          repoMeta={repoMeta}
+          expandedModules={expandedModules}
+          onToggleModule={toggleModule}
+        />
+      ) : (
+        <AgentPipelineExecution
+          pipelineState={pipelineState}
+          repoId={repoId}
+          selectedComponent={selectedComponent}
+        />
+      )}
     </div>
   )
 }

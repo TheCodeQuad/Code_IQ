@@ -117,7 +117,7 @@ set PYTHONPATH=%CD%\backend
 python -m uvicorn backend.app:app --reload --reload-dir backend
 
 frontend:
-cd frontend
+cd frontend`
 npm run dev
 
 Data folder location:

@@ -31,6 +31,7 @@ import {
   Globe,
   Github,
   Unplug,
+  Network,
 } from "lucide-react"
 import {
   Select,
@@ -70,6 +71,7 @@ export default function NewAnalysisPage() {
     enableGraphViz: true,
     enableEvaluation: true,
     docStyle: "google",
+    graphsOnly: false,
   })
   const [dragActive, setDragActive] = useState(false)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
@@ -166,7 +168,8 @@ export default function NewAnalysisPage() {
       })
 
       // Step 2: Navigate to pipeline page; execution auto-starts there.
-      router.push(`/dashboard/analysis/${uploadResponse.repo_id}/pipeline`)
+      const modeParam = config.graphsOnly ? "?mode=graphs" : ""
+      router.push(`/dashboard/analysis/${uploadResponse.repo_id}/pipeline${modeParam}`)
     } catch (err: any) {
       setAnalysisError(err.message || "Failed to upload repository. Please check the URL and try again.")
       setIsAnalyzing(false)
@@ -351,7 +354,8 @@ export default function NewAnalysisPage() {
                       type="button"
                       onClick={() => {
                         if (isGitHubConnected) {
-                          router.push("/dashboard/analysis/new/github")
+                          const modeParam = config.graphsOnly ? "?mode=graphs" : ""
+                          router.push(`/dashboard/analysis/new/github${modeParam}`)
                         }
                       }}
                       disabled={!isGitHubConnected}
@@ -435,6 +439,47 @@ export default function NewAnalysisPage() {
                 </CardContent>
               </Card>
 
+              {/* Graphs-only Mode Highlight */}
+              <Card className="border-pink-200 bg-white">
+                <CardHeader className="pb-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <CardTitle className="text-base font-semibold text-foreground">Graphs-only Mode</CardTitle>
+                      <CardDescription className="text-xs">
+                        Skip doc generation and evaluation; build graphs only
+                      </CardDescription>
+                    </div>
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-[#dc2d98]">New</span>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-white border border-pink-200 flex items-center justify-center">
+                        <Network className="w-4 h-4 text-[#dc2d98]" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-foreground">Generate graphs only</p>
+                        <p className="text-xs text-muted-foreground">
+                          CFG, PDG, HPG, and CKG without full pipeline
+                        </p>
+                      </div>
+                    </div>
+                    <Switch
+                      checked={config.graphsOnly}
+                      onCheckedChange={(checked) =>
+                        setConfig((prev) => ({
+                          ...prev,
+                          graphsOnly: checked,
+                          enableGraphViz: checked ? true : prev.enableGraphViz,
+                          enableEvaluation: checked ? false : prev.enableEvaluation,
+                        }))
+                      }
+                    />
+                  </div>
+                </CardContent>
+              </Card>
+
               {/* Configuration Options */}
               <Card className="border-border">
                 <CardHeader className="pb-3">
@@ -455,7 +500,8 @@ export default function NewAnalysisPage() {
                       </div>
                     </div>
                     <Switch
-                      checked={config.enableGraphViz}
+                      checked={config.graphsOnly ? true : config.enableGraphViz}
+                      disabled={config.graphsOnly}
                       onCheckedChange={(checked) =>
                         setConfig((prev) => ({ ...prev, enableGraphViz: checked }))
                       }
@@ -475,7 +521,8 @@ export default function NewAnalysisPage() {
                       </div>
                     </div>
                     <Switch
-                      checked={config.enableEvaluation}
+                      checked={config.graphsOnly ? false : config.enableEvaluation}
+                      disabled={config.graphsOnly}
                       onCheckedChange={(checked) =>
                         setConfig((prev) => ({ ...prev, enableEvaluation: checked }))
                       }
@@ -489,10 +536,21 @@ export default function NewAnalysisPage() {
             {/* Summary Sidebar */}
             <div className="space-y-4">
               <Card className="border-border sticky top-6">
-                <CardHeader className="pb-3">
+                <CardHeader className="pb-2">
                   <CardTitle className="text-base font-medium">Analysis Summary</CardTitle>
                 </CardHeader>
-                <CardContent className="space-y-3">
+                <CardContent className="space-y-3 pt-0">
+                  {config.graphsOnly && (
+                    <div className="flex items-center justify-between gap-4 rounded-xl border border-pink-200 bg-white px-4 py-4">
+                      <div>
+                        <p className="text-sm font-semibold text-[#dc2d98]">Graphs-only mode</p>
+                        <p className="text-xs text-muted-foreground">Docs + evaluation skipped</p>
+                      </div>
+                      <span className="rounded-full bg-pink-100 px-3 py-1 text-xs font-semibold text-[#dc2d98]">
+                        Graphs
+                      </span>
+                    </div>
+                  )}
                   <div className="flex items-center gap-2.5 p-2.5 bg-purple-100 rounded-lg">
                     <FolderGit2 className="w-4 h-4 text-black" />
                     <div>
@@ -523,6 +581,12 @@ export default function NewAnalysisPage() {
                       </span>
                     </div>
                     <div className="flex items-center justify-between text-xs">
+                      <span className="text-muted-foreground">Mode</span>
+                      <span className="font-medium text-foreground">
+                        {config.graphsOnly ? "Graphs only" : "Full pipeline"}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-xs">
                       <span className="text-muted-foreground">Evaluation</span>
                       <span className="font-medium text-foreground">
                         {config.enableEvaluation ? "Enabled" : "Disabled"}
@@ -532,19 +596,23 @@ export default function NewAnalysisPage() {
                   </div>
 
                   <Button
-                    className="w-full bg-black text-white hover:bg-purple-900 mt-3 h-9 text-sm"
+                    className={`w-full mt-3 h-9 text-sm ${
+                      config.graphsOnly
+                        ? "bg-[#dc2d98] text-white hover:bg-[#c61f83]"
+                        : "bg-black text-white hover:bg-purple-900"
+                    }`}
                     onClick={handleStartAnalysis}
                     disabled={selectedLanguages.length === 0 || isAnalyzing || (uploadMethod === "git" && !repoUrl.trim())}
                   >
                     {isAnalyzing ? (
                       <>
                         <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                        Analyzing...
+                        {config.graphsOnly ? "Building graphs..." : "Analyzing..."}
                       </>
                     ) : (
                       <>
                         <Play className="w-3.5 h-3.5 mr-1.5" />
-                        Run Analysis
+                        {config.graphsOnly ? "Run Graphs" : "Run Analysis"}
                       </>
                     )}
                   </Button>
