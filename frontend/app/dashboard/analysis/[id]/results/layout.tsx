@@ -118,9 +118,15 @@ export default function ResultsLayout({ children }: { children: React.ReactNode 
             </div>
 
             {/* Right section */}
-            <Button className="bg-black text-white hover:bg-[#dc2d98]">
-              <Download className="w-4 h-4 mr-2" />
-              Export File
+            {/* Right section */}
+            <Button 
+              className="bg-black text-white hover:bg-[#dc2d98] gap-2"
+              onClick={() => {
+                window.dispatchEvent(new CustomEvent("codeiq:export-all", { detail: { scope: "all" } }))
+              }}
+            >
+              <Download className="w-4 h-4" />
+              Export Full Report (ZIP)
             </Button>
           </div>
         </div>

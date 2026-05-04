@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useCallback, useState } from "react"
+import { useEffect, useRef, useCallback, useState, forwardRef, useImperativeHandle } from "react"
 
 interface GraphNode {
   id: string
@@ -122,11 +122,11 @@ const edgeColors: Record<string, string> = {
   default: "#9ca3af",
 }
 
-export default function CytoscapeGraphClient({ 
+const CytoscapeGraphClient = forwardRef(({ 
   graphData, 
   onNodeClick, 
   className = "" 
-}: CytoscapeGraphClientProps) {
+}: CytoscapeGraphClientProps, ref) => {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const cyRef = useRef<any>(null)
@@ -408,6 +408,7 @@ export default function CytoscapeGraphClient({
           maxZoom: 3,
           boxSelectionEnabled: true,
           selectionType: "single",
+          userPanningEnabled: true,
         })
 
         if (disposed) {
@@ -555,6 +556,7 @@ export default function CytoscapeGraphClient({
           bg: "#ffffff",
           full: true,
           scale: 2,
+          padding: 50, // Add padding to prevent "too zoomed in" feel
         })
         const link = document.createElement("a")
         link.href = URL.createObjectURL(png as Blob)
@@ -566,6 +568,26 @@ export default function CytoscapeGraphClient({
       }
     }
   }, [graphData?.name, isCyAlive])
+
+  // Expose methods via ref
+  useImperativeHandle(ref, () => ({
+    exportImage: exportPng,
+    getPNG: async () => {
+      if (isCyAlive() && cyRef.current) {
+        return cyRef.current.png({
+          output: "blob",
+          bg: "#ffffff",
+          full: true,
+          scale: 2,
+          padding: 50, // Consistency for ZIP export
+        }) as Blob
+      }
+      return null
+    },
+    zoomIn,
+    zoomOut,
+    toggleFullscreen
+  }))
 
   return (
     <div ref={wrapperRef} className={`relative w-full h-full ${className} ${isFullscreen ? "bg-white" : ""}`}>
@@ -671,4 +693,6 @@ export default function CytoscapeGraphClient({
       )}
     </div>
   )
-}
+})
+
+export default CytoscapeGraphClient

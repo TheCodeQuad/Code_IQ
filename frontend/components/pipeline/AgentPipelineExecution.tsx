@@ -229,22 +229,50 @@ export function AgentPipelineExecution({ pipelineState, repoId, selectedComponen
   const isPipelineCompleted = pipelineState.finalization.status === 'completed';
   const progressPct = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
 
-  // Auto-scale wrapper for graph to flawlessly fit screen bounds
-  const wrapperRef = useRef<HTMLDivElement>(null);
-  const [scale, setScale] = useState(1);
+  // --- Interactive Pan & Zoom Logic ---
+  const [zoom, setZoom] = useState(1);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [lastMousePos, setLastMousePos] = useState({ x: 0, y: 0 });
 
+  // Initial centering and scaling
   useEffect(() => {
-    const updateScale = () => {
+    const updateInitialView = () => {
       if (!wrapperRef.current) return;
       const { width, height } = wrapperRef.current.getBoundingClientRect();
-      const scaleX = width / 1000;
-      const scaleY = height / 740;
-      setScale(Math.min(scaleX, scaleY, 1.05));
+      const scaleX = (width - 60) / 1000;
+      const scaleY = (height - 60) / 740;
+      const initialScale = Math.min(scaleX, scaleY, 1.0);
+      setZoom(initialScale);
+      setOffset({ x: 0, y: 0 });
     };
-    updateScale();
-    window.addEventListener('resize', updateScale);
-    return () => window.removeEventListener('resize', updateScale);
+    updateInitialView();
+    window.addEventListener('resize', updateInitialView);
+    return () => window.removeEventListener('resize', updateInitialView);
   }, []);
+
+  const handleWheel = (e: React.WheelEvent) => {
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+    const newZoom = Math.min(Math.max(zoom * delta, 0.2), 3);
+    setZoom(newZoom);
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return; // Left click only
+    setIsDragging(true);
+    setLastMousePos({ x: e.clientX, y: e.clientY });
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isDragging) return;
+    const dx = e.clientX - lastMousePos.x;
+    const dy = e.clientY - lastMousePos.y;
+    setOffset(prev => ({ x: prev.x + dx, y: prev.y + dy }));
+    setLastMousePos({ x: e.clientX, y: e.clientY });
+  };
+
+  const handleMouseUp = () => setIsDragging(false);
 
   // Computed path highlighting logic
   const searcherActive = searcherStatus === 'running';
@@ -322,14 +350,6 @@ export function AgentPipelineExecution({ pipelineState, repoId, selectedComponen
                     </div>
                   </div>
 
-                  <div className="space-y-1.5">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase pl-1 tracking-wider">Source Path</span>
-                    <div className="bg-slate-900/5 p-2 rounded-xl border border-slate-200/50 font-mono text-[10px] text-slate-500 break-all leading-tight relative overflow-hidden h-9 flex items-center">
-                      <div className="absolute left-0 top-0 bottom-0 w-1 bg-pink-400"></div>
-                      <span className="truncate pl-2 w-full" title={filePath}>{filePath}</span>
-                    </div>
-                  </div>
-
                   <div className="pt-2">
                     <div className="flex justify-between items-baseline mb-2 px-1">
                       <div className="flex items-center gap-2">
@@ -353,16 +373,31 @@ export function AgentPipelineExecution({ pipelineState, repoId, selectedComponen
                   </div>
                 </div>
              </div>
-             {/* Info Card 2: Terminal */}
-             <TerminalLogs iteration={currentIteration} pipelineState={pipelineState} filePath={filePath} />
+
+             {/* Info Card 2: Terminal (Expanded) */}
+             <div className="flex-1 min-h-0 w-full flex flex-col pt-2">
+                <TerminalLogs iteration={currentIteration} pipelineState={pipelineState} filePath={filePath} />
+             </div>
           </div>
           
           {/*RIGHT COLUMN: The Pipeline Execution Graph */}
-          <div ref={wrapperRef} className="flex-1 w-full relative h-[650px] xl:h-full bg-transparent overflow-hidden flex items-center justify-center min-h-[400px]">
+          <div 
+            ref={wrapperRef} 
+            className={`flex-1 h-full bg-white/40 dark:bg-gray-900/40 rounded-[2.5rem] border border-white/60 dark:border-gray-800/60 backdrop-blur-sm relative overflow-hidden flex items-center justify-center min-h-[400px] select-none ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+            onWheel={handleWheel}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseUp}
+          >
 
             <div 
-              className="origin-center transition-transform duration-300 relative shrink-0 flex items-center justify-center" 
-              style={{ width: 1000, height: 740, transform: `scale(${scale})` }}
+              className="relative shrink-0 flex items-center justify-center transition-transform duration-75 ease-out will-change-transform" 
+              style={{ 
+                width: 1000, 
+                height: 740, 
+                transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})` 
+              }}
             >
               <div className="relative w-full h-full">
             
@@ -477,6 +512,20 @@ export function AgentPipelineExecution({ pipelineState, repoId, selectedComponen
                 )}
               </div>
             </div>
+
+            {/* Zoom Controls Overlay */}
+            <div className="absolute bottom-8 left-8 flex gap-2 z-50 pointer-events-auto">
+              <div className="bg-white/90 dark:bg-gray-800/90 backdrop-blur-md rounded-2xl border border-gray-200/50 dark:border-gray-700/50 p-1.5 flex gap-1 shadow-[0_10px_25px_rgba(0,0,0,0.1)]">
+                <Button variant="ghost" size="icon" className="h-10 w-10 rounded-xl hover:bg-pink-50 dark:hover:bg-pink-900/20" onClick={() => setZoom(prev => Math.min(prev * 1.2, 3))}>
+                  <Search className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                </Button>
+                <div className="w-px bg-gray-200 dark:bg-gray-700 my-2" />
+                <Button variant="ghost" className="px-3 h-10 rounded-xl text-xs font-black tracking-tighter text-gray-500 hover:bg-pink-50 dark:hover:bg-pink-900/20" onClick={() => { setZoom(1); setOffset({ x: 0, y: 0 }); }}>
+                  RESET
+                </Button>
+              </div>
+            </div>
+
           </div>
 
         </div>

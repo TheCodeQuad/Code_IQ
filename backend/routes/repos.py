@@ -837,8 +837,8 @@ async def get_repo_file(
 
     return {
         "path": path,
-        "content": documented_content if documented else content,
-        "original": content if documented else None,
+        "content": documented_content if (documented and documented_content) else content,
+        "original": content,
         "size": os.path.getsize(target),
-        "has_documented": documented_content is not None if documented else False,
+        "has_documented": documented_content is not None,
     }

@@ -21,6 +21,8 @@ interface CytoscapeGraphProps {
   className?: string
 }
 
+import React, { forwardRef, useImperativeHandle, useRef } from "react"
+
 // Dynamically import the client component with SSR disabled
 const CytoscapeGraphClient = dynamic(
   () => import("./cytoscape-graph-client").then((mod) => ({ default: mod.default })),
@@ -37,6 +39,28 @@ const CytoscapeGraphClient = dynamic(
   }
 )
 
-export default function CytoscapeGraph(props: CytoscapeGraphProps) {
-  return <CytoscapeGraphClient {...props} />
+export interface CytoscapeRef {
+  exportImage: () => void
+  getPNG: () => Promise<Blob | null>
+  zoomIn: () => void
+  zoomOut: () => void
+  toggleFullscreen: () => void
 }
+
+const CytoscapeGraph = forwardRef<CytoscapeRef, CytoscapeGraphProps>((props, ref) => {
+  const clientRef = useRef<any>(null)
+  
+  useImperativeHandle(ref, () => ({
+    exportImage: () => clientRef.current?.exportImage(),
+    getPNG: () => clientRef.current?.getPNG(),
+    zoomIn: () => clientRef.current?.zoomIn(),
+    zoomOut: () => clientRef.current?.zoomOut(),
+    toggleFullscreen: () => clientRef.current?.toggleFullscreen(),
+  }))
+
+  return <CytoscapeGraphClient {...props} ref={clientRef} />
+})
+
+CytoscapeGraph.displayName = "CytoscapeGraph"
+
+export default CytoscapeGraph

@@ -95,7 +95,7 @@ REM ----------------------------------------
 echo.
 echo [3/3] Starting backend...
 
-start cmd /k ^
+start "CodeIQ Backend" cmd /k ^
 "cd /d %cd% && ^
 CALL %CONDA_PATH%\Scripts\activate.bat %VENV_NAME% && ^
 python -m uvicorn backend.main:app --reload --port 8000"
@@ -107,9 +107,9 @@ REM START FRONTEND
 REM ----------------------------------------
 echo Starting frontend...
 
-start cmd /k ^
+start "CodeIQ Frontend" cmd /k ^
 "cd /d %cd%\frontend && ^
-npm run dev"
+call npm run dev"
 
 REM ----------------------------------------
 REM DONE

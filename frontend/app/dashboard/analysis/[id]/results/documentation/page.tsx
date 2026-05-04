@@ -292,27 +292,20 @@ export default function DocumentationPage() {
           originalContent = originalData?.content || ""
         }
 
-        // If we have documented content, use it; otherwise use original
-        const language = filePath.split(".").pop()?.toLowerCase() || "text"
-        
-        if (!documentedContent && originalContent) {
-          // If documented failed but original succeeded, strip docstrings from original
-          setDocumentedCode(originalContent)
-          setOriginalCode(stripDocstrings(originalContent, language))
-        } else if (documentedContent && originalContent) {
-          // If both succeeded, use them as-is
+        // Set states based on available content
+        if (documentedContent && originalContent) {
           setDocumentedCode(documentedContent)
           setOriginalCode(originalContent)
-        } else if (documentedContent) {
-          // Only documented succeeded, strip docstrings for original view
-          setDocumentedCode(documentedContent)
-          setOriginalCode(stripDocstrings(documentedContent, language))
         } else if (originalContent) {
-          // Fallback: only original succeeded
+          // If we only have original, both views show original initially
+          setOriginalCode(originalContent)
           setDocumentedCode(originalContent)
-          setOriginalCode(stripDocstrings(originalContent, language))
+        } else if (documentedContent) {
+          // If we only have documented (unlikely), strip for original view
+          setDocumentedCode(documentedContent)
+          const language = filePath.split(".").pop()?.toLowerCase() || "text"
+          setOriginalCode(stripDocstrings(documentedContent, language))
         } else {
-          // Both failed, show empty code
           setDocumentedCode("")
           setOriginalCode("")
         }

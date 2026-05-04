@@ -3,6 +3,8 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react"
 import { useParams } from "next/navigation"
 import dynamic from "next/dynamic"
+import JSZip from "jszip"
+import { saveAs } from "file-saver"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -31,10 +33,22 @@ import {
   AlertCircle,
   Loader,
   RefreshCw,
+  FileJson,
+  ImageIcon,
+  Archive,
+  Layers,
 } from "lucide-react"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  DropdownMenuSeparator,
+  DropdownMenuLabel,
+} from "@/components/ui/dropdown-menu"
 
 // Import Cytoscape component with dynamic import (already handles SSR)
-import CytoscapeGraph from "@/components/cytoscape-graph"
+import CytoscapeGraph, { type CytoscapeRef } from "@/components/cytoscape-graph"
 
 type GraphType = "agents-flow" | "cfg" | "pdg" | "hpg" | "dag" | "ckg"
 type ComponentType = "function" | "class" | "method"
@@ -150,6 +164,9 @@ export default function GraphsPage() {
   const [hpgData, setHpgData] = useState<GraphData | null>(null)
   const [dagData, setDagData] = useState<GraphData | null>(null)
   const [ckgData, setCkgData] = useState<GraphData | null>(null)
+  const cyRef = useRef<CytoscapeRef | null>(null)
+  const [isExporting, setIsExporting] = useState(false)
+  const [exportProgress, setExportProgress] = useState({ current: 0, total: 0, label: "" })
 
   // Loading and error states
   const [graphLoading, setGraphLoading] = useState(false)
@@ -587,6 +604,217 @@ export default function GraphsPage() {
   const handleZoomOut = () => setZoom((prev) => Math.max(prev - 25, 50))
   const handleReset = () => setZoom(100)
 
+  const exportAllAsZip = useCallback(async (scope: "all" | "component") => {
+    if (!repoPath || isExporting) return
+    setIsExporting(true)
+    const zip = new JSZip()
+    
+    const targets = scope === "component" && selectedComponent 
+      ? [selectedComponent] 
+      : components
+
+    setExportProgress({ current: 0, total: targets.length * 4 + 1, label: "Initializing export..." })
+    
+    try {
+      let completed = 0
+      const total = targets.length * 4 + 1 // 4 graph types per component + PKG
+
+      for (const comp of targets) {
+        const folder = zip.folder(comp.name.replace(/[^a-z0-9]/gi, '_'))
+        
+        const types: GraphType[] = ["cfg", "pdg", "hpg", "dag"]
+        for (const type of types) {
+          setExportProgress({ 
+            current: completed++, 
+            total, 
+            label: `Fetching ${type.toUpperCase()} for ${comp.name}...` 
+          })
+          
+          try {
+            let endpoint = ""
+            if (type === "dag") {
+              endpoint = `${API_BASE}/api/graphs/dag?repo_path=${encodeURIComponent(repoPath)}&component_id=${encodeURIComponent(comp.id)}`
+            } else {
+              endpoint = `${API_BASE}/api/graphs/${type}/${encodeURIComponent(comp.id)}?repo_path=${encodeURIComponent(repoPath)}`
+            }
+            
+            const res = await fetch(endpoint)
+            if (res.ok) {
+              const result = await res.json()
+              if (result.success && result.data) {
+                folder?.file(`${type}.json`, JSON.stringify(result.data, null, 2))
+              }
+            }
+          } catch (err) {
+            console.error(`Failed to fetch ${type} for ${comp.name}:`, err)
+          }
+        }
+      }
+
+      // Add PKG (CKG)
+      setExportProgress({ current: completed++, total, label: "Fetching Program Knowledge Graph..." })
+      try {
+        const ckgRes = await fetch(`${API_BASE}/api/graphs/ckg?repo_path=${encodeURIComponent(repoPath)}&force=false`)
+        if (ckgRes.ok) {
+          const result = await ckgRes.json()
+          if (result.success && result.data) {
+            zip.file("program_knowledge_graph.json", JSON.stringify(result.data, null, 2))
+          }
+        }
+      } catch (err) {
+        console.error("Failed to fetch CKG for ZIP:", err)
+      }
+
+      setExportProgress({ current: total, total, label: "Generating ZIP archive..." })
+      const content = await zip.generateAsync({ type: "blob" })
+      saveAs(content, `CodeIQ_Export_${new Date().toISOString().split('T')[0]}.zip`)
+    } catch (err) {
+      console.error("Export all failed:", err)
+    } finally {
+      setIsExporting(false)
+      setExportProgress({ current: 0, total: 0, label: "" })
+    }
+  }, [repoPath, components, selectedComponent, isExporting])
+
+  const handleExport = useCallback((format: "svg" | "png" | "json" | "zip" | "zip-component") => {
+    if (format === "zip") {
+      exportAllAsZip("all")
+      return
+    }
+    if (format === "zip-component") {
+      exportAllAsZip("component")
+      return
+    }
+
+    const fileName = `${selectedComponent?.name || "repository"}_${selectedGraphType}`
+
+    // 1. JSON Export (Universal)
+    if (format === "json") {
+      try {
+        const dataStr = JSON.stringify(currentGraphData, null, 2)
+        const blob = new Blob([dataStr], { type: "application/json" })
+        const url = URL.createObjectURL(blob)
+        const link = document.createElement("a")
+        link.href = url
+        link.download = `${fileName}.json`
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        URL.revokeObjectURL(url)
+      } catch (e) {
+        console.error("JSON Export failed:", e)
+      }
+      return
+    }
+
+    // 2. Cytoscape Export (CKG)
+    if (selectedGraphType === "ckg") {
+      if (cyRef.current) {
+        // Cytoscape currently only supports PNG via the exposed method
+        cyRef.current.exportImage()
+      }
+      return
+    }
+
+    // 3. SVG/PNG Export for SVG-based graphs
+    const svgElement = document.querySelector(".center-panel-svg") as SVGSVGElement
+    if (!svgElement) {
+      console.error("SVG element not found for export")
+      return
+    }
+
+    try {
+      const serializer = new XMLSerializer()
+      let source = serializer.serializeToString(svgElement)
+      
+      if (!source.match(/^<svg[^>]+xmlns="http\:\/\/www\.w3\.org\/2000\/svg"/)) {
+        source = source.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
+      }
+      if (!source.match(/^<svg[^>]+xmlns\:xlink="http\:\/\/www\.w3\.org\/1999\/xlink"/)) {
+        source = source.replace(/^<svg/, '<svg xmlns:xlink="http://www.w3.org/1999/xlink"');
+      }
+
+      const xmlDeclaration = '<?xml version="1.0" standalone="no"?>\r\n';
+      const svgBlob = new Blob([xmlDeclaration, source], { type: "image/svg+xml;charset=utf-8" })
+      const url = URL.createObjectURL(svgBlob)
+
+      if (format === "svg") {
+        const link = document.createElement("a")
+        link.href = url
+        link.download = `${fileName}.svg`
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        URL.revokeObjectURL(url)
+      } else if (format === "png") {
+        // Ultimate SVG-to-PNG fix: ensures NO clipping regardless of current view
+        const img = new Image()
+        const bbox = svgElement.getBBox()
+        
+        // 1. Prepare dimensions with generous padding
+        const padding = 80
+        const scale = 2
+        
+        // 2. Capture the actual content area
+        const contentWidth = bbox.width + padding * 2
+        const contentHeight = bbox.height + padding * 2
+        
+        // 3. Create a clean source string by re-serializing with a proper viewBox
+        // This is key: we force the SVG to 'look' at the full bounding box
+        const clone = svgElement.cloneNode(true) as SVGSVGElement
+        clone.setAttribute("viewBox", `${bbox.x - padding} ${bbox.y - padding} ${contentWidth} ${contentHeight}`)
+        clone.setAttribute("width", contentWidth.toString())
+        clone.setAttribute("height", contentHeight.toString())
+        
+        const serializer = new XMLSerializer()
+        let svgStr = serializer.serializeToString(clone)
+        
+        // Ensure namespaces
+        if (!svgStr.includes("http://www.w3.org/2000/svg")) {
+          svgStr = svgStr.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
+        }
+
+        const blob = new Blob([svgStr], { type: "image/svg+xml;charset=utf-8" })
+        const blobUrl = URL.createObjectURL(blob)
+
+        img.onload = () => {
+          const canvas = document.createElement("canvas")
+          canvas.width = contentWidth * scale
+          canvas.height = contentHeight * scale
+          
+          const ctx = canvas.getContext("2d")
+          if (ctx) {
+            ctx.fillStyle = "white"
+            ctx.fillRect(0, 0, canvas.width, canvas.height)
+            ctx.scale(scale, scale)
+            ctx.drawImage(img, 0, 0)
+            
+            const pngUrl = canvas.toDataURL("image/png", 1.0)
+            const link = document.createElement("a")
+            link.href = pngUrl
+            link.download = `${fileName}.png`
+            link.click()
+          }
+          URL.revokeObjectURL(blobUrl)
+        }
+        img.src = blobUrl
+      }
+    } catch (e) {
+      console.error("Export failed:", e)
+    }
+  }, [selectedGraphType, selectedComponent?.name, currentGraphData, cyRef, exportAllAsZip])
+
+  // Global event listener for header export button
+  useEffect(() => {
+    const handleGlobalExport = (e: any) => {
+      if (e.detail?.scope === "all") {
+        exportAllAsZip("all")
+      }
+    }
+    window.addEventListener("codeiq:export-all", handleGlobalExport)
+    return () => window.removeEventListener("codeiq:export-all", handleGlobalExport)
+  }, [exportAllAsZip])
+
   const handleRefresh = async () => {
     if (!repoPath) return
 
@@ -909,14 +1137,71 @@ export default function GraphsPage() {
               >
                 {isGraphFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
               </Button>
-              <Button variant="outline" size="sm" className="gap-1.5 h-7 text-xs border-stone-200">
-                <Download className="w-3.5 h-3.5" />
-                Export
-              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm" className="gap-1.5 h-7 text-xs border-stone-200" disabled={isExporting}>
+                    {isExporting ? (
+                      <Loader className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Download className="w-3.5 h-3.5" />
+                    )}
+                    {isExporting ? "Exporting..." : "Export"}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  <DropdownMenuLabel>Export Graph</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => handleExport("svg")} disabled={selectedGraphType === "ckg"}>
+                    <FileText className="mr-2 h-4 w-4" />
+                    <span>SVG (Vector)</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleExport("png")}>
+                    <ImageIcon className="mr-2 h-4 w-4" />
+                    <span>PNG (Image)</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleExport("json")}>
+                    <FileJson className="mr-2 h-4 w-4" />
+                    <span>JSON (Raw Data)</span>
+                  </DropdownMenuItem>
+                  
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel>Batch Export</DropdownMenuLabel>
+                  <DropdownMenuItem onClick={() => handleExport("zip-component")}>
+                    <Layers className="mr-2 h-4 w-4" />
+                    <span>Export Component (ZIP)</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleExport("zip")}>
+                    <Archive className="mr-2 h-4 w-4" />
+                    <span>Export All (ZIP)</span>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </div>
         </CardHeader>
-        <CardContent className="flex-1 p-0 overflow-hidden">
+        <CardContent className="flex-1 p-0 overflow-hidden relative">
+          {isExporting && (
+            <div className="absolute inset-0 z-50 bg-white/80 backdrop-blur-sm flex items-center justify-center">
+              <div className="bg-white p-6 rounded-2xl shadow-2xl border border-stone-200 max-w-sm w-full flex flex-col items-center gap-4 animate-in fade-in zoom-in duration-300">
+                <div className="w-16 h-16 rounded-full bg-amber-50 flex items-center justify-center">
+                  <Archive className="w-8 h-8 text-amber-500 animate-bounce" />
+                </div>
+                <div className="text-center space-y-1">
+                  <h3 className="font-bold text-stone-900 text-lg">Preparing Export</h3>
+                  <p className="text-stone-500 text-sm">{exportProgress.label}</p>
+                </div>
+                <div className="w-full bg-stone-100 h-2 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-amber-500 transition-all duration-300 ease-out"
+                    style={{ width: `${(exportProgress.current / exportProgress.total) * 100}%` }}
+                  />
+                </div>
+                <p className="text-xs text-stone-400 font-medium">
+                  Step {exportProgress.current} of {exportProgress.total}
+                </p>
+              </div>
+            </div>
+          )}
           <div
             className="w-full h-full flex items-center justify-center bg-stone-50/50"
             style={selectedGraphType !== "ckg" ? { transform: `scale(${zoom / 100})`, transformOrigin: "center center" } : undefined}
@@ -967,6 +1252,7 @@ export default function GraphsPage() {
                     console.log("Node clicked:", nodeId, nodeData)
                   }}
                   className="w-full h-full"
+                  ref={cyRef}
                 />
               )
             ) : (selectedComponent || selectedGraphType === "ckg") && currentGraphData ? (
@@ -1427,7 +1713,7 @@ function RealGraphVisualization({
     <svg
       ref={svgRef}
       viewBox={viewBox}
-      className="w-full h-full"
+      className="w-full h-full center-panel-svg"
       style={{ minWidth: "500px", minHeight: "400px" }}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
@@ -1631,7 +1917,7 @@ function AgentsFlowGraph({ component, componentFlow }: { component: Component; c
     <div className="relative w-full h-full flex items-center justify-center p-8">
       <svg
         viewBox="0 0 520 350"
-        className="w-full max-w-[560px] h-auto"
+        className="w-full max-w-[560px] h-auto center-panel-svg"
         style={{ minHeight: "340px" }}
         preserveAspectRatio="xMidYMid meet"
       >
