@@ -1,10 +1,12 @@
 "use client"
 
-import { useEffect, useRef, useCallback, useState, forwardRef, useImperativeHandle } from "react"
+import { useEffect, useRef, useCallback, useState } from "react"
 
 interface GraphNode {
   id: string
   label: string
+  name?: string
+  qualifiedName?: string
   type: string
   x?: number
   y?: number
@@ -40,57 +42,57 @@ interface CytoscapeGraphClientProps {
 }
 
 function getReadableNodeLabel(node: GraphNode): string {
-  const rawName = (node as any)?.name
-  const metaName = node.metadata?.name
-  const explicitLabel = node.label
+  const metadata = node.metadata ?? {}
   const rawId = (node.id || "").split(":").pop() || node.id || ""
-  const isStatementLike =
-    node.type === "statement" ||
-    /^(stmt|statement)_/i.test(rawId) ||
-    (typeof explicitLabel === "string" && /^(stmt|statement)_/i.test(explicitLabel.trim()))
 
-  const preferred = [rawName, metaName, explicitLabel]
-    .map((v) => (typeof v === "string" ? v.trim() : ""))
-    .find((v) => v.length > 0)
+  const normalizeQualifiedName = (value: string) => {
+    const trimmed = value.trim()
+    if (!trimmed) return ""
 
-  if (isStatementLike) {
-    if (preferred) {
-      return preferred
+    const signatureMatch = trimmed.match(/^([A-Za-z_$][\w$]*)\s*\(/)
+    if (signatureMatch?.[1]) {
+      return signatureMatch[1]
     }
-    const stmtId = rawId.replace(/^(stmt|statement)_/i, "")
-    return stmtId ? `stmt ${stmtId.slice(0, 8)}` : "stmt"
-  }
 
-  const cleanGeneratedPrefix = (value: string) =>
-    value.replace(/^(func|function|class|method|module|node)_\d+_?/i, "").trim()
-
-  const compactSymbol = (value: string) => {
-    const tail = value.split(/[.:/\\]/).pop() || value
-    const noPrefix = cleanGeneratedPrefix(tail)
-    const noNumericLead = noPrefix.replace(/^\d+[_-]*/, "").trim()
-    return (noNumericLead || noPrefix || tail).trim()
+    const tail = trimmed.split(/[.:/\\]/).pop() || trimmed
+    return tail.trim()
   }
 
   const isMeaningful = (value: string) => {
     const v = value.trim()
-    return v.length > 0 && !/^\d+$/.test(v) && !/^(func|function|method)_?\d*$/i.test(v)
+    return v.length > 0 && !/^\d+$/.test(v) && !/^(func|function|class|method|module|node)_?\d*$/i.test(v)
   }
+
+  const preferredCandidates = [
+    node.name,
+    metadata.display_name,
+    metadata.name,
+    metadata.qualified_name,
+    metadata.qualifiedName,
+    metadata.signature,
+    node.label,
+    rawId,
+  ]
+
+  const preferred = preferredCandidates
+    .map((value) => (typeof value === "string" ? value.trim() : ""))
+    .find((value) => value.length > 0)
 
   if (preferred) {
-    const cleanedPreferred = compactSymbol(preferred)
-    if (node.type === "function" || node.type === "method") {
-      if (isMeaningful(cleanedPreferred)) return cleanedPreferred
-      const byId = compactSymbol(rawId)
-      return isMeaningful(byId) ? byId : (node.type === "method" ? "method" : "function")
+    const normalized = normalizeQualifiedName(preferred)
+    if (node.type === "function" || node.type === "method" || node.type === "class" || node.type === "module") {
+      if (isMeaningful(normalized)) return normalized
+      if (isMeaningful(preferred)) return preferred
     }
-    return cleanedPreferred || preferred
+
+    if (node.type === "statement") {
+      return preferred.length > 28 ? `${preferred.slice(0, 28)}...` : preferred
+    }
+
+    return normalized || preferred
   }
 
-  const cleanedId = compactSymbol(rawId)
-  if (node.type === "function" || node.type === "method") {
-    return isMeaningful(cleanedId) ? cleanedId : (node.type === "method" ? "method" : "function")
-  }
-  return cleanedId || rawId
+  return rawId
 }
 
 // Solid node colors based on type
@@ -122,11 +124,11 @@ const edgeColors: Record<string, string> = {
   default: "#9ca3af",
 }
 
-const CytoscapeGraphClient = forwardRef(({ 
+export default function CytoscapeGraphClient({ 
   graphData, 
   onNodeClick, 
   className = "" 
-}: CytoscapeGraphClientProps, ref) => {
+}: CytoscapeGraphClientProps) {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const cyRef = useRef<any>(null)
@@ -150,8 +152,9 @@ const CytoscapeGraphClient = forwardRef(({
         data: {
           ...node.metadata,
           id: node.id,
-          label: node.label || "",
-          name: (node as any)?.name || node.metadata?.name || "",
+          label: node.label || node.name || node.metadata?.name || "",
+          name: node.name || node.metadata?.name || node.metadata?.qualified_name || node.metadata?.qualifiedName || "",
+          qualifiedName: node.qualifiedName || node.metadata?.qualified_name || node.metadata?.qualifiedName || "",
           displayLabel,
           type: node.type,
           line: node.line,
@@ -355,40 +358,26 @@ const CytoscapeGraphClient = forwardRef(({
                 "line-style": "solid",
               },
             },
-            // Data flow edges - blue dashed with label, curved left
+            // Data flow edges - blue dotted with label
             {
               selector: "edge[type='data_flow']",
               style: {
                 "width": 2,
-                "line-style": "dashed",
+                "line-style": "dotted",
                 "label": "data(label)",
-                "font-size": "9px",
+                "font-size": "8px",
                 "text-rotation": "autorotate",
                 "text-margin-y": -8,
-                "opacity": 0.8,
-                "curve-style": "unbundled-bezier",
-                "control-point-distances": [-50],
-                "control-point-weights": [0.5],
-                "text-background-color": "#fff",
-                "text-background-opacity": 0.9,
+                "opacity": 0.7,
               },
             },
-            // Control flow edges - orange dashed, curved right
+            // Control flow edges
             {
               selector: "edge[type='control_flow']",
               style: {
                 "width": 1.8,
-                "line-style": "dashed",
-                "label": "data(label)",
-                "font-size": "9px",
-                "text-rotation": "autorotate",
-                "text-margin-y": -8,
-                "opacity": 0.8,
-                "curve-style": "unbundled-bezier",
-                "control-point-distances": [50],
-                "control-point-weights": [0.5],
-                "text-background-color": "#fff",
-                "text-background-opacity": 0.9,
+                "line-style": "solid",
+                "opacity": 0.75,
               },
             },
             {
@@ -422,7 +411,6 @@ const CytoscapeGraphClient = forwardRef(({
           maxZoom: 3,
           boxSelectionEnabled: true,
           selectionType: "single",
-          userPanningEnabled: true,
         })
 
         if (disposed) {
@@ -570,7 +558,6 @@ const CytoscapeGraphClient = forwardRef(({
           bg: "#ffffff",
           full: true,
           scale: 2,
-          padding: 50, // Add padding to prevent "too zoomed in" feel
         })
         const link = document.createElement("a")
         link.href = URL.createObjectURL(png as Blob)
@@ -582,26 +569,6 @@ const CytoscapeGraphClient = forwardRef(({
       }
     }
   }, [graphData?.name, isCyAlive])
-
-  // Expose methods via ref
-  useImperativeHandle(ref, () => ({
-    exportImage: exportPng,
-    getPNG: async () => {
-      if (isCyAlive() && cyRef.current) {
-        return cyRef.current.png({
-          output: "blob",
-          bg: "#ffffff",
-          full: true,
-          scale: 2,
-          padding: 50, // Consistency for ZIP export
-        }) as Blob
-      }
-      return null
-    },
-    zoomIn,
-    zoomOut,
-    toggleFullscreen
-  }))
 
   return (
     <div ref={wrapperRef} className={`relative w-full h-full ${className} ${isFullscreen ? "bg-white" : ""}`}>
@@ -672,43 +639,27 @@ const CytoscapeGraphClient = forwardRef(({
       {/* Legend */}
       {isReady && !error && (
         <div className="absolute top-3 left-3 z-20 bg-white/95 rounded-2xl shadow-xl border-2 border-stone-300 px-5 py-4 text-base min-w-56">
-          <div className="font-extrabold mb-3 text-stone-900 tracking-wide">Node Types</div>
-          <div className="flex flex-col gap-2">
+          <div className="font-extrabold mb-4 text-stone-900 tracking-wide">Node Types</div>
+          <div className="flex flex-col gap-3">
             <div className="flex items-center gap-2">
               <div className="w-5 h-5 rounded-sm" style={{ background: nodeColors.module.bg, border: `2px solid ${nodeColors.module.border}` }} />
-              <span className="text-sm">Module</span>
+              <span>Module</span>
             </div>
             <div className="flex items-center gap-2">
               <div className="w-5 h-5 rounded-sm" style={{ background: nodeColors.class.bg, border: `2px solid ${nodeColors.class.border}` }} />
-              <span className="text-sm">Class</span>
+              <span>Class</span>
             </div>
             <div className="flex items-center gap-2">
               <div className="w-5 h-5 rounded-sm" style={{ background: nodeColors.function.bg, border: `2px solid ${nodeColors.function.border}` }} />
-              <span className="text-sm">Function</span>
+              <span>Function</span>
             </div>
             <div className="flex items-center gap-2">
               <div className="w-5 h-5 rounded-sm" style={{ background: nodeColors.method.bg, border: `2px solid ${nodeColors.method.border}` }} />
-              <span className="text-sm">Method</span>
+              <span>Method</span>
             </div>
             <div className="flex items-center gap-2">
               <div className="w-5 h-5 rounded-sm" style={{ background: nodeColors.statement.bg, border: `2px solid ${nodeColors.statement.border}` }} />
-              <span className="text-sm">Statement</span>
-            </div>
-          </div>
-
-          <div className="font-extrabold mb-3 mt-4 text-stone-900 tracking-wide">Edge Types</div>
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center gap-2">
-              <div className="w-6 h-0.5" style={{ background: edgeColors.default }} />
-              <span className="text-sm">CFG Flow</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-6 h-0.5 border-t-2 border-dashed" style={{ borderColor: edgeColors.data_flow }} />
-              <span className="text-sm">Data Dependency</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-6 h-0.5 border-t-2 border-dashed" style={{ borderColor: edgeColors.control_flow }} />
-              <span className="text-sm">Control Dependency</span>
+              <span>Statement</span>
             </div>
           </div>
         </div>
@@ -723,6 +674,4 @@ const CytoscapeGraphClient = forwardRef(({
       )}
     </div>
   )
-})
-
-export default CytoscapeGraphClient
+}

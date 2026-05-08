@@ -14,6 +14,7 @@ from .models import (
     RepositoryIR, FunctionIR, ClassIR, ModuleIR,
     Graph, GraphNode, GraphEdge, ComponentType
 )
+from .label_utils import format_semantic_label
 
 
 @dataclass
@@ -276,13 +277,15 @@ class DAGBuilder:
 
                 graph_nodes.append(GraphNode(
                     id=node.id,
-                    label=node.name,
+                    label=format_semantic_label(node.name),
                     type=node.node_type,
                     x=x,
                     y=y,
                     line=node.line,
                     code=node.qualified_name,
                     metadata={
+                        "raw_label": node.name,
+                        "wrapped_label": format_semantic_label(node.name),
                         "file_path": node.file_path,
                         "qualified_name": node.qualified_name,
                         "depends_on_count": len(node.depends_on),
@@ -423,7 +426,7 @@ class FileDAGBuilder:
         for i, node in enumerate(sorted_nodes):
             graph_nodes.append(GraphNode(
                 id=node.id,
-                label=node.name,
+                label=format_semantic_label(node.name),
                 type=node.node_type,
                 x=150 + (i % 3) * 180,
                 y=80 + (i // 3) * 80,
@@ -507,7 +510,7 @@ class ComponentNeighborhoodDAG:
             node = full_dag_builder.nodes[dep_id]
             graph_nodes.append(GraphNode(
                 id=node.id,
-                label=node.name,
+                label=format_semantic_label(node.name),
                 type="dependency",
                 x=100 + (i % 4) * 150,
                 y=y + (i // 4) * 60,
@@ -519,7 +522,7 @@ class ComponentNeighborhoodDAG:
         # Center node
         graph_nodes.append(GraphNode(
             id=center_node.id,
-            label=center_node.name,
+            label=format_semantic_label(center_node.name),
             type="selected",
             x=250,
             y=y,
@@ -533,7 +536,7 @@ class ComponentNeighborhoodDAG:
             node = full_dag_builder.nodes[dep_id]
             graph_nodes.append(GraphNode(
                 id=node.id,
-                label=node.name,
+                label=format_semantic_label(node.name),
                 type="dependent",
                 x=100 + (i % 4) * 150,
                 y=y + (i // 4) * 60,

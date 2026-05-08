@@ -5,6 +5,7 @@ import { useParams } from "next/navigation"
 import dynamic from "next/dynamic"
 import JSZip from "jszip"
 import { saveAs } from "file-saver"
+import { getRawLabel, getWrappedLabel } from "@/lib/graph-labels"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -1612,24 +1613,68 @@ function RealGraphVisualization({
   useEffect(() => {
     if (!graphData?.nodes) return
 
-    const positionedNodes = graphData.nodes.map((node, index) => {
-      if (node.x !== undefined && node.y !== undefined) {
+    const isHybrid = graphType === "hpg"
+    const columnSpacing = 200
+    const rowSpacing = 110
+    const baseX = 120
+    const baseY = 80
+
+    const getSortKey = (node: GraphNode) => {
+      if (typeof node.y === "number") return node.y
+      if (typeof node.line === "number") return node.line
+      return 0
+    }
+
+    const orderedNodes = isHybrid
+      ? [...graphData.nodes].sort((a, b) => {
+          const delta = getSortKey(a) - getSortKey(b)
+          if (delta !== 0) return delta
+          return (a.x || 0) - (b.x || 0) || a.id.localeCompare(b.id)
+        })
+      : graphData.nodes
+
+    const cols = Math.max(1, Math.ceil(Math.sqrt(orderedNodes.length)))
+
+    const positionedNodes = orderedNodes.map((node, index) => {
+      if (!isHybrid && node.x !== undefined && node.y !== undefined) {
         return node
       }
 
-      const cols = Math.ceil(Math.sqrt(graphData.nodes.length))
       const row = Math.floor(index / cols)
       const col = index % cols
 
       return {
         ...node,
-        x: 100 + col * 140,
-        y: 60 + row * 80
+        x: baseX + col * columnSpacing,
+        y: baseY + row * rowSpacing
       }
     })
 
     setNodes(positionedNodes)
-  }, [graphData])
+  }, [graphData, graphType])
+
+  const nodeMetrics = useMemo(() => {
+    const metrics: Record<string, { width: number; height: number; lines: string[]; rawLabel: string }> = {}
+    const nodeWidth = 176
+    const lineHeight = 14
+    const paddingY = 18
+
+    nodes.forEach((node) => {
+      const rawLabel = getRawLabel(node.label, node.metadata)
+      const wrappedLabel = getWrappedLabel(node.label, node.metadata)
+      const fallbackLabel = rawLabel || node.label || ""
+      const lines = (wrappedLabel || fallbackLabel).split("\n").filter(Boolean)
+      const height = Math.max(40, lines.length * lineHeight + paddingY)
+      metrics[node.id] = {
+        width: nodeWidth,
+        height,
+        lines: lines.length ? lines : [fallbackLabel],
+        rawLabel: fallbackLabel,
+      }
+    })
+
+    return metrics
+  }, [nodes])
 
   const handleMouseDown = (e: React.MouseEvent, nodeId: string) => {
     const node = nodes.find((n) => n.id === nodeId)
@@ -1697,16 +1742,16 @@ function RealGraphVisualization({
       true: "#22c55e",
       false: "#ef4444",
       back: "#8b5cf6",
-      data: "#3b82f6",
-      control: "#f59e0b",
+      data: "#f59e0b",
+      control: "#3b82f6",
       call: "#ec4899",
       inherits: "#8b5cf6",
       imports: "#6366f1",
       hierarchy: "#94a3b8",
       calls: "#ec4899",
       extends: "#8b5cf6",
-      control_flow: "#f59e0b",
-      data_flow: "#3b82f6",
+      control_flow: "#3b82f6",
+      data_flow: "#f59e0b",
     }
     return colors[edgeType] || "#9ca3af"
   }
@@ -1755,6 +1800,16 @@ function RealGraphVisualization({
     return bends
   }, [graphData?.edges])
 
+  const edgesToRender = useMemo(() => {
+    if (!graphData?.edges) return []
+    if (graphType !== "hpg") return graphData.edges
+
+    const overlayTypes = new Set(["data_flow", "control_flow"])
+    return [...graphData.edges].sort((a, b) => {
+      return Number(overlayTypes.has(a.type)) - Number(overlayTypes.has(b.type))
+    })
+  }, [graphData?.edges, graphType])
+
   if (!graphData || nodes.length === 0) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -1784,10 +1839,10 @@ function RealGraphVisualization({
           <polygon points="0 0, 8 3, 0 6" fill="#ef4444" />
         </marker>
         <marker id="arrow-data" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-          <polygon points="0 0, 8 3, 0 6" fill="#3b82f6" />
+          <polygon points="0 0, 8 3, 0 6" fill="#f59e0b" />
         </marker>
         <marker id="arrow-control" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-          <polygon points="0 0, 8 3, 0 6" fill="#f59e0b" />
+          <polygon points="0 0, 8 3, 0 6" fill="#3b82f6" />
         </marker>
         <marker id="arrow-call" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
           <polygon points="0 0, 8 3, 0 6" fill="#ec4899" />
@@ -1796,23 +1851,41 @@ function RealGraphVisualization({
 
       <rect width="100%" height="100%" fill="#fafafa" />
 
-      {graphData.edges.map((edge) => {
+      {edgesToRender.map((edge) => {
         const fromNode = nodes.find((n) => n.id === edge.source)
         const toNode = nodes.find((n) => n.id === edge.target)
         if (!fromNode || !toNode) return null
 
         const x1 = fromNode.x || 0
-        const y1 = (fromNode.y || 0) + 18
+        const fromMetrics = nodeMetrics[fromNode.id]
+        const toMetrics = nodeMetrics[toNode.id]
+        const y1 = (fromNode.y || 0) + (fromMetrics?.height ?? 36) / 2
         const x2 = toNode.x || 0
-        const y2 = (toNode.y || 0) - 18
+        const y2 = (toNode.y || 0) - (toMetrics?.height ?? 36) / 2
 
         const edgeColor = getEdgeColor(edge.type)
-        const markerId = `arrow-${edge.type === "true" || edge.type === "false" || edge.type === "data" || edge.type === "control" || edge.type === "call" ? edge.type : "default"}`
+        const markerType =
+          edge.type === "data_flow"
+            ? "data"
+            : edge.type === "control_flow"
+              ? "control"
+              : edge.type
+        const markerId = `arrow-${markerType === "true" || markerType === "false" || markerType === "data" || markerType === "control" || markerType === "call" ? markerType : "default"}`
+
+        const isControlEdge = edge.type === "control" || edge.type === "control_flow"
+        const isDataEdge = edge.type === "data" || edge.type === "data_flow"
+        const isDependencyEdge = isControlEdge || isDataEdge
+        const overlayBend =
+          graphType === "hpg" && isDependencyEdge ? (x2 >= x1 ? 1 : -1) * 36 : 0
 
         const midY = (y1 + y2) / 2
-        const bend = edgeBendById[edge.id] ?? 0
+        const bend = (edgeBendById[edge.id] ?? 0) + overlayBend
         const midX = (x1 + x2) / 2
         const path = `M ${x1} ${y1} Q ${midX + bend} ${midY} ${x2} ${y2}`
+
+        const strokeWidth = isDependencyEdge ? (graphType === "hpg" ? 2.6 : 2.4) : 2
+        const strokeDasharray = isControlEdge ? "6,4" : undefined
+        const opacity = graphType === "hpg" ? (isDependencyEdge ? 0.95 : 0.55) : 0.8
 
         return (
           <g key={edge.id}>
@@ -1820,10 +1893,10 @@ function RealGraphVisualization({
               d={path}
               fill="none"
               stroke={edgeColor}
-              strokeWidth={edge.type === "data" ? 2.5 : 2}
-              strokeDasharray={edge.type === "data" ? "5,3" : undefined}
+              strokeWidth={strokeWidth}
+              strokeDasharray={strokeDasharray}
               markerEnd={`url(#${markerId})`}
-              opacity={0.8}
+              opacity={opacity}
             />
             {edge.label && (
               <text
@@ -1843,7 +1916,15 @@ function RealGraphVisualization({
 
       {nodes.map((node) => {
         const colors = getNodeColor(node.type)
-        const label = node.label.length > 20 ? `${node.label.substring(0, 18)}…` : node.label
+        const metrics = nodeMetrics[node.id]
+        const nodeWidth = metrics?.width ?? 176
+        const nodeHeight = metrics?.height ?? 36
+        const rawLabel = metrics?.rawLabel || node.label || ""
+        const labelLines = metrics?.lines || [rawLabel]
+        const lineHeight = 14
+        const startDy = -((labelLines.length - 1) * lineHeight) / 2
+        const showLineNumber = Boolean(node.line) && !/\[L\d+\]/.test(rawLabel)
+        const tooltip = (node.code || "").trim() || rawLabel
 
         return (
           <g
@@ -1853,10 +1934,10 @@ function RealGraphVisualization({
             style={{ cursor: dragging === node.id ? "grabbing" : "grab" }}
           >
             <rect
-              x="-55"
-              y="-18"
-              width="110"
-              height="36"
+              x={-nodeWidth / 2}
+              y={-nodeHeight / 2}
+              width={nodeWidth}
+              height={nodeHeight}
               rx="6"
               fill={colors.bg}
               stroke={colors.border}
@@ -1864,18 +1945,22 @@ function RealGraphVisualization({
             />
             <text
               textAnchor="middle"
-              dy="5"
               fontSize="11"
               fontWeight="500"
               fill={colors.text}
               pointerEvents="none"
+              dominantBaseline="middle"
             >
-              {label}
+              {labelLines.map((line, index) => (
+                <tspan key={`${node.id}-line-${index}`} x="0" dy={index === 0 ? startDy : lineHeight}>
+                  {line}
+                </tspan>
+              ))}
             </text>
-            {node.line && (
+            {showLineNumber && (
               <text
                 textAnchor="middle"
-                dy="18"
+                y={nodeHeight / 2 - 6}
                 fontSize="8"
                 fill={colors.text}
                 opacity="0.6"
@@ -1884,7 +1969,7 @@ function RealGraphVisualization({
                 L{node.line}
               </text>
             )}
-            <title>{node.code || node.label}</title>
+            <title>{tooltip}</title>
           </g>
         )
       })}

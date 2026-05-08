@@ -15,6 +15,7 @@ from .models import (
     FunctionIR, IRStatement, StatementType,
     Graph, GraphNode, GraphEdge
 )
+from .label_utils import get_semantic_label, format_semantic_label
 
 
 @dataclass
@@ -124,6 +125,13 @@ class CFGBuilder:
                 [entry.id],
                 exit_node.id
             )
+
+            if self._pending_false_fallthrough:
+                for branch_id in list(self._pending_false_fallthrough):
+                    if branch_id in self.nodes:
+                        self.nodes[branch_id].false_branch = exit_node.id
+                        self._add_edge(branch_id, exit_node.id)
+                self._pending_false_fallthrough.clear()
 
             # Connect remaining nodes to exit
             for node_id in last_nodes:
@@ -532,8 +540,7 @@ class CFGBuilder:
 
     def _get_label(self, stmt: IRStatement) -> str:
         """Get a short label for a statement"""
-        from backend.graph_ir.label_utils import get_semantic_label
-        return get_semantic_label(stmt, mode="verbose")
+        return get_semantic_label(stmt, mode="verbose", wrap=True)
 
     def _to_graph(self, func_ir: FunctionIR) -> Graph:
         """Convert internal representation to Graph output"""
@@ -568,18 +575,24 @@ class CFGBuilder:
             if node.statement:
                 node_type = node.statement.type.value
 
+            raw_label = get_semantic_label(node.statement, mode="verbose", wrap=False) if node.statement else node.label
+            wrapped_label = format_semantic_label(raw_label) if raw_label else raw_label
+
             graph_nodes.append(GraphNode(
                 id=node.id,
-                label=node.label,
+                label=wrapped_label if wrapped_label is not None else node.label,
                 type=node_type,
                 x=x,
                 y=y,
                 line=node.line,
                 code=node.code,
                 metadata={
+                    "raw_label": raw_label,
+                    "wrapped_label": wrapped_label,
                     "successors": node.successors,
                     "predecessors": node.predecessors,
                     **({"statement_id": node.statement.id} if node.statement else {}),
+                    **({"semantic_label_raw": raw_label} if node.statement else {}),
                 }
             ))
 

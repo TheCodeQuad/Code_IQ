@@ -13,6 +13,7 @@ from .models import (
     FunctionIR, IRStatement, StatementType,
     Graph, GraphNode, GraphEdge, DependencyType
 )
+from .label_utils import get_semantic_label, format_semantic_label
 
 
 @dataclass
@@ -330,8 +331,7 @@ class PDGBuilder:
 
     def _get_label(self, stmt: IRStatement) -> str:
         """Get a short label for a statement"""
-        from backend.graph_ir.label_utils import get_semantic_label
-        return get_semantic_label(stmt, mode="verbose")
+        return get_semantic_label(stmt, mode="verbose", wrap=True)
 
     def _to_graph(self, func_ir: FunctionIR) -> Graph:
         """Convert internal representation to Graph output"""
@@ -355,34 +355,44 @@ class PDGBuilder:
 
         # Entry at top
         for node in entry_nodes:
+            raw_label = get_semantic_label(node.statement, mode="verbose", wrap=False) if node.statement else node.label
+            wrapped_label = format_semantic_label(raw_label) if raw_label else raw_label
             graph_nodes.append(GraphNode(
                 id=node.id,
-                label=node.label,
+                label=wrapped_label if wrapped_label is not None else node.label,
                 type=node.node_type,
                 x=300,
                 y=y_offset,
                 line=node.line,
                 code=node.code,
                 metadata={
+                    "raw_label": raw_label,
+                    "wrapped_label": wrapped_label,
                     "definitions": list(node.definitions),
                     "uses": list(node.uses),
+                    **({"semantic_label_raw": raw_label} if node.statement else {}),
                 },
             ))
         y_offset += 80
 
         # Parameters row
         for i, node in enumerate(param_nodes):
+            raw_label = get_semantic_label(node.statement, mode="verbose", wrap=False) if node.statement else node.label
+            wrapped_label = format_semantic_label(raw_label) if raw_label else raw_label
             graph_nodes.append(GraphNode(
                 id=node.id,
-                label=node.label,
+                label=wrapped_label if wrapped_label is not None else node.label,
                 type=node.node_type,
                 x=100 + i * 140,
                 y=y_offset,
                 line=node.line,
                 code=node.code,
                 metadata={
+                    "raw_label": raw_label,
+                    "wrapped_label": wrapped_label,
                     "definitions": list(node.definitions),
                     "uses": list(node.uses),
+                    **({"semantic_label_raw": raw_label} if node.statement else {}),
                 },
             ))
         if param_nodes:
@@ -392,18 +402,23 @@ class PDGBuilder:
         for i, node in enumerate(sorted(statement_nodes, key=lambda n: (n.line or 10**9, n.id))):
             row = i // 3
             col = i % 3
+            raw_label = get_semantic_label(node.statement, mode="verbose", wrap=False) if node.statement else node.label
+            wrapped_label = format_semantic_label(raw_label) if raw_label else raw_label
             graph_nodes.append(GraphNode(
                 id=node.id,
-                label=node.label,
+                label=wrapped_label if wrapped_label is not None else node.label,
                 type=node.node_type,
                 x=100 + col * 220,
                 y=y_offset + row * 70,
                 line=node.line,
                 code=node.code,
                 metadata={
+                    "raw_label": raw_label,
+                    "wrapped_label": wrapped_label,
                     "definitions": list(node.definitions),
                     "uses": list(node.uses),
                     **({"statement_id": node.statement.id} if node.statement else {}),
+                    **({"semantic_label_raw": raw_label} if node.statement else {}),
                 },
             ))
 
