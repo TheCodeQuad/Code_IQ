@@ -1230,8 +1230,6 @@ export function PipelineVisualization({
     })
   }, [])
 
-  const ignoreStaleSnapshotRef = useRef(false)
-
   const connectEventStream = useCallback(() => {
     if (eventSourceRef.current) {
       eventSourceRef.current.close()
@@ -1244,13 +1242,6 @@ export function PipelineVisualization({
     source.addEventListener('snapshot', (event) => {
       try {
         const data = JSON.parse((event as MessageEvent<string>).data) as BackendPipelineEvent
-        
-        // If we just triggered a new pipeline, ignore stale 'completed' snapshots 
-        // from the database until we get fresh progress events.
-        if (ignoreStaleSnapshotRef.current && data.status === 'completed') {
-          return
-        }
-        
         applyBackendEvent(data)
       } catch {
         // Ignore malformed snapshot payloads.
@@ -1259,7 +1250,6 @@ export function PipelineVisualization({
 
     source.addEventListener('progress', (event) => {
       try {
-        ignoreStaleSnapshotRef.current = false // We got fresh progress, stop ignoring
         const data = JSON.parse((event as MessageEvent<string>).data) as BackendPipelineEvent
         applyBackendEvent(data)
       } catch {
@@ -1272,7 +1262,6 @@ export function PipelineVisualization({
   }, [applyBackendEvent, repoId])
 
   const startPipeline = async () => {
-    ignoreStaleSnapshotRef.current = true
     setIsStarting(true)
     if (!isGraphsOnly) {
       scheduleOverlayShow()

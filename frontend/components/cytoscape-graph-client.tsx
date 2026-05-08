@@ -55,7 +55,7 @@ function getReadableNodeLabel(node: GraphNode): string {
 
   if (isStatementLike) {
     if (preferred) {
-      return preferred.length > 14 ? `${preferred.slice(0, 14)}...` : preferred
+      return preferred
     }
     const stmtId = rawId.replace(/^(stmt|statement)_/i, "")
     return stmtId ? `stmt ${stmtId.slice(0, 8)}` : "stmt"
@@ -355,26 +355,40 @@ const CytoscapeGraphClient = forwardRef(({
                 "line-style": "solid",
               },
             },
-            // Data flow edges - blue dotted with label
+            // Data flow edges - blue dashed with label, curved left
             {
               selector: "edge[type='data_flow']",
               style: {
                 "width": 2,
-                "line-style": "dotted",
+                "line-style": "dashed",
                 "label": "data(label)",
-                "font-size": "8px",
+                "font-size": "9px",
                 "text-rotation": "autorotate",
                 "text-margin-y": -8,
-                "opacity": 0.7,
+                "opacity": 0.8,
+                "curve-style": "unbundled-bezier",
+                "control-point-distances": [-50],
+                "control-point-weights": [0.5],
+                "text-background-color": "#fff",
+                "text-background-opacity": 0.9,
               },
             },
-            // Control flow edges
+            // Control flow edges - orange dashed, curved right
             {
               selector: "edge[type='control_flow']",
               style: {
                 "width": 1.8,
-                "line-style": "solid",
-                "opacity": 0.75,
+                "line-style": "dashed",
+                "label": "data(label)",
+                "font-size": "9px",
+                "text-rotation": "autorotate",
+                "text-margin-y": -8,
+                "opacity": 0.8,
+                "curve-style": "unbundled-bezier",
+                "control-point-distances": [50],
+                "control-point-weights": [0.5],
+                "text-background-color": "#fff",
+                "text-background-opacity": 0.9,
               },
             },
             {
@@ -658,27 +672,43 @@ const CytoscapeGraphClient = forwardRef(({
       {/* Legend */}
       {isReady && !error && (
         <div className="absolute top-3 left-3 z-20 bg-white/95 rounded-2xl shadow-xl border-2 border-stone-300 px-5 py-4 text-base min-w-56">
-          <div className="font-extrabold mb-4 text-stone-900 tracking-wide">Node Types</div>
-          <div className="flex flex-col gap-3">
+          <div className="font-extrabold mb-3 text-stone-900 tracking-wide">Node Types</div>
+          <div className="flex flex-col gap-2">
             <div className="flex items-center gap-2">
               <div className="w-5 h-5 rounded-sm" style={{ background: nodeColors.module.bg, border: `2px solid ${nodeColors.module.border}` }} />
-              <span>Module</span>
+              <span className="text-sm">Module</span>
             </div>
             <div className="flex items-center gap-2">
               <div className="w-5 h-5 rounded-sm" style={{ background: nodeColors.class.bg, border: `2px solid ${nodeColors.class.border}` }} />
-              <span>Class</span>
+              <span className="text-sm">Class</span>
             </div>
             <div className="flex items-center gap-2">
               <div className="w-5 h-5 rounded-sm" style={{ background: nodeColors.function.bg, border: `2px solid ${nodeColors.function.border}` }} />
-              <span>Function</span>
+              <span className="text-sm">Function</span>
             </div>
             <div className="flex items-center gap-2">
               <div className="w-5 h-5 rounded-sm" style={{ background: nodeColors.method.bg, border: `2px solid ${nodeColors.method.border}` }} />
-              <span>Method</span>
+              <span className="text-sm">Method</span>
             </div>
             <div className="flex items-center gap-2">
               <div className="w-5 h-5 rounded-sm" style={{ background: nodeColors.statement.bg, border: `2px solid ${nodeColors.statement.border}` }} />
-              <span>Statement</span>
+              <span className="text-sm">Statement</span>
+            </div>
+          </div>
+
+          <div className="font-extrabold mb-3 mt-4 text-stone-900 tracking-wide">Edge Types</div>
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+              <div className="w-6 h-0.5" style={{ background: edgeColors.default }} />
+              <span className="text-sm">CFG Flow</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-6 h-0.5 border-t-2 border-dashed" style={{ borderColor: edgeColors.data_flow }} />
+              <span className="text-sm">Data Dependency</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-6 h-0.5 border-t-2 border-dashed" style={{ borderColor: edgeColors.control_flow }} />
+              <span className="text-sm">Control Dependency</span>
             </div>
           </div>
         </div>

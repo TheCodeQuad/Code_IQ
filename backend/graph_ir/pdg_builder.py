@@ -237,11 +237,20 @@ class PDGBuilder:
         # Track the most recent defining node for each variable name.
         last_definition: Dict[str, str] = {}
 
+        # Collect all used variables in the function to filter unused parameters
+        all_uses = set()
+        for stmt in func_ir.statements:
+            all_uses.update(self._collect_statement_uses(stmt))
+
         # Create parameter nodes (definitions)
         for param in func_ir.parameters:
+            # Skip unused argc/argv as requested
+            if param.name not in all_uses and param.name in ("argc", "argv"):
+                continue
+                
             param_node = self._create_node(
                 "parameter",
-                f"param: {param.name}",
+                f"Parameter: {param.name} [L{func_ir.start_line}]",
                 line=func_ir.start_line,
                 code=param.name
             )
@@ -321,39 +330,8 @@ class PDGBuilder:
 
     def _get_label(self, stmt: IRStatement) -> str:
         """Get a short label for a statement"""
-        if stmt.type == StatementType.ASSIGNMENT:
-            defs = [v.name for v in stmt.definitions]
-            if defs:
-                if stmt.calls:
-                    return f"{defs[0]} = {stmt.calls[0].name}(...)"[:30]
-                return f"{', '.join(defs[:2])} = ..."
-            return "assign"
-
-        elif stmt.type == StatementType.RETURN:
-            uses = [v.name for v in stmt.uses[:2]]
-            if uses:
-                return f"return {', '.join(uses)}"
-            return "return"
-
-        elif stmt.type == StatementType.IF:
-            return f"if {stmt.condition or '...'}"[:30]
-
-        elif stmt.type == StatementType.FOR:
-            return f"for {stmt.condition or '...'}"[:30]
-
-        elif stmt.type == StatementType.WHILE:
-            return f"while {stmt.condition or '...'}"[:30]
-
-        elif stmt.type == StatementType.CALL:
-            if stmt.calls:
-                call = stmt.calls[0]
-                if call.receiver:
-                    return f"{call.receiver}.{call.name}(...)"[:30]
-                return f"{call.name}(...)"
-            return "call"
-
-        else:
-            return stmt.type.value
+        from backend.graph_ir.label_utils import get_semantic_label
+        return get_semantic_label(stmt, mode="verbose")
 
     def _to_graph(self, func_ir: FunctionIR) -> Graph:
         """Convert internal representation to Graph output"""

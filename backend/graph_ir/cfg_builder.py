@@ -367,7 +367,7 @@ class CFGBuilder:
         # Create branch node
         branch = self._create_node(
             "branch",
-            f"if {if_stmt.condition or '...'}"[:50],
+            self._get_label(if_stmt),
             statement=if_stmt,
         )
 
@@ -440,7 +440,7 @@ class CFGBuilder:
         # Create loop header (condition check)
         header = self._create_node(
             "loop_header",
-            f"{'while' if is_while else 'for'} {loop_stmt.condition or '...'}"[:50],
+            self._get_label(loop_stmt),
             statement=loop_stmt
         )
 
@@ -532,29 +532,8 @@ class CFGBuilder:
 
     def _get_label(self, stmt: IRStatement) -> str:
         """Get a short label for a statement"""
-        if stmt.type == StatementType.ASSIGNMENT:
-            defs = [v.name for v in stmt.definitions]
-            if defs:
-                return f"{', '.join(defs[:2])} = ..."
-            return "assignment"
-
-        elif stmt.type == StatementType.CALL:
-            if stmt.calls:
-                call = stmt.calls[0]
-                return f"{call.name}(...)"
-            return "call"
-
-        elif stmt.type == StatementType.RETURN:
-            return "return"
-
-        elif stmt.type == StatementType.EXPRESSION:
-            return stmt.code[:30] if stmt.code else "expr"
-
-        elif stmt.type == StatementType.PASS:
-            return "pass"
-
-        else:
-            return stmt.type.value
+        from backend.graph_ir.label_utils import get_semantic_label
+        return get_semantic_label(stmt, mode="verbose")
 
     def _to_graph(self, func_ir: FunctionIR) -> Graph:
         """Convert internal representation to Graph output"""
@@ -614,10 +593,10 @@ class CFGBuilder:
                 # Determine edge type for branches
                 if node.true_branch == succ_id:
                     edge_type = "true"
-                    label = "T"
+                    label = "True"
                 elif node.false_branch == succ_id:
                     edge_type = "false"
-                    label = "F"
+                    label = "False"
                 elif node.node_type == "loop_body" and succ_id in levels:
                     if levels[succ_id] < levels.get(node_id, 0):
                         edge_type = "back"

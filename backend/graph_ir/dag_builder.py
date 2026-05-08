@@ -441,7 +441,7 @@ class FileDAGBuilder:
 
         return Graph(
             id=f"dag_{file_path}",
-            name=f"File DAG: {os.path.basename(file_path)}",
+            name=f"File Dependency Graph: {os.path.basename(file_path)}",
             type="dag",
             nodes=graph_nodes,
             edges=graph_edges,

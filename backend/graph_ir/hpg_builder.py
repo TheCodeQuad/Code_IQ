@@ -82,8 +82,15 @@ def build_hpg(func_ir: FunctionIR, use_reaching_defs: bool = False) -> Graph:
     )
 
     edge_counter = 0
+    pdg_entry = next((n for n in pdg.nodes if n.type == "entry"), None)
+    pdg_entry_id = pdg_entry.id if pdg_entry else None
+
     for e in pdg.edges:
-        if e.type != "data":
+        if e.type not in ("data", "control"):
+            continue
+
+        # Filter out control dependencies from Entry node to avoid clutter
+        if e.type == "control" and e.source == pdg_entry_id:
             continue
 
         src = map_or_keep_node_id(e.source)
@@ -91,7 +98,10 @@ def build_hpg(func_ir: FunctionIR, use_reaching_defs: bool = False) -> Graph:
         if src == tgt:
             continue
 
-        key = (src, tgt, "data", e.label)
+        # Map types to frontend-friendly types
+        hpg_type = "data_flow" if e.type == "data" else "control_flow"
+
+        key = (src, tgt, hpg_type, e.label)
         if key in existing_edges:
             continue
         existing_edges.add(key)
@@ -102,8 +112,8 @@ def build_hpg(func_ir: FunctionIR, use_reaching_defs: bool = False) -> Graph:
                 id=f"hpg_edge_{edge_counter}",
                 source=src,
                 target=tgt,
-                type="data",
-                label=e.label,
+                type=hpg_type,
+                label=e.label or ("control" if e.type == "control" else None),
                 metadata=e.metadata or {},
             )
         )
